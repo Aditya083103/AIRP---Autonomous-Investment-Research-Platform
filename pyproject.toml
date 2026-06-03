@@ -51,17 +51,22 @@ module = [
     "sentence_transformers.*",
     "yfinance.*",
     "weasyprint.*",
+    "pydantic_settings.*",
+    "newsapi.*",
+    "langchain.*",
+    "langgraph.*",
+    "langsmith.*",
 ]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["backend/tests"]
+pythonpath = ["."]          # ← add this line
 markers = [
     "unit: fast tests with mocked external calls",
     "integration: tests that hit real APIs (run separately)",
 ]
-# Run only unit tests by default; use -m integration for real API tests
 addopts = "-m 'not integration' --tb=short"
 
 [tool.coverage.run]

@@ -21,6 +21,9 @@ flake8-docstrings==1.7.0
 mypy==1.9.0
 pydantic[mypy]>=2.0          # ships pydantic.mypy plugin
 
+# ── Settings (needed to import config.py in tests) ────────────────────────
+pydantic-settings==2.2.1     # loads .env into Pydantic Settings models
+
 # ── Testing ───────────────────────────────────────────────────────────────
 pytest==8.1.1
 pytest-asyncio==0.23.6
