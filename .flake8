@@ -1,0 +1,44 @@
+[flake8]
+# Match black's line length exactly to avoid formatting conflicts
+max-line-length = 88
+
+# E203 — whitespace before ':' (black reformats slice notation this way)
+# W503 — line break before binary operator (conflicts with black)
+# D100-D107 — missing module/class/function docstrings at this stage
+#              (re-enable once stubs are fleshed out in Phase 2+)
+extend-ignore =
+    E203,
+    W503,
+    D100,
+    D101,
+    D102,
+    D103,
+    D104,
+    D105,
+    D106,
+    D107
+
+# Directories to skip entirely
+exclude =
+    .git,
+    __pycache__,
+    .mypy_cache,
+    .venv,
+    venv,
+    dist,
+    build,
+    *.egg-info,
+    backend/tests/__pycache__,
+    frontend/
+
+# Per-file ignores for test files (assert statements, magic values OK in tests)
+per-file-ignores =
+    backend/tests/*:S101,S105,S106
+    backend/tests/conftest.py:S101
+
+# Enable optional bugbear and comprehension checks
+select = E,W,F,B,C4
+
+# B950 = line too long (bugbear's softer version; respects black's 88+margin)
+extend-select = B950
+max-doc-length = 120

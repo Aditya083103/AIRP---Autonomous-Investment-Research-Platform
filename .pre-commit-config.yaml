@@ -1,5 +1,5 @@
 repos:
-  # ── Python formatting ─────────────────────
+  # ── Python formatting ──────────────────────────────────────────────────────
   - repo: https://github.com/psf/black
     rev: 24.3.0
     hooks:
@@ -7,7 +7,7 @@ repos:
         language_version: python3.11
         files: ^backend/
 
-  # ── Import sorting ────────────────────────
+  # ── Import sorting ─────────────────────────────────────────────────────────
   - repo: https://github.com/PyCQA/isort
     rev: 5.13.2
     hooks:
@@ -15,17 +15,18 @@ repos:
         args: ["--profile", "black"]
         files: ^backend/
 
-  # ── Linting ───────────────────────────────
+  # ── Python linting ─────────────────────────────────────────────────────────
   - repo: https://github.com/PyCQA/flake8
     rev: 7.0.0
     hooks:
       - id: flake8
         files: ^backend/
         additional_dependencies:
-          - flake8-bugbear
-          - flake8-comprehensions
+          - flake8-bugbear       # opinionated bug-prone pattern detection
+          - flake8-comprehensions # C4xx: unnecessary comprehensions
+          - flake8-docstrings    # D1xx: missing docstrings (pydocstyle)
 
-  # ── Type checking ─────────────────────────
+  # ── Static type checking ───────────────────────────────────────────────────
   - repo: https://github.com/pre-commit/mirrors-mypy
     rev: v1.9.0
     hooks:
@@ -34,13 +35,40 @@ repos:
         additional_dependencies:
           - pydantic>=2.0
 
-  # ── General hygiene ───────────────────────
+  # ── TypeScript / ESLint ────────────────────────────────────────────────────
+  - repo: local
+    hooks:
+      - id: eslint
+        name: ESLint (TypeScript)
+        language: node
+        entry: bash -c 'cd frontend && npx eslint --max-warnings=0 "$@"' --
+        types_or: [ts, tsx]
+        files: ^frontend/src/
+        pass_filenames: true
+        require_serial: false
+
+  # ── Prettier (TS/TSX/JSON/CSS/MD) ─────────────────────────────────────────
+  - repo: https://github.com/pre-commit/mirrors-prettier
+    rev: v4.0.0-alpha.8
+    hooks:
+      - id: prettier
+        files: ^frontend/
+        types_or: [ts, tsx, json, css, markdown]
+        additional_dependencies:
+          - prettier@3.2.5
+          - "@prettier/plugin-xml@3.4.1"
+
+  # ── General hygiene (all files) ───────────────────────────────────────────
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.6.0
     hooks:
       - id: trailing-whitespace
+        exclude: \.md$              # allow trailing spaces in Markdown (line break)
       - id: end-of-file-fixer
       - id: check-yaml
       - id: check-json
+      - id: check-toml
       - id: check-merge-conflict
-      - id: detect-private-key          # blocks accidental key commits
+      - id: detect-private-key      # blocks accidental secret commits
+      - id: mixed-line-ending
+        args: ["--fix=lf"]
