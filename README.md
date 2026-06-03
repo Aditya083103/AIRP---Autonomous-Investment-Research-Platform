@@ -1,5 +1,7 @@
 # AIRP — Autonomous Investment Research Platform
 
+[![CI](https://github.com/Aditya083103/AIRP — Autonomous Investment Research Platform/actions/workflows/ci.yml/badge.svg)](https://github.com/Aditya083103/AIRP — Autonomous Investment Research Platform/actions/workflows/ci.yml)
+
 > A production-grade multi-agent AI system that simulates an investment committee,
 > performing autonomous financial analysis and generating professional Investment Memos.
 
@@ -44,11 +46,11 @@ docker-compose up
 
 ```bash
 # Backend
-cd backend
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt -r requirements-dev.txt
+python -m venv .venv
+.venv\Scripts\activate        # Windows
+# source .venv/bin/activate   # macOS / Linux
+pip install -r backend/requirements-dev.txt
 pre-commit install
-uvicorn main:app --reload
 
 # Frontend (separate terminal)
 cd frontend
@@ -59,7 +61,10 @@ npm run dev
 ## Running tests
 
 ```bash
-cd backend
+# Set required environment variable first
+export ENVIRONMENT=test       # macOS / Linux
+# $env:ENVIRONMENT="test"     # Windows PowerShell
+
 pytest                          # unit tests only (fast, mocked)
 pytest -m integration           # real API calls (needs .env)
 pytest --cov --cov-report=html  # with coverage report
@@ -97,8 +102,6 @@ airp/
 |-----|----------|
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Full system architecture with diagrams |
 | [AGENTS.md](docs/AGENTS.md) | Each agent's persona, tools, output schema |
-| [DATA_LAYER.md](docs/DATA_LAYER.md) | Data tools, rate limits, error handling |
-| [EVALUATION.md](docs/EVALUATION.md) | LangSmith eval methodology and results |
 | [APIS.md](docs/APIS.md) | External APIs, free limits, env variable names |
 | [CODING_STANDARDS.md](docs/CODING_STANDARDS.md) | Naming, commit format, style rules |
 
