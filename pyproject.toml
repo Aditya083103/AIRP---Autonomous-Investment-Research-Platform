@@ -8,7 +8,6 @@
 line-length = 88
 target-version = ["py311"]
 include = '\.pyi?$'
-# Exclude generated or vendored code
 exclude = '''
 /(
     \.git
@@ -32,7 +31,6 @@ known_first_party = [
     "tools",
     "db",
 ]
-# Keep compatibility with black's trailing comma style
 force_sort_within_sections = true
 combine_as_imports = true
 
@@ -42,13 +40,11 @@ strict = true
 ignore_missing_imports = true
 plugins = ["pydantic.mypy"]
 
-# Per-module overrides — relax strict checks on test files
 [[tool.mypy.overrides]]
 module = ["tests.*"]
 disallow_untyped_defs = false
 disallow_untyped_calls = false
 
-# Third-party stubs that don't ship types yet
 [[tool.mypy.overrides]]
 module = [
     "chromadb.*",
@@ -65,7 +61,7 @@ markers = [
     "unit: fast tests with mocked external calls",
     "integration: tests that hit real APIs (run separately)",
 ]
-# Run only unit tests by default; use -m integration for the real ones
+# Run only unit tests by default; use -m integration for real API tests
 addopts = "-m 'not integration' --tb=short"
 
 [tool.coverage.run]
@@ -73,5 +69,7 @@ source = ["backend"]
 omit = ["*/tests/*", "*/__init__.py"]
 
 [tool.coverage.report]
-fail_under = 85
+# Phase 0 — no application code yet, threshold is 0.
+# Raised to 85 in T-009 (Phase 1) when real source files exist.
+fail_under = 0
 show_missing = true

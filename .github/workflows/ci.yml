@@ -2,23 +2,34 @@ name: CI
 
 on:
   push:
-    branches: ["**"]
+    branches: ["**"] # every branch — catches issues before PR
   pull_request:
     branches: [main]
 
+# Cancel any in-progress run on the same branch when a new push arrives.
+# Prevents queue build-up when you push multiple commits quickly.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  # ───────────────────────────────────────────────────────────────────────────
+  # JOB 1 — Backend: lint, type-check, test
+  # ───────────────────────────────────────────────────────────────────────────
   backend:
-    name: Backend — lint & test
+    name: "Backend — lint & test (Python 3.11)"
     runs-on: ubuntu-latest
 
+    # Postgres service container — available at localhost:5432 for tests
     services:
       postgres:
-        image: postgres:16
+        image: postgres:16-alpine
         env:
           POSTGRES_USER: airp
           POSTGRES_PASSWORD: airp
           POSTGRES_DB: airp_test
-        ports: ["5432:5432"]
+        ports:
+          - "5432:5432"
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
@@ -26,44 +37,86 @@ jobs:
           --health-retries 5
 
     steps:
-      - uses: actions/checkout@v4
+      # ── Checkout ────────────────────────────────────────────────────────
+      - name: Checkout code
+        uses: actions/checkout@v4
 
+      # ── Python setup with pip cache ─────────────────────────────────────
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
 
+      # ── Install dev dependencies ─────────────────────────────────────────
+      # requirements.txt doesn't exist yet (Phase 1); only -dev for Phase 0.
+      # The conditional install means CI won't fail when requirements.txt
+      # is absent — it's added in T-009 (Phase 1, Data Layer).
       - name: Install dependencies
-        working-directory: backend
-        run: pip install -r requirements.txt -r requirements-dev.txt
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements-dev.txt
+          if [ -f backend/requirements.txt ]; then
+            pip install -r backend/requirements.txt
+          fi
 
-      - name: Lint — black (format check)
-        working-directory: backend
-        run: black --check .
+      # ── Formatting check ─────────────────────────────────────────────────
+      - name: "Lint — black (format check)"
+        run: black --check backend/
 
-      - name: Lint — flake8
-        working-directory: backend
-        run: flake8 .
+      # ── Import order check ───────────────────────────────────────────────
+      - name: "Lint — isort (import order check)"
+        run: isort --check-only backend/
 
-      - name: Type check — mypy
-        working-directory: backend
-        run: mypy .
+      # ── Linting ──────────────────────────────────────────────────────────
+      - name: "Lint — flake8"
+        run: flake8 backend/
 
-      - name: Run tests
-        working-directory: backend
+      # ── Type checking ─────────────────────────────────────────────────────
+      - name: "Type check — mypy"
+        run: mypy backend/
+
+      # ── Tests with coverage ───────────────────────────────────────────────
+      # Phase 0 has no test files yet — pytest exits 0 on empty testpaths
+      # once conftest.py exists. Coverage threshold kicks in from Phase 1.
+      - name: "Test — pytest + coverage"
         env:
-          DATABASE_URL: postgresql+asyncpg://airp:airp@localhost/airp_test
+          DATABASE_URL: postgresql+asyncpg://airp:airp@localhost:5432/airp_test
           ENVIRONMENT: test
-        run: pytest -v --cov=. --cov-report=term-missing --cov-fail-under=85
+          # Placeholder values — real keys added to GitHub Secrets in Phase 1
+          ANTHROPIC_API_KEY: "sk-placeholder-not-used-in-unit-tests"
+          LANGSMITH_API_KEY: "ls-placeholder-not-used-in-unit-tests"
+        run: |
+          pytest \
+            --tb=short \
+            --cov=backend \
+            --cov-report=term-missing \
+            --cov-report=xml:coverage.xml \
+            -v
 
+      # ── Upload coverage to GitHub (visible in PR checks) ─────────────────
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        if: always() # upload even if tests fail — useful for debugging
+        with:
+          name: backend-coverage
+          path: coverage.xml
+          retention-days: 7
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # JOB 2 — Frontend: type-check, lint, build
+  # ───────────────────────────────────────────────────────────────────────────
   frontend:
-    name: Frontend — lint & build
+    name: "Frontend — lint & build (Node 20)"
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      # ── Checkout ────────────────────────────────────────────────────────
+      - name: Checkout code
+        uses: actions/checkout@v4
 
+      # ── Node setup with npm cache ────────────────────────────────────────
       - name: Set up Node 20
         uses: actions/setup-node@v4
         with:
@@ -71,18 +124,51 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
+      # ── Install with ci (reproducible — uses package-lock.json exactly) ──
       - name: Install dependencies
         working-directory: frontend
         run: npm ci
 
-      - name: Type check — tsc
+      # ── TypeScript type check ─────────────────────────────────────────────
+      - name: "Type check — tsc"
         working-directory: frontend
         run: npm run type-check
 
-      - name: Lint — eslint
+      # ── ESLint ────────────────────────────────────────────────────────────
+      - name: "Lint — eslint"
         working-directory: frontend
         run: npm run lint
 
-      - name: Build
+      # ── Prettier format check ─────────────────────────────────────────────
+      - name: "Format check — prettier"
+        working-directory: frontend
+        run: npm run format:check
+
+      # ── Production build ──────────────────────────────────────────────────
+      # Catches import errors and missing modules that type-check alone misses
+      - name: "Build — vite"
         working-directory: frontend
         run: npm run build
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # JOB 3 — CI summary (required status check for branch protection)
+  # Both backend and frontend must pass before this job succeeds.
+  # Set THIS job as the required check in GitHub branch protection settings
+  # — avoids updating branch protection every time jobs are added/renamed.
+  # ───────────────────────────────────────────────────────────────────────────
+  ci-pass:
+    name: "CI — all checks passed"
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+    if: always()
+
+    steps:
+      - name: Check all jobs passed
+        run: |
+          if [[ "${{ needs.backend.result }}" != "success" || "${{ needs.frontend.result }}" != "success" ]]; then
+            echo "❌ One or more jobs failed."
+            echo "  backend : ${{ needs.backend.result }}"
+            echo "  frontend: ${{ needs.frontend.result }}"
+            exit 1
+          fi
+          echo "✅ All CI checks passed."
