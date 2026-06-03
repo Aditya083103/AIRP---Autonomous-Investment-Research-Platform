@@ -1,0 +1,95 @@
+# ─────────────────────────────────────────────
+# AIRP — .gitignore
+# Never commit secrets, build artefacts, or
+# environment-specific files.
+# ─────────────────────────────────────────────
+
+# ── Environment & secrets ────────────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# ── Python ───────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+parts/
+var/
+sdist/
+develop-eggs/
+.installed.cfg
+lib/
+lib64/
+.Python
+pip-wheel-metadata/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Testing & coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.xml
+nosetests.xml
+
+# Type checking
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# ── Node / Frontend ──────────────────────────
+node_modules/
+dist/
+.cache/
+.parcel-cache/
+.next/
+.nuxt/
+.vite/
+
+# Package lock files — keep package-lock or yarn.lock, not both
+# (AIRP uses npm, so yarn.lock is excluded)
+yarn.lock
+
+# ── IDEs & editors ───────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ── Docker ───────────────────────────────────
+*.log
+docker-compose.override.yml
+
+# ── ChromaDB local storage ───────────────────
+chroma_db/
+chromadb/
+
+# ── Database ─────────────────────────────────
+*.sqlite3
+*.db
+
+# ── Jupyter ──────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb
+
+# ── Generated / output ───────────────────────
+reports/
+*.pdf

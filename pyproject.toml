@@ -1,0 +1,38 @@
+# ─────────────────────────────────────────────
+# AIRP — pyproject.toml
+# Central config for all Python tooling.
+# ─────────────────────────────────────────────
+
+[tool.black]
+line-length = 88
+target-version = ["py311"]
+include = '\.pyi?$'
+
+[tool.isort]
+profile = "black"
+line_length = 88
+known_first_party = ["agents", "graph", "routers", "models", "services", "tools", "db"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+ignore_missing_imports = true
+plugins = ["pydantic.mypy"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["backend/tests"]
+markers = [
+    "unit: fast tests with mocked external calls",
+    "integration: tests that hit real APIs (run separately)",
+]
+# Run only unit tests by default; use -m integration for the real ones
+addopts = "-m 'not integration'"
+
+[tool.coverage.run]
+source = ["backend"]
+omit = ["*/tests/*", "*/__init__.py"]
+
+[tool.coverage.report]
+fail_under = 85
+show_missing = true
