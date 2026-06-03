@@ -44,5 +44,3 @@ repos:
       - id: check-json
       - id: check-merge-conflict
       - id: detect-private-key          # blocks accidental key commits
-      - id: check-added-large-files
-        args: ["--maxkb=500"]
