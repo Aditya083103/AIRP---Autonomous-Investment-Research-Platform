@@ -1,18 +1,20 @@
-# ─────────────────────────────────────────────
+# =============================================================================
 # AIRP — .gitignore
-# Never commit secrets, build artefacts, or
-# environment-specific files.
-# ─────────────────────────────────────────────
+# Never commit secrets, build artefacts, or environment-specific files.
+# =============================================================================
 
-# ── Environment & secrets ────────────────────
+
+# ── Environment & secrets ─────────────────────────────────────────────────────
 .env
 .env.*
-!.env.example
+!.env.example        # .env.example IS committed — it documents all variables
 *.pem
 *.key
 secrets/
+.secret
 
-# ── Python ───────────────────────────────────
+
+# ── Python ────────────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *$py.class
@@ -31,6 +33,7 @@ lib/
 lib64/
 .Python
 pip-wheel-metadata/
+MANIFEST
 
 # Virtual environments
 .venv/
@@ -44,7 +47,6 @@ ENV/
 .coverage.*
 htmlcov/
 coverage.xml
-*.xml
 nosetests.xml
 
 # Type checking
@@ -52,44 +54,68 @@ nosetests.xml
 .dmypy.json
 dmypy.json
 
-# ── Node / Frontend ──────────────────────────
+# Profiling
+*.prof
+
+
+# ── Node / Frontend ───────────────────────────────────────────────────────────
 node_modules/
-dist/
+frontend/dist/
 .cache/
 .parcel-cache/
 .next/
 .nuxt/
 .vite/
 
-# Package lock files — keep package-lock or yarn.lock, not both
-# (AIRP uses npm, so yarn.lock is excluded)
+# AIRP uses npm — exclude yarn and pnpm lock files
 yarn.lock
+pnpm-lock.yaml
 
-# ── IDEs & editors ───────────────────────────
+
+# ── IDEs & editors ───────────────────────────────────────────────────────────
 .vscode/
+!.vscode/extensions.json    # extensions.json is useful to commit
 .idea/
 *.swp
 *.swo
 *~
 .DS_Store
 Thumbs.db
+desktop.ini
 
-# ── Docker ───────────────────────────────────
+
+# ── Docker ────────────────────────────────────────────────────────────────────
 *.log
-docker-compose.override.yml
+docker-compose.override.yml  # local overrides — never shared
 
-# ── ChromaDB local storage ───────────────────
+
+# ── ChromaDB local storage ────────────────────────────────────────────────────
 chroma_db/
 chromadb/
+chroma/
 
-# ── Database ─────────────────────────────────
+
+# ── Database ──────────────────────────────────────────────────────────────────
 *.sqlite3
 *.db
 
-# ── Jupyter ──────────────────────────────────
+
+# ── Generated / output ────────────────────────────────────────────────────────
+reports/
+generated/
+# PDF memos are generated at runtime — not stored in the repo
+*.pdf
+
+
+# ── Jupyter (excluded — AIRP uses .py files, not notebooks) ──────────────────
 .ipynb_checkpoints/
 *.ipynb
 
-# ── Generated / output ───────────────────────
-reports/
-*.pdf
+
+# ── OS artefacts ─────────────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
