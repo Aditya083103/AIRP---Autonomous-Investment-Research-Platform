@@ -1,8 +1,8 @@
-# ─────────────────────────────────────────────────────────────────────────────
+# =============================================================================
 # AIRP — pyproject.toml
 # Central config for all Python tooling.
 # NOTE: flake8 config lives in .flake8 (flake8 does not read pyproject.toml).
-# ─────────────────────────────────────────────────────────────────────────────
+# =============================================================================
 
 [tool.black]
 line-length = 88
@@ -56,25 +56,46 @@ module = [
     "langchain.*",
     "langgraph.*",
     "langsmith.*",
+    "langchain_groq.*",
+    "langchain_anthropic.*",
+    "anthropic.*",
+    "asyncpg.*",
+    "alembic.*",
+    "jose.*",
+    "aiohttp.*",
+    "bs4.*",
+    "tenacity.*",
 ]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["backend/tests"]
-pythonpath = ["."]          # ← add this line
+pythonpath = ["."]
+
 markers = [
     "unit: fast tests with mocked external calls",
-    "integration: tests that hit real APIs (run separately)",
+    "integration: tests that hit real APIs (run separately with -m integration)",
 ]
-addopts = "-m 'not integration' --tb=short"
+# Default run: unit tests only. Integration tests require real API keys.
+addopts = "-m 'not integration' --tb=short -q"
 
 [tool.coverage.run]
 source = ["backend"]
-omit = ["*/tests/*", "*/__init__.py"]
+omit = [
+    "*/tests/*",
+    "*/__init__.py",
+    "*/migrations/*",
+]
 
 [tool.coverage.report]
-# Phase 0 — no application code yet, threshold is 0.
-# Raised to 85 in T-009 (Phase 1) when real source files exist.
-fail_under = 0
+# Phase 1 (T-009+): real source files exist; raise threshold from 0 → 60.
+# Raised further to 85 in Phase 2 (T-021) once agents are built.
+fail_under = 60
 show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+]

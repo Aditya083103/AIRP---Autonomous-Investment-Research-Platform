@@ -1,0 +1,153 @@
+# =============================================================================
+# AIRP — backend/requirements.txt
+# Production dependencies installed in all environments (dev + prod).
+# Install with: pip install -r requirements.txt
+#
+# Pin every package to an exact version so the environment is fully
+# reproducible across machines, CI, and Render deployments.
+#
+# SECTIONS:
+#   1. Core application framework
+#   2. LLM & agent orchestration
+#   3. Database (PostgreSQL + ORM)
+#   4. Cache (Redis)
+#   5. Vector store & embeddings
+#   6. Market data APIs
+#   7. Authentication
+#   8. PDF generation
+#   9. Utilities & HTTP
+# =============================================================================
+
+
+# ── 1. Core Application Framework ─────────────────────────────────────────────
+
+# ASGI web framework — REST + WebSocket endpoints
+# Async-native, automatic Swagger docs, native Pydantic v2 integration
+fastapi==0.110.0
+
+# ASGI server — serves FastAPI in development and production (Render)
+uvicorn[standard]==0.29.0
+
+# Required for FastAPI file upload endpoints (annual report PDF upload)
+python-multipart==0.0.9
+
+# Data validation — used throughout LangChain ecosystem and all agent outputs
+# v2 is significantly faster than v1; strict mode catches integration bugs
+pydantic[email]==2.7.4
+
+# Loads .env variables into Pydantic Settings models (config.py)
+pydantic-settings==2.2.1
+
+# Python dotenv — backup .env loader for scripts and one-off runs
+python-dotenv==1.0.1
+
+
+# ── 2. LLM & Agent Orchestration ──────────────────────────────────────────────
+
+# Foundation of the agent ecosystem — tools, chains, and prompt templates
+# All 8 agents are built on LangChain abstractions
+langchain==0.3.0
+
+# Multi-agent state machine orchestration
+# Enables stateful, cyclical workflows with conditional routing and loops
+# Required for the debate engine and parallel research agent execution
+langgraph==0.2.28
+
+# LangChain Groq integration — free tier LLM used during 22-week development
+# Switch to anthropic by setting LLM_PROVIDER=anthropic in .env
+langchain-groq==0.2.0
+
+# LangChain Anthropic integration — Claude API backbone for final demo (Phase 8)
+# anthropic SDK version is NOT pinned separately — langchain-anthropic pulls
+# in a compatible version automatically. Pinning both caused a conflict.
+langchain-anthropic==0.3.0
+
+# Tracing, evaluation, and debugging — every agent call is traced here
+# Token usage, latency per node, prompt versioning, and eval suites
+langsmith==0.1.147
+
+
+# ── 3. Database (PostgreSQL + ORM) ────────────────────────────────────────────
+
+# ORM — industry-standard Python database toolkit
+# v2 async API is used throughout (AsyncSession, async_engine)
+sqlalchemy==2.0.30
+
+# Database migration management — version-controlled schema changes
+# Every schema change goes through an Alembic migration, never manual ALTER
+alembic==1.13.1
+
+# Async PostgreSQL driver — required for SQLAlchemy async engine
+asyncpg==0.29.0
+
+# Required by SQLAlchemy async engine internally
+greenlet==3.0.3
+
+
+# ── 4. Cache (Redis) ──────────────────────────────────────────────────────────
+
+# Redis client — wraps all external API responses to protect free-tier limits
+# Local Docker dev: redis://localhost:6379
+# Production: Upstash cloud via REDIS_URL env var
+redis==5.0.4
+
+
+# ── 5. Vector Store & Embeddings ──────────────────────────────────────────────
+
+# Vector database for RAG — stores news, earnings transcripts, annual reports
+# Runs locally in a Docker container; no per-query API cost
+chromadb==0.5.0
+
+# Local sentence embedding model — no API cost, runs entirely on device
+# Downloads the model (~90 MB) on first run; cached in ~/.cache/torch
+# Model: all-MiniLM-L6-v2 (384-dim, fast, good quality for financial text)
+sentence-transformers==3.0.1
+
+
+# ── 6. Market Data APIs ───────────────────────────────────────────────────────
+
+# Yahoo Finance unofficial API — stock prices, OHLCV, income statement,
+# balance sheet, cash flow. No API key required. Used by Fundamental and
+# Technical Analyst agents.
+yfinance==0.2.40
+
+# HTTP client — used for NewsAPI, Alpha Vantage, and Screener.in scraping
+requests==2.31.0
+
+# HTML parser — used by Macro Economist for RBI/World Bank page scraping
+# and by the Valuation Agent for Screener.in peer comparison data
+beautifulsoup4==4.12.3
+
+# Faster lxml parser backend for BeautifulSoup (10x faster than html.parser)
+lxml==5.2.2
+
+# NewsAPI Python client — fetches last 30 days of company news
+# Free tier: 100 requests/day; cached 1h in Redis
+newsapi-python==0.2.7
+
+
+# ── 7. Authentication ─────────────────────────────────────────────────────────
+
+# JWT token creation and verification for FastAPI auth endpoints
+# Used in Phase 5 (T-045) when auth routes are implemented
+python-jose[cryptography]==3.3.0
+
+
+# ── 8. PDF Generation ─────────────────────────────────────────────────────────
+
+# Generates the final Investment Memo PDF from HTML/CSS template
+# Used in Phase 4 (T-044) when the Portfolio Manager produces the memo
+weasyprint==62.3
+
+
+# ── 9. Utilities & HTTP ───────────────────────────────────────────────────────
+
+# Retry logic with exponential back-off for all external API calls
+# Prevents cascading failures when yFinance or NewsAPI is temporarily slow
+tenacity==8.3.0
+
+# Async HTTP client — used internally by some LangChain tools
+aiohttp==3.9.5
+
+# Type stubs for requests (improves mypy coverage on tool files)
+types-requests==2.31.0.20240406
