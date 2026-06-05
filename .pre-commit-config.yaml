@@ -41,11 +41,11 @@ repos:
     hooks:
       - id: eslint
         name: ESLint (TypeScript)
-        language: node
-        entry: bash -c 'cd frontend && npx eslint --max-warnings=0 "$@"' --
+        language: system
+        entry: bash -c 'cd frontend && npm run lint'
         types_or: [ts, tsx]
         files: ^frontend/src/
-        pass_filenames: true
+        pass_filenames: false
         require_serial: false
 
   # ── Prettier (TS/TSX/JSON/CSS/MD) ─────────────────────────────────────────

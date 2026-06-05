@@ -23,7 +23,7 @@ from pydantic import Field, computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class Settings(BaseSettings):  # type: ignore[misc]
+class Settings(BaseSettings):
     """
     All AIRP environment variables with types, defaults, and validation.
 
@@ -52,7 +52,7 @@ class Settings(BaseSettings):  # type: ignore[misc]
 
     # ── 2. LLM Provider ───────────────────────────────────────────────────
     # Switch between providers by changing LLM_PROVIDER in .env.
-    # groq   = free tier, used for all development (22 weeks)
+    # groq      = free tier, used for all development (22 weeks)
     # anthropic = Claude API, used for final demo only
     llm_provider: Literal["anthropic", "groq"] = "groq"
 
