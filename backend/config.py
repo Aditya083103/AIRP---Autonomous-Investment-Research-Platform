@@ -51,18 +51,32 @@ class Settings(BaseSettings):  # type: ignore[misc]
     access_token_expire_minutes: int = 60
 
     # ── 2. LLM Provider ───────────────────────────────────────────────────
+    # Switch between providers by changing LLM_PROVIDER in .env.
+    # groq   = free tier, used for all development (22 weeks)
+    # anthropic = Claude API, used for final demo only
+    llm_provider: Literal["anthropic", "groq"] = "groq"
+
+    # Anthropic (Claude) — kept for final demo only
     anthropic_api_key: str = Field(
-        description="Anthropic API key — required for all 8 agents"
+        default="",
+        description="Anthropic API key — used only when LLM_PROVIDER=anthropic",
     )
-    anthropic_model: str = "claude-sonnet-4-20250514"
+    anthropic_model: str = "claude-haiku-4-5-20251001"
     anthropic_max_tokens: int = 4096
+
+    # Groq — free tier, primary LLM during development
+    groq_api_key: str = Field(
+        default="",
+        description="Groq API key — used when LLM_PROVIDER=groq (free tier)",
+    )
+    groq_model: str = "llama3-70b-8192"
 
     # ── 3. Observability ──────────────────────────────────────────────────
     langsmith_api_key: str = Field(
         default="",
         description="LangSmith API key — tracing disabled if empty",
     )
-    langchain_tracing_v2: bool = True
+    langchain_tracing_v2: str = "true"  # kept as str — evaluated in tracing_enabled
     langchain_project: str = "airp-dev"
     langchain_endpoint: str = "https://api.smith.langchain.com"
 
@@ -117,7 +131,7 @@ class Settings(BaseSettings):  # type: ignore[misc]
     screener_base_url: str = "https://www.screener.in"
     rbi_base_url: str = "https://www.rbi.org.in"
 
-    # ── 10. Feature Flags ─────────────────────────────────────────────────
+    # ── 9. Feature Flags ──────────────────────────────────────────────────
     feature_debate_enabled: bool = True
     debate_rounds: int = 2
     feature_pdf_enabled: bool = True
@@ -148,10 +162,29 @@ class Settings(BaseSettings):  # type: ignore[misc]
     @computed_field  # type: ignore[misc]
     @property
     def tracing_enabled(self) -> bool:
-        """LangSmith tracing is only active when a key is provided."""
-        return bool(self.langsmith_api_key) and self.langchain_tracing_v2
+        """True only when tracing flag is 'true' AND a LangSmith key is present."""
+        return self.langchain_tracing_v2.lower() == "true" and bool(
+            self.langsmith_api_key
+        )
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def active_llm_api_key(self) -> str:
+        """Returns the API key for the currently configured LLM provider."""
+        if self.llm_provider == "groq":
+            return self.groq_api_key
+        return self.anthropic_api_key
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def active_llm_model(self) -> str:
+        """Returns the model name for the currently configured LLM provider."""
+        if self.llm_provider == "groq":
+            return self.groq_model
+        return self.anthropic_model
 
 
+# ── get_settings must be OUTSIDE the class ────────────────────────────────────
 @lru_cache
 def get_settings() -> Settings:
     """
