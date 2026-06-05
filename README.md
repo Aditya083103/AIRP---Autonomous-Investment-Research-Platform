@@ -1,6 +1,6 @@
 # AIRP — Autonomous Investment Research Platform
 
-[![CI](https://github.com/Aditya083103/AIRP — Autonomous Investment Research Platform/actions/workflows/ci.yml/badge.svg)](https://github.com/Aditya083103/AIRP — Autonomous Investment Research Platform/actions/workflows/ci.yml)
+[![CI](https://github.com/Aditya083103/AIRP---Autonomous-Investment-Research-Platform/actions/workflows/ci.yml/badge.svg)](https://github.com/Aditya083103/AIRP---Autonomous-Investment-Research-Platform/actions/workflows/ci.yml)
 
 > A production-grade multi-agent AI system that simulates an investment committee,
 > performing autonomous financial analysis and generating professional Investment Memos.
@@ -33,7 +33,7 @@ cd airp
 
 # 2. Configure environment
 cp .env.example .env
-# Fill in your API keys in .env
+# Fill in your API keys in .env — see docs/APIS.md for every service
 
 # 3. Start everything with Docker
 docker-compose up
@@ -100,16 +100,17 @@ airp/
 
 | Doc | Contents |
 |-----|----------|
-| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Full system architecture with diagrams |
-| [AGENTS.md](docs/AGENTS.md) | Each agent's persona, tools, output schema |
-| [APIS.md](docs/APIS.md) | External APIs, free limits, env variable names |
-| [CODING_STANDARDS.md](docs/CODING_STANDARDS.md) | Naming, commit format, style rules |
+| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Full system architecture — layers, request flow, state design, design decisions |
+| [CONTRIBUTING.md](docs/CONTRIBUTING.md) | Local setup, branch strategy, commit format, PR process, testing guide |
+| [CODING_STANDARDS.md](docs/CODING_STANDARDS.md) | Naming conventions, linting rules, pre-commit setup, CI checks |
+| [AGENTS.md](docs/AGENTS.md) | Each agent's persona, tools, output schema, example output |
+| [APIS.md](docs/APIS.md) | External APIs, free tier limits, env variable names, rate limit strategy |
 
 ## Status
 
 | Phase | Name | Status |
 |-------|------|--------|
-| 0 | Project Setup & Standards | 🟡 In progress |
+| 0 | Project Setup & Standards | ✅ Complete |
 | 1 | Data Layer & APIs | ⬜ Not started |
 | 2 | Research Agents | ⬜ Not started |
 | 3 | LangGraph Orchestration | ⬜ Not started |
