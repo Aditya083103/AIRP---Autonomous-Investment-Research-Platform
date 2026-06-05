@@ -10,18 +10,28 @@ Usage:
     llm = get_llm()
 """
 
+from __future__ import annotations
+
+from typing import Any
+
 from backend.config import settings
 
 
-def get_llm():
-    """Return the configured LLM based on LLM_PROVIDER env var."""
+def get_llm() -> Any:
+    """
+    Return the configured LLM based on LLM_PROVIDER env var.
+
+    Returns:
+        ChatGroq instance when LLM_PROVIDER=groq (default, free tier).
+        ChatAnthropic instance when LLM_PROVIDER=anthropic (demo only).
+    """
     if settings.llm_provider == "groq":
         from langchain_groq import ChatGroq
 
         return ChatGroq(
             api_key=settings.groq_api_key,
             model_name=settings.groq_model,
-            temperature=0,  # deterministic outputs for financial analysis
+            temperature=0,
         )
     else:
         from langchain_anthropic import ChatAnthropic

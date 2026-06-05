@@ -9,19 +9,25 @@ Tests validate that:
 - cors_origins_list parses comma-separated string correctly
 - tracing_enabled reflects key presence and flag state
 """
+from __future__ import annotations
 
+from typing import Any
 
 from backend.config import Settings
 
 
-def make_settings(**overrides: str) -> Settings:
+def make_settings(**overrides: Any) -> Settings:
     """
     Helper — build a Settings instance with test defaults.
 
     Bypasses .env file by passing values directly. Any field can be
     overridden via keyword arguments.
+
+    The **overrides type is Any (not str) because Settings fields have
+    mixed types: str, int, bool, Literal[...]. Passing str-only dict
+    causes mypy arg-type errors with model_construct in strict mode.
     """
-    defaults: dict[str, str] = {
+    defaults: dict[str, Any] = {
         "environment": "test",
         "anthropic_api_key": "sk-ant-test-key",
         "database_url": "postgresql+asyncpg://airp:airp@localhost:5432/airp",

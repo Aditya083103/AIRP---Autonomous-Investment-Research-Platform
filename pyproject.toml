@@ -65,6 +65,11 @@ module = [
     "aiohttp.*",
     "bs4.*",
     "tenacity.*",
+    "redis.*",
+    "groq.*",
+    "transformers.*",
+    "torch.*",
+    "sklearn.*",
 ]
 ignore_missing_imports = true
 
@@ -72,7 +77,6 @@ ignore_missing_imports = true
 asyncio_mode = "auto"
 testpaths = ["backend/tests"]
 pythonpath = ["."]
-
 markers = [
     "unit: fast tests with mocked external calls",
     "integration: tests that hit real APIs (run separately with -m integration)",

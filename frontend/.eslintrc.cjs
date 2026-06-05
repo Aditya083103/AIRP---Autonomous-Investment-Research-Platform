@@ -17,7 +17,6 @@ module.exports = {
     ecmaVersion: "latest",
     sourceType: "module",
     ecmaFeatures: { jsx: true },
-    // Point to the tsconfig used for linting (not build tsconfig)
     project: ["./tsconfig.json"],
     tsconfigRootDir: __dirname,
   },
@@ -44,9 +43,9 @@ module.exports = {
 
   settings: {
     react: { version: "detect" },
-    "import/resolver": {
-      typescript: { alwaysTryTypes: true },
-    },
+    // import/resolver intentionally omitted — eslint-import-resolver-typescript
+    // has a known compatibility issue with eslint-plugin-import v2 on Windows.
+    // Import resolution is covered by tsc (tsconfig paths + strict mode).
   },
 
   rules: {
@@ -67,14 +66,18 @@ module.exports = {
     ],
 
     // ── React ───────────────────────────────────────────────────────────────
-    "react/react-in-jsx-scope": "off",          // not needed with React 17+ transform
-    "react/prop-types": "off",                  // TypeScript handles this
+    "react/react-in-jsx-scope": "off",
+    "react/prop-types": "off",
     "react-refresh/only-export-components": [
       "warn",
       { allowConstantExport: true },
     ],
 
     // ── Imports ─────────────────────────────────────────────────────────────
+    // import/no-unresolved disabled — resolver broken on Windows with
+    // eslint-import-resolver-typescript + eslint-plugin-import v2.
+    // tsc --noEmit catches all real unresolved imports via strict mode.
+    "import/no-unresolved": "off",
     "import/order": [
       "error",
       {
@@ -100,7 +103,6 @@ module.exports = {
   },
 
   overrides: [
-    // Relax type-aware rules in config and script files
     {
       files: ["*.config.ts", "*.config.js", "vite.config.ts"],
       rules: {
