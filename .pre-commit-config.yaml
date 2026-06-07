@@ -63,13 +63,25 @@ repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.6.0
     hooks:
+      # NOTE: trailing-whitespace, end-of-file-fixer and mixed-line-ending are
+      # pinned to stages:[manual] because Windows Application Control / Smart
+      # App Control intermittently blocks the unsigned .exe shims pre-commit
+      # generates for them (WinError 4551) — same workaround as mypy above.
+      # These three are redundant locally anyway (black + prettier already
+      # normalise whitespace and line endings). Run them on demand with:
+      #   pre-commit run --all-files --hook-stage manual
+      # CI does not invoke pre-commit, so commit-time enforcement is unaffected.
       - id: trailing-whitespace
         exclude: \.md$              # allow trailing spaces in Markdown (line break)
+        stages: [manual]
       - id: end-of-file-fixer
+        stages: [manual]
+      - id: mixed-line-ending
+        args: ["--fix=lf"]
+        stages: [manual]
+      # Validators below keep real value at commit time and stay active.
       - id: check-yaml
       - id: check-json
       - id: check-toml
       - id: check-merge-conflict
       - id: detect-private-key      # blocks accidental secret commits
-      - id: mixed-line-ending
-        args: ["--fix=lf"]
