@@ -19,7 +19,7 @@ Never import os.getenv() directly in application code — always use settings.
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, computed_field
+from pydantic import Field, computed_field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -137,6 +137,25 @@ class Settings(BaseSettings):
     feature_pdf_enabled: bool = True
     feature_rate_limiting: bool = True
     max_concurrent_analyses: int = 3
+
+    # ── Input normalizers ─────────────────────────────────────────────────
+    # Run BEFORE the Literal check so a stray trailing space (a classic
+    # Windows `set VAR=value ` artefact) or wrong casing can't fail startup.
+    @field_validator("environment", "llm_provider", mode="before")
+    @classmethod
+    def _normalize_lower_literal(cls, value: object) -> object:
+        """Trim whitespace and lowercase so 'test ' or 'TEST' both resolve."""
+        if isinstance(value, str):
+            return value.strip().lower()
+        return value
+
+    @field_validator("log_level", mode="before")
+    @classmethod
+    def _normalize_log_level(cls, value: object) -> object:
+        """Trim whitespace and uppercase so 'info ' or 'info' both resolve."""
+        if isinstance(value, str):
+            return value.strip().upper()
+        return value
 
     # ── Computed properties ───────────────────────────────────────────────
     @computed_field  # type: ignore[misc]
