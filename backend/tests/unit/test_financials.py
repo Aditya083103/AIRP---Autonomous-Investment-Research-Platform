@@ -279,8 +279,10 @@ class TestBuildIncomeStatement:
     def test_usd_revenue_multiplied_by_exchange_rate(self) -> None:
         records_inr = _build_income_statement(_make_income_df(), 1, "INR")
         records_usd = _build_income_statement(_make_income_df(), 1, "USD")
+        revenue_inr = records_inr[0].revenue_crores
+        assert revenue_inr is not None, "INR revenue must be present for comparison"
         assert records_usd[0].revenue_crores == pytest.approx(
-            records_inr[0].revenue_crores * USD_TO_INR, rel=0.01
+            revenue_inr * USD_TO_INR, rel=0.01
         )
 
     def test_missing_ebitda_field_returns_none(self) -> None:
