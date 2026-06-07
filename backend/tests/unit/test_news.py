@@ -54,6 +54,10 @@ from backend.tools.news import (  # noqa: E402
     fetch_news_summary,
 )
 
+# Bypass tenacity retries in unit tests by calling the unwrapped function
+# directly. Extracted once here so each call site stays under 88 chars.
+_call_newsapi_raw = _call_newsapi.__wrapped__  # type: ignore[attr-defined]
+
 # ---------------------------------------------------------------------------
 # Shared test data helpers
 # ---------------------------------------------------------------------------
@@ -195,15 +199,13 @@ class TestCallNewsapi:
         mock_resp = _make_mock_response(429)
         with patch("backend.tools.news.requests.get", return_value=mock_resp):
             with pytest.raises(NewsAPIRateLimitError):
-                # Disable tenacity retries for this unit test by patching
-                # the retry decorator's stop condition to 1 attempt
-                _call_newsapi.__wrapped__({"q": "Infosys"}, "test-key")
+                _call_newsapi_raw({"q": "Infosys"}, "test-key")
 
     def test_raises_newsapi_error_on_401(self) -> None:
         mock_resp = _make_mock_response(401)
         with patch("backend.tools.news.requests.get", return_value=mock_resp):
             with pytest.raises(NewsAPIError, match="authentication failed"):
-                _call_newsapi.__wrapped__({"q": "Infosys"}, "test-key")
+                _call_newsapi_raw({"q": "Infosys"}, "test-key")
 
     def test_raises_newsapi_error_on_400(self) -> None:
         mock_resp = _make_mock_response(
@@ -211,13 +213,13 @@ class TestCallNewsapi:
         )
         with patch("backend.tools.news.requests.get", return_value=mock_resp):
             with pytest.raises(NewsAPIError, match="bad request"):
-                _call_newsapi.__wrapped__({"q": "Infosys"}, "test-key")
+                _call_newsapi_raw({"q": "Infosys"}, "test-key")
 
     def test_raises_connection_error_on_500(self) -> None:
         mock_resp = _make_mock_response(500)
         with patch("backend.tools.news.requests.get", return_value=mock_resp):
             with pytest.raises(requests.ConnectionError):
-                _call_newsapi.__wrapped__({"q": "Infosys"}, "test-key")
+                _call_newsapi_raw({"q": "Infosys"}, "test-key")
 
     def test_passes_api_key_in_header(self) -> None:
         mock_resp = _make_mock_response(200)
@@ -237,8 +239,7 @@ class TestCallNewsapi:
 
 
 class TestFetchNewsFromApi:
-    def _patch_get(self, response_data: dict[str, Any] | None = None):
-        """Convenience context manager that patches requests.get."""
+    def _patch_get(self, response_data: dict[str, Any] | None = None) -> Any:
         mock_resp = _make_mock_response(200, response_data or _make_api_response())
         return patch("backend.tools.news.requests.get", return_value=mock_resp)
 
@@ -370,7 +371,7 @@ class TestFetchNewsFromApi:
 
 
 class TestFetchNewsTool:
-    def _patch_get(self, response_data: dict[str, Any] | None = None):
+    def _patch_get(self, response_data: dict[str, Any] | None = None) -> Any:
         mock_resp = _make_mock_response(200, response_data or _make_api_response())
         return patch("backend.tools.news.requests.get", return_value=mock_resp)
 
@@ -500,7 +501,7 @@ class TestFetchNewsTool:
 
 
 class TestFetchNewsSummaryTool:
-    def _patch_get(self, response_data: dict[str, Any] | None = None):
+    def _patch_get(self, response_data: dict[str, Any] | None = None) -> Any:
         mock_resp = _make_mock_response(200, response_data or _make_api_response())
         return patch("backend.tools.news.requests.get", return_value=mock_resp)
 
