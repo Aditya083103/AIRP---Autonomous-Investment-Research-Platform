@@ -65,7 +65,9 @@ _SOCKET_CONNECT_TIMEOUT = 3
 
 def _is_test_environment() -> bool:
     """Return True when running under pytest (ENVIRONMENT=test)."""
-    return os.getenv("ENVIRONMENT", "") == "test"
+    # strip().lower() so a trailing space / casing (Windows `set VAR=test `)
+    # still routes caching to a no-op during tests.
+    return os.getenv("ENVIRONMENT", "").strip().lower() == "test"
 
 
 def _resolve_redis_url() -> str:

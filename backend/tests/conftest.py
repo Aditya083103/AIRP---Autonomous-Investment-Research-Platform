@@ -43,12 +43,17 @@ def require_test_environment() -> Generator[None, None, None]:
     This guard prevents tests from ever touching the development or
     production database when DATABASE_URL is accidentally not overridden.
     """
-    env = os.getenv("ENVIRONMENT", "")
-    if env != "test":
+    # Normalize before comparing: a trailing space or stray casing — the
+    # classic Windows `set ENVIRONMENT=test ` artefact — must not trip the
+    # guard. strip().lower() keeps the "you must opt into test mode" contract
+    # while tolerating shell whitespace.
+    raw = os.getenv("ENVIRONMENT", "")
+    if raw.strip().lower() != "test":
         pytest.fail(
-            f"Tests must run with ENVIRONMENT=test (got '{env}'). "
+            f"Tests must run with ENVIRONMENT=test (got '{raw}'). "
             "Set it in your shell before running pytest:\n"
-            "  export ENVIRONMENT=test"
+            "  export ENVIRONMENT=test       (mac/linux)\n"
+            '  set "ENVIRONMENT=test"        (windows cmd)'
         )
     yield
 
