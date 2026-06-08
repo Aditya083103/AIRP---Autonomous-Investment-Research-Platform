@@ -70,6 +70,8 @@ module = [
     "transformers.*",
     "torch.*",
     "sklearn.*",
+    "pdfminer.*",
+    "PyPDF2.*",
 ]
 ignore_missing_imports = true
 

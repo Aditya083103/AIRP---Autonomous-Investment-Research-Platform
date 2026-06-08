@@ -465,39 +465,47 @@ def _extract_text_from_pdf_bytes(pdf_bytes: bytes) -> str:
     Extract all text from a PDF given its raw bytes.
 
     Uses pdfminer.six which is already available (pulled in by weasyprint's
-    dependency tree).  Falls back to a character-count heuristic to detect
-    scanned/image-only PDFs.
+    dependency tree).  Falls back to PyPDF2 if pdfminer is absent.
 
     Returns:
         Extracted text string (may be empty for scanned PDFs).
 
     Raises:
-        PDFExtractionError: if pdfminer raises an unexpected exception.
+        PDFExtractionError: if extraction fails with both libraries, or
+            neither library is installed.
     """
+    # --- pdfminer.six path (primary) ---
+    # Import is deferred so the module loads fine even when pdfminer is not
+    # installed.  pdfminer.* is in pyproject.toml mypy overrides so mypy
+    # treats this import as Any and suppresses missing-import errors.
     try:
-        # Import here so the module-level import doesn't fail when pdfminer
-        # is absent in environments that don't have weasyprint installed.
-        from pdfminer.high_level import extract_text as pm_extract_text
+        from pdfminer.high_level import (  # type: ignore[import-untyped]
+            extract_text as pm_extract_text,
+        )
 
-        text = pm_extract_text(BytesIO(pdf_bytes))
-        return (text or "").strip()
+        text: str = pm_extract_text(BytesIO(pdf_bytes)) or ""
+        return text.strip()
     except ImportError:
-        # pdfminer not available — try a simpler approach with PyPDF2 if present
-        try:
-            import PyPDF2  # type: ignore[import]
-
-            reader = PyPDF2.PdfReader(BytesIO(pdf_bytes))
-            pages_text = []
-            for page in reader.pages:
-                pages_text.append(page.extract_text() or "")
-            return "\n".join(pages_text).strip()
-        except ImportError:
-            raise PDFExtractionError(
-                "Neither pdfminer.six nor PyPDF2 is installed. "
-                "Install pdfminer.six: pip install pdfminer.six"
-            )
+        pass  # pdfminer not installed — fall through to PyPDF2
     except Exception as exc:
         raise PDFExtractionError(f"pdfminer failed to extract text: {exc}") from exc
+
+    # --- PyPDF2 fallback ---
+    try:
+        import PyPDF2  # type: ignore[import-untyped]
+
+        reader = PyPDF2.PdfReader(BytesIO(pdf_bytes))
+        pages_text = []
+        for page in reader.pages:
+            pages_text.append(page.extract_text() or "")
+        return "\n".join(pages_text).strip()
+    except ImportError:
+        raise PDFExtractionError(
+            "Neither pdfminer.six nor PyPDF2 is installed. "
+            "Install pdfminer.six: pip install pdfminer.six"
+        )
+    except Exception as exc:
+        raise PDFExtractionError(f"PyPDF2 failed to extract text: {exc}") from exc
 
 
 def _extract_text_from_pdf_path(pdf_path: str) -> str:
