@@ -25,8 +25,8 @@ Testability
 -----------
 get_redis_client() reads the module-level ``_FORCE_DISABLE`` flag first.
 Tests that need to exercise the connection path call
-``enable_for_tests()`` at the start and ``disable_for_tests()`` (via
-reset_redis_client) at teardown — no patching of os.environ required.
+``enable_for_tests()`` at the start and ``reset_redis_client()`` in
+teardown — no patching of os.environ required.
 
 TTL constants (seconds) — match config.py cache_ttl_* fields:
     STOCK_TTL   =  900   (15 min)
@@ -69,7 +69,9 @@ _SOCKET_CONNECT_TIMEOUT: int = 3
 # Module-level memoised state
 # ---------------------------------------------------------------------------
 
-_client: redis.Redis | None = None  # type: ignore[type-arg]
+# redis.Redis is not generic at runtime in older redis-py versions;
+# annotate as the plain class to satisfy mypy strict mode.
+_client: redis.Redis | None = None
 _client_unavailable: bool = False
 
 # When True, get_redis_client() always returns None regardless of env vars.
@@ -110,13 +112,13 @@ def enable_for_tests() -> None:
     _FORCE_DISABLE = False
 
 
-def get_redis_client() -> "redis.Redis[Any] | None":
+def get_redis_client() -> redis.Redis | None:
     """
     Return a connected Redis client, or None if caching is unavailable.
 
     Returns None (caching disabled) when:
-      * _FORCE_DISABLE is True (default in test env — set by module init).
-      * ENVIRONMENT=test.
+      * _FORCE_DISABLE is True (default — cleared only by enable_for_tests()).
+      * _client_unavailable is True (latched after first connection failure).
       * No REDIS_URL is configured.
       * The server is unreachable (connection verified with PING).
 
@@ -145,7 +147,7 @@ def get_redis_client() -> "redis.Redis[Any] | None":
         }
         if token:
             kwargs["password"] = token
-        client: redis.Redis[Any] = redis.Redis.from_url(url, **kwargs)
+        client: redis.Redis = redis.Redis.from_url(url, **kwargs)
         client.ping()
     except Exception as exc:
         logger.warning("Redis unavailable (%s) — caching disabled this run", exc)
@@ -163,7 +165,7 @@ def reset_redis_client() -> None:
 
     Call this in teardown after any test that called enable_for_tests().
     Has no effect on the actual Redis server — it only drops the in-process
-    handle and restores the safe default state.
+    handle and restores the safe default state (_FORCE_DISABLE=True).
     """
     global _client, _client_unavailable, _FORCE_DISABLE
     _client = None

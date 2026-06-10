@@ -74,12 +74,11 @@ try:
         reset_redis_client,
     )
 
-    # Alias reset so existing code that calls reset_client() keeps working.
     def reset_client() -> None:
         """Reset the memoised Redis client (delegates to redis_client module)."""
         reset_redis_client()
 
-    def get_client() -> "redis.Redis[Any] | None":
+    def get_client() -> redis.Redis | None:
         """Return the shared Redis client (delegates to redis_client module)."""
         return get_redis_client()
 
@@ -91,16 +90,30 @@ except ImportError:
     RATIOS_TTL = 3_600
     MACRO_TTL = 86_400
 
-    _fallback_client: "redis.Redis[Any] | None" = None
-    _fallback_unavailable: bool = False
-
-    def get_client() -> "redis.Redis[Any] | None":  # type: ignore[misc]
+    def get_client() -> redis.Redis | None:  # type: ignore[misc]
         """Fallback get_client when redis_client module is unavailable."""
         return None
 
     def reset_client() -> None:  # type: ignore[misc]
         """Fallback reset_client when redis_client module is unavailable."""
         pass
+
+
+# ---------------------------------------------------------------------------
+# Public API — explicit exports so mypy strict mode is satisfied
+# ---------------------------------------------------------------------------
+
+__all__ = [
+    "STOCK_TTL",
+    "NEWS_TTL",
+    "RATIOS_TTL",
+    "MACRO_TTL",
+    "get_client",
+    "reset_client",
+    "cache_get_json",
+    "cache_set_json",
+    "cached",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -128,8 +141,13 @@ def cache_get_json(key: str) -> dict[str, Any] | None:
     if not raw:
         return None
 
+    # client has decode_responses=True so raw is always str, not bytes.
+    # Cast to str to satisfy mypy — redis-py stubs type .get() as
+    # Awaitable[Any] | Any in some versions.
+    raw_str: str = str(raw)
+
     try:
-        data = json.loads(raw)
+        data = json.loads(raw_str)
     except (TypeError, ValueError) as exc:
         logger.warning("Corrupt cache value for %r — treating as miss: %s", key, exc)
         return None
@@ -138,7 +156,7 @@ def cache_get_json(key: str) -> dict[str, Any] | None:
         logger.warning("Cached value for %r is not a JSON object — ignoring", key)
         return None
 
-    return data
+    return data  # type: ignore[return-value]
 
 
 def cache_set_json(key: str, value: dict[str, Any], ttl_seconds: int) -> bool:
@@ -178,9 +196,6 @@ def cached(*, key: str, ttl: int) -> Callable[[_FuncT], _FuncT]:
     key:
         Redis key template.  Curly-brace placeholders (e.g. ``{ticker}``)
         are resolved against the function's bound arguments at call time.
-        Only string arguments that are safe as Redis key segments are
-        substituted (the template itself must be a valid key string when
-        placeholders are filled).
     ttl:
         Time-to-live in seconds.  Use the TTL constants from this module
         (STOCK_TTL, NEWS_TTL, RATIOS_TTL, MACRO_TTL).
@@ -190,9 +205,7 @@ def cached(*, key: str, ttl: int) -> Callable[[_FuncT], _FuncT]:
     * Cache hit  → return the cached dict immediately (no network call).
     * Cache miss → call the wrapped function, cache the result, return it.
     * Redis unavailable → call the wrapped function normally (no caching).
-    * The wrapped function must return a dict[str, Any].  A result that
-      contains an ``"error"`` key is NOT cached — error responses should
-      never pollute the cache.
+    * A result containing an ``"error"`` key is NOT cached.
 
     Example
     -------
@@ -206,8 +219,6 @@ def cached(*, key: str, ttl: int) -> Callable[[_FuncT], _FuncT]:
 
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> dict[str, Any]:
-            # Bind positional + keyword args so we can resolve key placeholders
-            # by name regardless of how the caller passed them.
             try:
                 bound = sig.bind(*args, **kwargs)
                 bound.apply_defaults()
@@ -221,7 +232,6 @@ def cached(*, key: str, ttl: int) -> Callable[[_FuncT], _FuncT]:
                 )
                 return func(*args, **kwargs)
 
-            # --- cache read ---
             cached_value = cache_get_json(resolved_key)
             if cached_value is not None:
                 logger.debug("Cache hit: %s", resolved_key)
@@ -229,11 +239,8 @@ def cached(*, key: str, ttl: int) -> Callable[[_FuncT], _FuncT]:
 
             logger.debug("Cache miss: %s", resolved_key)
 
-            # --- live fetch ---
             result: dict[str, Any] = func(*args, **kwargs)
 
-            # Do not cache error responses — they should not be served to
-            # subsequent callers, and transient errors should resolve on retry.
             if "error" not in result:
                 cache_set_json(resolved_key, result, ttl)
 

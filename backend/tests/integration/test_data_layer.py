@@ -402,7 +402,7 @@ class TestFetchNewsMissingKey:
                 ticker=ticker,
                 max_articles=max_articles,
             )
-            return result.model_dump(mode="json")  # type: ignore[return-value]
+            return result.model_dump(mode="json")  # type: ignore[union-attr]
 
         with patch.object(news_mod, "settings", None):
             with patch.object(

@@ -108,7 +108,7 @@ class _MockEF:
     without loading any model or making any network call.
     """
 
-    def __call__(self, input: list) -> list:  # noqa: A002
+    def __call__(self, input: list[str]) -> list[list[float]]:  # noqa: A002
         return [[0.1] * 384 for _ in input]
 
 

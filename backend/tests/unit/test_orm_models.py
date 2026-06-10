@@ -350,11 +350,9 @@ class TestInvestmentMemoColumns:
 
 
 class TestRelationships:
-    def _rel(  # type: ignore[type-arg]
-        self, model: Any, name: str
-    ) -> RelationshipProperty:
+    def _rel(self, model: Any, name: str) -> "RelationshipProperty[Any]":
         mapper = sa_inspect(model)
-        return mapper.relationships[name]
+        return mapper.relationships[name]  # type: ignore[return-value]
 
     def test_user_has_analyses_relationship(self) -> None:
         rel = self._rel(User, "analyses")

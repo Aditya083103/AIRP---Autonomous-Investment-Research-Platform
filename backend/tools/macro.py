@@ -386,8 +386,10 @@ def _parse_worldbank_gdp(payload: Any) -> tuple[float | None, str | None]:
 
 def _rbi_base_url() -> str:
     """Resolve the RBI base URL from settings, with a sane default."""
-    if settings is not None and getattr(settings, "rbi_base_url", ""):
-        return str(settings.rbi_base_url).rstrip("/")
+    if settings is not None:
+        url = getattr(settings, "rbi_base_url", None)
+        if url:
+            return str(url).rstrip("/")
     return _DEFAULT_RBI_BASE_URL
 
 
