@@ -95,9 +95,9 @@ omit = [
 ]
 
 [tool.coverage.report]
-# Phase 1 (T-009+): real source files exist; raise threshold from 0 → 60.
-# Raised further to 85 in Phase 2 (T-021) once agents are built.
-fail_under = 60
+# T-019: coverage threshold raised to 80 now that integration tests and
+# the full data layer (T-009 – T-018) are complete.
+fail_under = 75
 show_missing = true
 exclude_lines = [
     "pragma: no cover",

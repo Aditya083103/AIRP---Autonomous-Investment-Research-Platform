@@ -125,7 +125,7 @@ def get_redis_client() -> "redis.Redis[Any] | None":
     """
     global _client, _client_unavailable
 
-    if _FORCE_DISABLE or _is_test_environment() or _client_unavailable:
+    if _FORCE_DISABLE or _client_unavailable:
         return None
     if _client is not None:
         return _client
