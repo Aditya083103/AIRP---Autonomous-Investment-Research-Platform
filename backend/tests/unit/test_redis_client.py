@@ -3,9 +3,9 @@
 Unit tests for backend/db/redis_client.py — T-018
 
 Tests verify:
-  1. ENVIRONMENT=test → get_redis_client() always returns None (hermetic)
+  1. Default state (_FORCE_DISABLE=True) → get_redis_client() returns None
   2. TTL constants are correct values
-  3. reset_redis_client() clears memoised state
+  3. enable_for_tests() / reset_redis_client() cycle works correctly
   4. No REDIS_URL → returns None and latches _client_unavailable
   5. Unreachable server (PING fails) → returns None and latches flag
   6. Happy path: valid URL + passing PING → returns a client
@@ -13,16 +13,20 @@ Tests verify:
 
 Patching strategy
 -----------------
-redis_client.py exposes a module-level ``_FORCE_DISABLE`` flag (True by
-default) and an ``enable_for_tests()`` helper.  Tests that need to exercise
-the real connection path call ``enable_for_tests()`` before calling
-``get_redis_client()``.  ``reset_redis_client()`` (called in teardown)
-always resets ``_FORCE_DISABLE`` back to True.
+redis_client.py uses ``_FORCE_DISABLE = True`` as the single runtime guard.
+Tests that need to exercise the connection path call ``enable_for_tests()``
+which sets _FORCE_DISABLE = False.  ``reset_redis_client()`` (called via
+the ``reset_redis_state`` autouse fixture) always restores _FORCE_DISABLE=True
+after every test — whether the test is a bare function or a class method.
+
+Why autouse fixture instead of teardown_function:
+    ``teardown_function`` only runs after bare module-level test functions.
+    It is NOT called after test methods inside classes (TestHappyPath, etc.).
+    An autouse fixture with ``yield`` runs its teardown after every test
+    regardless of whether it is a bare function or a class method.
 
 redis.Redis.from_url is intercepted with:
     patch.object(redis_lib.Redis, "from_url", return_value=fake_client)
-
-No env-var manipulation is needed at all.
 
 Run with:
     ENVIRONMENT=test python -m pytest backend/tests/unit/test_redis_client.py -v
@@ -51,6 +55,34 @@ from backend.db.redis_client import (  # noqa: E402
     reset_redis_client,
 )
 
+# ---------------------------------------------------------------------------
+# Autouse fixture — resets module state before AND after every test,
+# whether the test is a bare function or a method inside a class.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def reset_redis_state() -> Generator[None, None, None]:
+    """
+    Reset redis_client module state before and after every test.
+
+    Using autouse=True on a fixture (rather than teardown_function) ensures
+    the reset runs for:
+      * bare module-level test functions  (teardown_function also works)
+      * methods inside test classes       (teardown_function does NOT work)
+
+    The reset before yield guarantees a clean slate even if a previous
+    test crashed before its own teardown ran.
+    """
+    reset_redis_client()  # clean slate before the test
+    yield
+    reset_redis_client()  # restore _FORCE_DISABLE=True after the test
+
+
+# ---------------------------------------------------------------------------
+# Context manager helper
+# ---------------------------------------------------------------------------
+
 
 @contextmanager
 def _patch_connection(
@@ -59,11 +91,9 @@ def _patch_connection(
     """
     Enable the connection path and intercept redis.Redis.from_url.
 
-    Calls enable_for_tests() to clear _FORCE_DISABLE, then patches
+    Calls enable_for_tests() to set _FORCE_DISABLE=False, then patches
     redis.Redis.from_url to return fake_client.  Yields the mock so
     callers can inspect call_args / call_count.
-
-    teardown_function() resets _FORCE_DISABLE back to True after every test.
     """
     enable_for_tests()
     with patch.object(
@@ -72,11 +102,6 @@ def _patch_connection(
         return_value=fake_client,
     ) as mock_from_url:
         yield mock_from_url
-
-
-def teardown_function() -> None:
-    """Reset all memoised state between tests."""
-    reset_redis_client()  # also resets _FORCE_DISABLE to True
 
 
 # ---------------------------------------------------------------------------
@@ -99,13 +124,12 @@ class TestTTLConstants:
 
 
 # ---------------------------------------------------------------------------
-# Default state — always returns None (both guards active)
+# Default state — _FORCE_DISABLE=True → always returns None
 # ---------------------------------------------------------------------------
 
 
 class TestDefaultNoOp:
     def test_get_client_returns_none_by_default(self) -> None:
-        """_FORCE_DISABLE=True by default → always returns None."""
         assert get_redis_client() is None
 
     def test_get_client_none_even_with_url_set(
@@ -115,8 +139,6 @@ class TestDefaultNoOp:
         assert get_redis_client() is None
 
     def test_unavailable_flag_not_latched_in_disabled_state(self) -> None:
-        """_FORCE_DISABLE path must NOT latch _client_unavailable — that flag
-        is reserved for genuine connection failures."""
         get_redis_client()
         assert rc_mod._client_unavailable is False
 
@@ -212,7 +234,7 @@ class TestUnreachableServer:
         fake_client.ping.side_effect = ConnectionError("ECONNREFUSED")
 
         with _patch_connection(fake_client) as mock_from_url:
-            get_redis_client()  # first call — latches flag
+            get_redis_client()  # first call — latches _client_unavailable
             get_redis_client()  # second call — fast no-op
             get_redis_client()  # third call — fast no-op
 
@@ -238,7 +260,6 @@ class TestHappyPath:
         assert result is fake_client
 
     def test_client_is_memoised(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Second call returns the same object without reconnecting."""
         monkeypatch.setenv("REDIS_URL", "redis://localhost:6379")
         fake_client = MagicMock()
         fake_client.ping.return_value = True
@@ -251,7 +272,6 @@ class TestHappyPath:
         assert mock_from_url.call_count == 1
 
     def test_decode_responses_is_true(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """decode_responses=True must be set so GET returns str, not bytes."""
         monkeypatch.setenv("REDIS_URL", "redis://localhost:6379")
         fake_client = MagicMock()
         fake_client.ping.return_value = True
@@ -295,3 +315,20 @@ class TestUpstashToken:
 
         _, kwargs = mock_from_url.call_args
         assert "password" not in kwargs
+
+
+# ---------------------------------------------------------------------------
+# reset_redis_client
+# ---------------------------------------------------------------------------
+
+
+class TestResetRedisClient:
+    def test_reset_clears_client(self) -> None:
+        rc_mod._client = MagicMock()
+        reset_redis_client()
+        assert rc_mod._client is None
+
+    def test_reset_clears_unavailable_flag(self) -> None:
+        rc_mod._client_unavailable = True
+        reset_redis_client()
+        assert rc_mod._client_unavailable is False
