@@ -1,43 +1,51 @@
 # backend/tools/cache.py
 """
-AIRP — Minimal Redis JSON cache helper.
+AIRP — Redis JSON cache helper + @cached decorator (T-018).
 
-This is a deliberately small, dependency-light cache helper introduced in
-T-014 to satisfy the "cached in Redis for 24h" acceptance criterion of the
-fetch_macro_data tool. It provides JSON get/set with a TTL and **degrades
-gracefully**: if Redis is unreachable, not configured, or the process is
-running under pytest (ENVIRONMENT=test), every call becomes a silent no-op
-and the caller simply hits the live data source instead.
+This module provides two public surfaces:
 
-Relationship to T-018:
-    T-018 ("Setup Redis caching layer") will generalise this into the
-    documented ``@cached`` decorator for *all* data tools and move the Redis
-    client into ``backend/db/redis_client.py``. At that point macro.py (and
-    the other tools) switch to the decorator with no behavioural change —
-    this module is the seed of that work, not a parallel implementation.
+1. Low-level helpers (backward-compatible with T-014):
+       cache_get_json(key)            -> dict | None
+       cache_set_json(key, value, ttl) -> bool
+       get_client()                   -> redis.Redis | None
+       reset_client()                 -> None
+
+2. @cached decorator — wraps any ``_fetch_*()`` inner function so the
+   result is transparently read from Redis on a cache hit and written on a
+   miss.  All tool caches share the same Redis connection from
+   ``backend.db.redis_client``.
+
+   Usage:
+       @cached(key="airp:stock:{ticker}:{period}", ttl=STOCK_TTL)
+       def _fetch_stock(ticker: str, period: str) -> dict[str, Any]:
+           ...
+
+   Key templating:
+       Curly-brace placeholders are resolved against the function's keyword
+       arguments (after Python binds positional args).  For example the key
+       template ``"airp:news:{company_name}"`` with a call
+       ``_fetch_news(company_name="TCS")`` resolves to ``"airp:news:TCS"``.
 
 Design rules:
-    * Never raise. A cache is an optimisation, never a hard dependency.
-    * Bypass entirely when ENVIRONMENT=test so unit tests are hermetic and
-      never touch a real Redis server.
-    * Lazy, memoised connection — connect on first use, reuse afterwards,
-      and remember a failed connection so we do not retry on every call.
+    * Never raise.  A cache is an optimisation, never a hard dependency.
+    * Bypass entirely when ENVIRONMENT=test so unit tests are hermetic.
+    * Degrade silently — if Redis is unreachable the wrapped function is
+      called as if the decorator were not there.
+    * ``default=str`` in json.dumps lets datetime / Decimal / etc. serialise
+      without a custom encoder.
+    * A non-dict cached value is treated as a miss (safe against schema
+      evolution where a list was cached before a refactor made it a dict).
 
-Usage:
-    from backend.tools.cache import cache_get_json, cache_set_json
-
-    cached = cache_get_json("airp:macro:india")
-    if cached is not None:
-        return cached
-    fresh = expensive_fetch()
-    cache_set_json("airp:macro:india", fresh, ttl_seconds=86400)
+TTL constants are imported from ``backend.db.redis_client`` and re-exported
+here for convenience.  Callers that only need one TTL can do:
+    from backend.tools.cache import STOCK_TTL
 """
-from __future__ import annotations
 
+import functools
+import inspect
 import json
 import logging
-import os
-from typing import Any
+from typing import Any, Callable
 
 import redis
 
@@ -52,91 +60,59 @@ settings = _settings
 
 logger = logging.getLogger(__name__)
 
-# Memoised connection state. _client is the live client once connected;
-# _client_unavailable latches True after a failed connect so we stop retrying.
-_client: redis.Redis | None = None
-_client_unavailable: bool = False
+# ---------------------------------------------------------------------------
+# TTL re-exports (single source of truth lives in redis_client)
+# ---------------------------------------------------------------------------
 
-# Connection timeouts (seconds) — keep short so a dead Redis fails fast and
-# the caller falls back to the live source without a noticeable stall.
-_SOCKET_TIMEOUT = 3
-_SOCKET_CONNECT_TIMEOUT = 3
+try:
+    from backend.db.redis_client import (
+        MACRO_TTL,
+        NEWS_TTL,
+        RATIOS_TTL,
+        STOCK_TTL,
+        get_redis_client,
+        reset_redis_client,
+    )
 
+    # Alias reset so existing code that calls reset_client() keeps working.
+    def reset_client() -> None:
+        """Reset the memoised Redis client (delegates to redis_client module)."""
+        reset_redis_client()
 
-def _is_test_environment() -> bool:
-    """Return True when running under pytest (ENVIRONMENT=test)."""
-    # strip().lower() so a trailing space / casing (Windows `set VAR=test `)
-    # still routes caching to a no-op during tests.
-    return os.getenv("ENVIRONMENT", "").strip().lower() == "test"
+    def get_client() -> "redis.Redis[Any] | None":
+        """Return the shared Redis client (delegates to redis_client module)."""
+        return get_redis_client()
 
+except ImportError:
+    # Fallback if redis_client is not yet importable (should not happen in
+    # normal usage, but prevents a hard crash during partial installs).
+    STOCK_TTL = 900
+    NEWS_TTL = 3_600
+    RATIOS_TTL = 3_600
+    MACRO_TTL = 86_400
 
-def _resolve_redis_url() -> str:
-    """Resolve the Redis URL from the environment first, then settings."""
-    url = os.getenv("REDIS_URL", "")
-    if not url and settings is not None:
-        url = settings.redis_url or ""
-    return url
+    _fallback_client: "redis.Redis[Any] | None" = None
+    _fallback_unavailable: bool = False
 
-
-def _resolve_redis_token() -> str:
-    """Resolve the Upstash token (used as password) if one is configured."""
-    token = os.getenv("REDIS_TOKEN", "")
-    if not token and settings is not None:
-        token = settings.redis_token or ""
-    return token
-
-
-def get_client() -> redis.Redis | None:
-    """
-    Return a connected Redis client, or None if caching is unavailable.
-
-    Returns None (caching disabled) when:
-      * ENVIRONMENT=test — tests must never touch a real Redis server,
-      * no REDIS_URL is configured,
-      * the server is unreachable (connection verified with PING).
-
-    The client and any "unavailable" verdict are memoised at module level,
-    so the connection cost and the PING check happen at most once per process.
-    """
-    global _client, _client_unavailable
-
-    if _is_test_environment() or _client_unavailable:
-        return None
-    if _client is not None:
-        return _client
-
-    url = _resolve_redis_url()
-    if not url:
-        logger.info("REDIS_URL not configured — caching disabled for this run")
-        _client_unavailable = True
+    def get_client() -> "redis.Redis[Any] | None":  # type: ignore[misc]
+        """Fallback get_client when redis_client module is unavailable."""
         return None
 
-    try:
-        token = _resolve_redis_token()
-        kwargs: dict[str, Any] = {
-            "decode_responses": True,
-            "socket_timeout": _SOCKET_TIMEOUT,
-            "socket_connect_timeout": _SOCKET_CONNECT_TIMEOUT,
-        }
-        if token:
-            kwargs["password"] = token
-        client = redis.Redis.from_url(url, **kwargs)
-        client.ping()  # verify connectivity now so later GET/SET cannot stall
-    except Exception as exc:
-        logger.warning("Redis unavailable (%s) — caching disabled this run", exc)
-        _client_unavailable = True
-        return None
+    def reset_client() -> None:  # type: ignore[misc]
+        """Fallback reset_client when redis_client module is unavailable."""
+        pass
 
-    _client = client
-    logger.info("Redis cache connected")
-    return _client
+
+# ---------------------------------------------------------------------------
+# Low-level JSON helpers
+# ---------------------------------------------------------------------------
 
 
 def cache_get_json(key: str) -> dict[str, Any] | None:
     """
     Return the cached JSON object for ``key``, or None on miss / unavailable.
 
-    Never raises. A corrupt or non-dict cached value is treated as a miss
+    Never raises.  A corrupt or non-dict cached value is treated as a miss
     and logged, so a poisoned key can never crash the caller.
     """
     client = get_client()
@@ -161,15 +137,16 @@ def cache_get_json(key: str) -> dict[str, Any] | None:
     if not isinstance(data, dict):
         logger.warning("Cached value for %r is not a JSON object — ignoring", key)
         return None
+
     return data
 
 
 def cache_set_json(key: str, value: dict[str, Any], ttl_seconds: int) -> bool:
     """
-    Store ``value`` as JSON under ``key`` with a TTL. Returns True on success.
+    Store ``value`` as JSON under ``key`` with a TTL.  Returns True on success.
 
-    Never raises — a failed write simply returns False and the caller carries
-    on with the freshly fetched value. ``default=str`` lets datetime and other
+    Never raises — a failed write returns False and the caller carries on
+    with the freshly fetched value.  ``default=str`` lets datetime and other
     non-JSON-native types serialise without a custom encoder.
     """
     client = get_client()
@@ -185,14 +162,83 @@ def cache_set_json(key: str, value: dict[str, Any], ttl_seconds: int) -> bool:
         return False
 
 
-def reset_client() -> None:
-    """
-    Reset the memoised client and availability flag.
+# ---------------------------------------------------------------------------
+# @cached decorator
+# ---------------------------------------------------------------------------
 
-    Used by tests to clear state between cases. Has no effect on a live Redis
-    server — it only drops the in-process handle so the next get_client()
-    reconnects from scratch.
+_FuncT = Callable[..., dict[str, Any]]
+
+
+def cached(*, key: str, ttl: int) -> Callable[[_FuncT], _FuncT]:
     """
-    global _client, _client_unavailable
-    _client = None
-    _client_unavailable = False
+    Decorator that wraps a data-fetch function with a Redis read-through cache.
+
+    Parameters
+    ----------
+    key:
+        Redis key template.  Curly-brace placeholders (e.g. ``{ticker}``)
+        are resolved against the function's bound arguments at call time.
+        Only string arguments that are safe as Redis key segments are
+        substituted (the template itself must be a valid key string when
+        placeholders are filled).
+    ttl:
+        Time-to-live in seconds.  Use the TTL constants from this module
+        (STOCK_TTL, NEWS_TTL, RATIOS_TTL, MACRO_TTL).
+
+    Behaviour
+    ---------
+    * Cache hit  → return the cached dict immediately (no network call).
+    * Cache miss → call the wrapped function, cache the result, return it.
+    * Redis unavailable → call the wrapped function normally (no caching).
+    * The wrapped function must return a dict[str, Any].  A result that
+      contains an ``"error"`` key is NOT cached — error responses should
+      never pollute the cache.
+
+    Example
+    -------
+        @cached(key="airp:stock:{ticker}:{period}", ttl=STOCK_TTL)
+        def _fetch_stock_data(ticker: str, period: str) -> dict[str, Any]:
+            ...  # yFinance call
+    """
+
+    def decorator(func: _FuncT) -> _FuncT:
+        sig = inspect.signature(func)
+
+        @functools.wraps(func)
+        def wrapper(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            # Bind positional + keyword args so we can resolve key placeholders
+            # by name regardless of how the caller passed them.
+            try:
+                bound = sig.bind(*args, **kwargs)
+                bound.apply_defaults()
+                resolved_key = key.format_map(bound.arguments)
+            except (KeyError, IndexError) as exc:
+                logger.warning(
+                    "Could not resolve cache key template %r: %s — "
+                    "bypassing cache for this call",
+                    key,
+                    exc,
+                )
+                return func(*args, **kwargs)
+
+            # --- cache read ---
+            cached_value = cache_get_json(resolved_key)
+            if cached_value is not None:
+                logger.debug("Cache hit: %s", resolved_key)
+                return cached_value
+
+            logger.debug("Cache miss: %s", resolved_key)
+
+            # --- live fetch ---
+            result: dict[str, Any] = func(*args, **kwargs)
+
+            # Do not cache error responses — they should not be served to
+            # subsequent callers, and transient errors should resolve on retry.
+            if "error" not in result:
+                cache_set_json(resolved_key, result, ttl)
+
+            return result
+
+        return wrapper  # type: ignore[return-value]
+
+    return decorator

@@ -73,6 +73,8 @@ except Exception:
 #   patch("backend.tools.ratios.settings") replaces this object
 settings = _settings
 
+from backend.tools.cache import RATIOS_TTL, cached  # noqa: E402
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -614,6 +616,18 @@ def _fetch_ratios_from_sources(ticker: str) -> RatiosModel:
 # ---------------------------------------------------------------------------
 
 
+@cached(key="airp:ratios:{ticker}", ttl=RATIOS_TTL)
+def _fetch_ratios_cached(ticker: str) -> dict[str, Any]:
+    """
+    Cached wrapper around ``_fetch_ratios_from_sources``.
+
+    Serves from Redis for ``RATIOS_TTL`` seconds on a cache hit; calls
+    the live data sources and caches the result on a miss.
+    """
+    result = _fetch_ratios_from_sources(ticker=ticker)
+    return result.model_dump(mode="json")
+
+
 @tool
 def fetch_ratios(ticker: str) -> dict[str, Any]:
     """
@@ -647,8 +661,7 @@ def fetch_ratios(ticker: str) -> dict[str, Any]:
         29.4
     """
     try:
-        data = _fetch_ratios_from_sources(ticker=ticker)
-        return data.model_dump(mode="json")
+        return _fetch_ratios_cached(ticker=ticker)
     except RatiosNotFoundError as exc:
         logger.error("Ratios not found: %s — %s", ticker, exc)
         return {
@@ -682,18 +695,20 @@ def fetch_ratios_summary(ticker: str) -> dict[str, Any]:
         Returns an error dict on failure.
     """
     try:
-        data = _fetch_ratios_from_sources(ticker=ticker)
+        data = _fetch_ratios_cached(ticker=ticker)
+        if "error" in data:
+            return data
         return {
-            "ticker": data.ticker,
-            "company_name": data.company_name,
-            "currency": data.currency,
-            "pe_ratio": data.pe_ratio,
-            "pb_ratio": data.pb_ratio,
-            "roe_pct": data.roe_pct,
-            "roce_pct": data.roce_pct,
-            "debt_to_equity": data.debt_to_equity,
-            "ev_to_ebitda": data.ev_to_ebitda,
-            "data_warnings": data.data_warnings,
+            "ticker": data["ticker"],
+            "company_name": data["company_name"],
+            "currency": data["currency"],
+            "pe_ratio": data["pe_ratio"],
+            "pb_ratio": data["pb_ratio"],
+            "roe_pct": data["roe_pct"],
+            "roce_pct": data["roce_pct"],
+            "debt_to_equity": data["debt_to_equity"],
+            "ev_to_ebitda": data["ev_to_ebitda"],
+            "data_warnings": data["data_warnings"],
         }
     except RatiosNotFoundError as exc:
         return {

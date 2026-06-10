@@ -64,6 +64,8 @@ except Exception:
 #   patch("backend.tools.news.settings") replaces this object
 settings = _settings
 
+from backend.tools.cache import NEWS_TTL, cached  # noqa: E402
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -426,6 +428,27 @@ def _fetch_news_from_api(
     )
 
 
+@cached(key="airp:news:{company_name}", ttl=NEWS_TTL)
+def _fetch_news_cached(
+    company_name: str,
+    ticker: str | None = None,
+    max_articles: int = DEFAULT_MAX_ARTICLES,
+) -> dict[str, Any]:
+    """
+    Cached wrapper around ``_fetch_news_from_api``.
+
+    The ``@cached`` decorator handles Redis read-through: hit returns the
+    cached dict immediately; miss calls the API, caches the result for
+    ``NEWS_TTL`` seconds, and returns it.
+    """
+    result = _fetch_news_from_api(
+        company_name=company_name,
+        ticker=ticker,
+        max_articles=max_articles,
+    )
+    return result.model_dump(mode="json")
+
+
 # ---------------------------------------------------------------------------
 # LangChain tools
 # ---------------------------------------------------------------------------
@@ -479,12 +502,12 @@ def fetch_news(
         'Infosys beats Q4 estimates...'
     """
     try:
-        data = _fetch_news_from_api(
+        result = _fetch_news_cached(
             company_name=company_name.strip(),
             ticker=ticker.strip() if ticker else None,
             max_articles=max_articles,
         )
-        return data.model_dump(mode="json")
+        return result
     except ValueError as exc:
         # Missing API key — configuration error
         logger.error("NewsAPI configuration error: %s", exc)
