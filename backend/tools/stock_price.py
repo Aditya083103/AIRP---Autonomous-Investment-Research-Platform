@@ -29,6 +29,8 @@ from langchain_core.tools import tool
 from pydantic import BaseModel, Field, field_validator
 import yfinance as yf
 
+from backend.tools.cache import STOCK_TTL, cached
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -204,15 +206,12 @@ def _build_stats(ohlcv_records: list[OHLCVRecord]) -> PriceStats:
     )
 
 
-def _fetch_from_yfinance(ticker: str, period: str) -> StockPrice:
+def _fetch_stock_data(ticker: str, period: str) -> dict[str, Any]:
     """
-    Core yFinance fetch logic — intentionally separated from the LangChain
-    @tool decorator so it can be called directly in tests without invoking
-    the full tool machinery.
+    Core yFinance fetch — separated from the LangChain @tool decorator so it
+    can be called directly in tests without invoking the full tool machinery.
 
-    Raises:
-        TickerNotFoundError: if yFinance returns no data for the ticker.
-        ValueError:          if the period is invalid.
+    Wrapped by ``_fetch_stock_cached`` below for Redis caching.
     """
     if period not in VALID_PERIODS:
         raise ValueError(
@@ -247,7 +246,6 @@ def _fetch_from_yfinance(ticker: str, period: str) -> StockPrice:
     # Build OHLCVRecord list
     records: list[OHLCVRecord] = []
     for idx_date, row in hist.iterrows():
-        # yFinance index is a DatetimeIndex; normalise to date
         if hasattr(idx_date, "date"):
             trading_date = idx_date.date()
         else:
@@ -284,7 +282,32 @@ def _fetch_from_yfinance(ticker: str, period: str) -> StockPrice:
         ohlcv=records,
         fetched_at=datetime.utcnow(),
         source="yfinance",
-    )
+    ).model_dump(mode="json")
+
+
+@cached(key="airp:stock:{ticker}:{period}", ttl=STOCK_TTL)
+def _fetch_stock_cached(ticker: str, period: str) -> dict[str, Any]:
+    """
+    Cached wrapper around ``_fetch_stock_data``.
+
+    The ``@cached`` decorator intercepts the call: on a hit it returns the
+    cached dict immediately; on a miss it calls ``_fetch_stock_data``,
+    caches the result for ``STOCK_TTL`` seconds, then returns it.
+    """
+    return _fetch_stock_data(ticker=ticker, period=period)
+
+
+# Preserve the original name used by tests that patch _fetch_from_yfinance.
+# This alias lets existing tests continue working without change.
+def _fetch_from_yfinance(ticker: str, period: str) -> StockPrice:
+    """
+    Legacy entry-point for direct unit tests.
+
+    Returns a StockPrice object (not a dict) for backward compatibility with
+    tests written before the @cached decorator was introduced.
+    """
+    result = _fetch_stock_data(ticker=ticker, period=period)
+    return StockPrice(**result)
 
 
 # ---------------------------------------------------------------------------
@@ -315,18 +338,13 @@ def fetch_stock_price(ticker: str, period: str = "1y") -> dict[str, Any]:
         - ohlcv: list of daily candles [{date, open, high, low, close, volume}]
         - fetched_at, source
 
-    Raises:
-        TickerNotFoundError: if yFinance returns no data for this ticker.
-        ValueError:          if period is not '1y', '3y', or '5y'.
-
     Example:
         >>> result = fetch_stock_price.invoke({"ticker": "TCS.NS", "period": "1y"})
         >>> result["stats"]["current_price"]
         3845.20
     """
     try:
-        stock_data = _fetch_from_yfinance(ticker=ticker, period=period)
-        return stock_data.model_dump(mode="json")
+        return _fetch_stock_cached(ticker=ticker, period=period)
     except TickerNotFoundError as exc:
         logger.error("Ticker not found: %s — %s", ticker, exc)
         return {
@@ -372,16 +390,26 @@ def fetch_ohlcv(ticker: str, period: str = "1y") -> dict[str, Any]:
         - error (str, present only on failure)
     """
     try:
-        stock_data = _fetch_from_yfinance(ticker=ticker, period=period)
+        full = _fetch_stock_cached(ticker=ticker, period=period)
+        if "error" in full:
+            return full
         return {
-            "ticker": stock_data.ticker,
-            "period": stock_data.period,
-            "currency": stock_data.currency,
-            "data_points": stock_data.data_points,
-            "ohlcv": [r.model_dump(mode="json") for r in stock_data.ohlcv],
+            "ticker": full["ticker"],
+            "period": full["period"],
+            "currency": full["currency"],
+            "data_points": full["data_points"],
+            "ohlcv": full["ohlcv"],
         }
     except TickerNotFoundError as exc:
-        return {"error": "ticker_not_found", "ticker": ticker, "message": str(exc)}
+        return {
+            "error": "ticker_not_found",
+            "ticker": ticker,
+            "message": str(exc),
+        }
     except Exception as exc:
         logger.exception("Unexpected error in fetch_ohlcv: ticker=%s", ticker)
-        return {"error": "unexpected_error", "ticker": ticker, "message": str(exc)}
+        return {
+            "error": "unexpected_error",
+            "ticker": ticker,
+            "message": str(exc),
+        }

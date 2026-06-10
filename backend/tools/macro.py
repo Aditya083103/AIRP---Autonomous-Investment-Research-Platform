@@ -62,7 +62,7 @@ from tenacity import (
     wait_exponential,
 )
 
-from backend.tools.cache import cache_get_json, cache_set_json
+from backend.tools.cache import MACRO_TTL, cache_get_json, cache_set_json
 
 try:
     from backend.config import settings as _settings
@@ -491,10 +491,10 @@ def _fetch_gdp() -> tuple[float | None, str | None, list[str]]:
 
 
 def _cache_ttl() -> int:
-    """Resolve the macro cache TTL from settings, with a 24h default."""
+    """Resolve the macro cache TTL: settings override, else canonical MACRO_TTL."""
     if settings is not None and getattr(settings, "cache_ttl_macro", None):
         return int(settings.cache_ttl_macro)
-    return _DEFAULT_CACHE_TTL_MACRO
+    return MACRO_TTL
 
 
 def _fetch_macro_data(force_refresh: bool = False) -> MacroData:
