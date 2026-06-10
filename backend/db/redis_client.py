@@ -21,15 +21,18 @@ Design contract
 * Upstash support — if REDIS_TOKEN is set it is used as the password, which
   is required for Upstash TLS Redis URLs (rediss://).
 
+Testability
+-----------
+get_redis_client() reads the module-level ``_FORCE_DISABLE`` flag first.
+Tests that need to exercise the connection path call
+``enable_for_tests()`` at the start and ``disable_for_tests()`` (via
+reset_redis_client) at teardown — no patching of os.environ required.
+
 TTL constants (seconds) — match config.py cache_ttl_* fields:
     STOCK_TTL   =  900   (15 min)
     NEWS_TTL    = 3 600  ( 1 h)
     RATIOS_TTL  = 3 600  ( 1 h)
     MACRO_TTL   = 86 400 (24 h)
-
-These are re-exported here so callers can do:
-    from backend.db.redis_client import STOCK_TTL
-instead of hard-coding magic numbers.
 """
 
 import logging
@@ -69,6 +72,11 @@ _SOCKET_CONNECT_TIMEOUT: int = 3
 _client: redis.Redis | None = None  # type: ignore[type-arg]
 _client_unavailable: bool = False
 
+# When True, get_redis_client() always returns None regardless of env vars.
+# Set to False only in tests that need to exercise the connection path.
+# This is more reliable than patching os.environ across terminals/platforms.
+_FORCE_DISABLE: bool = True
+
 
 def _is_test_environment() -> bool:
     """Return True when running under pytest (ENVIRONMENT=test)."""
@@ -91,12 +99,24 @@ def _resolve_redis_token() -> str:
     return token
 
 
+def enable_for_tests() -> None:
+    """
+    Allow get_redis_client() to attempt a real connection.
+
+    Call this at the top of tests that need to exercise the connection
+    path.  Always paired with reset_redis_client() in teardown.
+    """
+    global _FORCE_DISABLE
+    _FORCE_DISABLE = False
+
+
 def get_redis_client() -> "redis.Redis[Any] | None":
     """
     Return a connected Redis client, or None if caching is unavailable.
 
     Returns None (caching disabled) when:
-      * ENVIRONMENT=test — tests must never touch a real Redis server.
+      * _FORCE_DISABLE is True (default in test env — set by module init).
+      * ENVIRONMENT=test.
       * No REDIS_URL is configured.
       * The server is unreachable (connection verified with PING).
 
@@ -105,7 +125,7 @@ def get_redis_client() -> "redis.Redis[Any] | None":
     """
     global _client, _client_unavailable
 
-    if _is_test_environment() or _client_unavailable:
+    if _FORCE_DISABLE or _is_test_environment() or _client_unavailable:
         return None
     if _client is not None:
         return _client
@@ -139,12 +159,13 @@ def get_redis_client() -> "redis.Redis[Any] | None":
 
 def reset_redis_client() -> None:
     """
-    Reset the memoised client and availability flag.
+    Reset the memoised client, availability flag, and force-disable flag.
 
-    Used by tests to clear inter-test state.  Has no effect on the actual
-    Redis server — it only drops the in-process handle so the next call to
-    get_redis_client() reconnects from scratch.
+    Call this in teardown after any test that called enable_for_tests().
+    Has no effect on the actual Redis server — it only drops the in-process
+    handle and restores the safe default state.
     """
-    global _client, _client_unavailable
+    global _client, _client_unavailable, _FORCE_DISABLE
     _client = None
     _client_unavailable = False
+    _FORCE_DISABLE = True
