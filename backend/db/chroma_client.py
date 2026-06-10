@@ -50,7 +50,7 @@ import chromadb
 from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 
 try:
-    from backend.config import settings as _settings  # type: ignore[assignment]
+    from backend.config import settings as _settings
 except Exception:  # pragma: no cover
     _settings = None  # type: ignore[assignment]
 

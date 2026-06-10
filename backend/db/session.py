@@ -43,7 +43,12 @@ import os
 import re
 from typing import Any
 
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 from sqlalchemy.pool import NullPool
 
 try:
@@ -121,7 +126,7 @@ def _build_database_url() -> str:
 # ---------------------------------------------------------------------------
 
 
-def _build_engine() -> object:
+def _build_engine() -> AsyncEngine:
     """
     Create the SQLAlchemy async engine with appropriate pool settings.
 
@@ -159,7 +164,7 @@ engine = _build_engine()
 
 # Session factory — all sessions share the same engine.
 AsyncSessionLocal: async_sessionmaker[AsyncSession] = async_sessionmaker(
-    bind=engine,  # type: ignore[arg-type]
+    bind=engine,
     class_=AsyncSession,
     expire_on_commit=False,
     autoflush=False,
