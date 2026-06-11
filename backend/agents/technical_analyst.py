@@ -71,6 +71,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from backend.agents.llm_factory import get_llm
 from backend.agents.output_models import TechnicalAnalysis
+from backend.agents.tracing import traced_agent
 from backend.tools.stock_price import fetch_stock_price
 
 logger = logging.getLogger(__name__)
@@ -701,6 +702,7 @@ def _run_technical_analysis_core(
 # ---------------------------------------------------------------------------
 
 
+@traced_agent("technical_analyst")
 def run_technical_analysis(state: dict[str, Any]) -> dict[str, Any]:
     """
     LangGraph node function for the Technical Analyst agent.

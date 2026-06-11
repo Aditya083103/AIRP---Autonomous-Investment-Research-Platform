@@ -69,7 +69,7 @@ class Settings(BaseSettings):
         default="",
         description="Groq API key — used when LLM_PROVIDER=groq (free tier)",
     )
-    groq_model: str = "llama3-70b-8192"
+    groq_model: str = "llama-3.3-70b-versatile"
 
     # ── 3. Observability ──────────────────────────────────────────────────
     langsmith_api_key: str = Field(

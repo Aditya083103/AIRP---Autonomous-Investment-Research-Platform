@@ -69,6 +69,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from backend.agents.llm_factory import get_llm
 from backend.agents.output_models import SentimentAnalysis
+from backend.agents.tracing import traced_agent
 from backend.db.chroma_client import COLLECTION_NEWS, semantic_search
 from backend.tools.news import fetch_news
 
@@ -640,6 +641,7 @@ def _run_sentiment_analysis_core(
 # ---------------------------------------------------------------------------
 
 
+@traced_agent("news_sentiment")
 def run_sentiment_analysis(state: dict[str, Any]) -> dict[str, Any]:
     """
     LangGraph node function for the News Sentiment Agent.

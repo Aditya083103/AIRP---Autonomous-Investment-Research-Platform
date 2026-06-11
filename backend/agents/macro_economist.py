@@ -75,6 +75,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from backend.agents.llm_factory import get_llm
 from backend.agents.output_models import MacroAnalysis
+from backend.agents.tracing import traced_agent
 from backend.db.chroma_client import COLLECTION_NEWS, semantic_search
 from backend.tools.macro import fetch_macro_data
 
@@ -1202,6 +1203,7 @@ def _run_macro_analysis_core(
 # ---------------------------------------------------------------------------
 
 
+@traced_agent("macro_economist")
 def run_macro_analysis(state: dict[str, Any]) -> dict[str, Any]:
     """
     LangGraph node function for the Macro Economist agent.

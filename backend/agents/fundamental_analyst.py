@@ -57,6 +57,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from backend.agents.llm_factory import get_llm
 from backend.agents.output_models import FundamentalAnalysis
+from backend.agents.tracing import traced_agent
 from backend.tools.financials import fetch_financials
 from backend.tools.ratios import fetch_ratios
 
@@ -580,6 +581,7 @@ def _run_fundamental_analysis_core(
 # ---------------------------------------------------------------------------
 
 
+@traced_agent("fundamental_analyst")
 def run_fundamental_analysis(state: dict[str, Any]) -> dict[str, Any]:
     """
     LangGraph node function for the Fundamental Analyst agent.
