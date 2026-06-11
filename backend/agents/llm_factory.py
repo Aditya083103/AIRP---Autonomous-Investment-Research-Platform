@@ -1,9 +1,16 @@
+# backend/agents/llm_factory.py
 """
-AIRP — LLM Factory
+AIRP -- LLM Factory (updated T-026)
 
 Single place to get the configured LLM instance.
 Switch between Groq (dev, free) and Anthropic (demo, paid)
-by changing LLM_PROVIDER in .env — zero code changes.
+by changing LLM_PROVIDER in .env -- zero code changes.
+
+T-026 addition: ``get_llm()`` now calls ``configure_tracing()`` before
+constructing the LLM object.  LangChain's auto-tracing activates when
+``LANGCHAIN_TRACING_V2`` and ``LANGSMITH_API_KEY`` are present in
+``os.environ`` at the time the LLM is first constructed.  This ensures
+every LLM call made by any agent is automatically captured in LangSmith.
 
 Usage:
     from agents.llm_factory import get_llm
@@ -14,6 +21,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from backend.agents.tracing import configure_tracing
 from backend.config import settings
 
 
@@ -21,10 +29,18 @@ def get_llm() -> Any:
     """
     Return the configured LLM based on LLM_PROVIDER env var.
 
+    Calls ``configure_tracing()`` first so LangChain's auto-tracing is
+    active before the LLM object is constructed.  In tests, tracing is
+    a no-op (``LANGSMITH_API_KEY`` is empty in ``test_settings``).
+
     Returns:
         ChatGroq instance when LLM_PROVIDER=groq (default, free tier).
         ChatAnthropic instance when LLM_PROVIDER=anthropic (demo only).
     """
+    # Ensure LangSmith env vars are set before any LangChain object is built.
+    # configure_tracing() is idempotent -- safe to call on every get_llm().
+    configure_tracing()
+
     if settings.llm_provider == "groq":
         from langchain_groq import ChatGroq
 
