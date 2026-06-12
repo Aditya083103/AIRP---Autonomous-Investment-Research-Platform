@@ -167,7 +167,8 @@ def _revenue_cagr(
     if oldest <= 0:
         return None
     n_years: int = len(revenues) - 1
-    return round(((latest / oldest) ** (1.0 / n_years) - 1.0) * 100, 2)
+    cagr: float = ((latest / oldest) ** (1.0 / n_years) - 1.0) * 100
+    return round(cagr, 2)
 
 
 def _score_financials(

@@ -51,7 +51,7 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 os.environ.setdefault("ENVIRONMENT", "test")
@@ -533,7 +533,7 @@ class TestFundamentalAnalystEmptyData:
 
     def test_income_statement_empty_list(self) -> None:
         """income_statement present but empty -> no crash."""
-        sparse: dict[str, Any] = {
+        sparse = {
             "income_statement": [],
             "balance_sheet": [],
             "cash_flow": [],
@@ -866,7 +866,7 @@ class TestMacroAnalystEmptyData:
         assert result.error is None
 
     def test_all_none_produces_valid_labels(self) -> None:
-        null_macro: dict[str, Any] = {
+        null_macro = {
             "repo_rate": None,
             "cpi_inflation": None,
             "gdp_growth": None,
@@ -1337,7 +1337,7 @@ class TestAllAgentsNodeContract:
         ):
             mf.invoke.return_value = _FINANCIALS_MINIMAL
             mr.invoke.return_value = _RATIOS_MINIMAL
-            return run_fundamental_analysis(state)
+            return cast(dict[str, Any], run_fundamental_analysis(state))
 
     def test_fa_returns_fundamental_key(self) -> None:
         result = self._fa_invoke(
@@ -1379,7 +1379,7 @@ class TestAllAgentsNodeContract:
             ),
         ):
             msp.invoke.return_value = _PRICE_DATA_GOOD
-            return run_technical_analysis(state)
+            return cast(dict[str, Any], run_technical_analysis(state))
 
     def test_ta_returns_technical_key(self) -> None:
         result = self._ta_invoke(
@@ -1424,7 +1424,7 @@ class TestAllAgentsNodeContract:
             ),
         ):
             mn.invoke.return_value = _NEWS_RESULT_GOOD
-            return run_sentiment_analysis(state)
+            return cast(dict[str, Any], run_sentiment_analysis(state))
 
     def test_sa_returns_sentiment_key(self) -> None:
         result = self._sa_invoke(
@@ -1469,7 +1469,7 @@ class TestAllAgentsNodeContract:
             ),
         ):
             mm.invoke.return_value = _MACRO_RESULT_GOOD
-            return run_macro_analysis(state)
+            return cast(dict[str, Any], run_macro_analysis(state))
 
     def test_ma_returns_macro_key(self) -> None:
         result = self._ma_invoke(

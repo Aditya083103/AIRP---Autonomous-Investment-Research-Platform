@@ -479,9 +479,7 @@ def _extract_text_from_pdf_bytes(pdf_bytes: bytes) -> str:
     # installed.  pdfminer.* is in pyproject.toml mypy overrides so mypy
     # treats this import as Any and suppresses missing-import errors.
     try:
-        from pdfminer.high_level import (  # type: ignore[import-untyped]
-            extract_text as pm_extract_text,
-        )
+        from pdfminer.high_level import extract_text as pm_extract_text
 
         text: str = pm_extract_text(BytesIO(pdf_bytes)) or ""
         return text.strip()
@@ -492,7 +490,7 @@ def _extract_text_from_pdf_bytes(pdf_bytes: bytes) -> str:
 
     # --- PyPDF2 fallback ---
     try:
-        import PyPDF2  # type: ignore[import-untyped]
+        import PyPDF2
 
         reader = PyPDF2.PdfReader(BytesIO(pdf_bytes))
         pages_text = []

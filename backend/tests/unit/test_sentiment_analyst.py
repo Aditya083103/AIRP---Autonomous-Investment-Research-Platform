@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 os.environ.setdefault("ENVIRONMENT", "test")
@@ -650,7 +650,7 @@ class TestRunSentimentAnalysisNode:
             ),
         ):
             mock_news.invoke.return_value = news_result
-            return run_sentiment_analysis(state)
+            return cast(dict[str, Any], run_sentiment_analysis(state))
 
     def test_returns_dict_with_sentiment_key(self) -> None:
         result = self._invoke(_STATE_TCS)
