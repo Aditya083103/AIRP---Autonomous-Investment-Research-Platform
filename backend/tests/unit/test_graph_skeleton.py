@@ -32,7 +32,7 @@ ENVIRONMENT must be set to 'test' before any backend import.
 from __future__ import annotations
 
 import os
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 os.environ.setdefault("ENVIRONMENT", "test")
@@ -363,7 +363,7 @@ class TestPlannerNode:
 
     def test_planner_never_raises(self) -> None:
         # Even a completely empty dict must not raise
-        result = planner_node({})  # type: ignore[arg-type]
+        result = planner_node(cast(InvestmentState, {}))
         assert isinstance(result, dict)
 
 
@@ -475,7 +475,7 @@ class TestStubNodes:
 
     def test_all_stub_nodes_never_raise(self) -> None:
         """All Phase 4 stub nodes must be robust to any state content."""
-        empty: InvestmentState = {}  # type: ignore[typeddict-item]
+        empty: InvestmentState = cast(InvestmentState, {})
         for fn in (risk_node, contrarian_node, valuation_node, portfolio_manager_node):
             result = fn(empty)
             assert isinstance(result, dict)
@@ -643,7 +643,7 @@ class TestRoutingFunctions:
         """Empty state has no status key -- not 'failed' -> Send fan-out."""
         from langgraph.types import Send
 
-        empty: InvestmentState = {}  # type: ignore[typeddict-item]
+        empty: InvestmentState = cast(InvestmentState, {})
         result = route_after_planner(empty)
         assert isinstance(result, list)
         assert all(isinstance(s, Send) for s in result)
@@ -678,15 +678,14 @@ class TestRoutingFunctions:
         """Skeleton always proceeds -- Phase 4 will add abort logic."""
         state = _make_state()
         for field in ("fundamental", "technical", "sentiment", "macro"):
-            # type: ignore[literal-required] needed: looping over typed keys
-            state[field] = {  # type: ignore[literal-required]
+            cast(Any, state)[field] = {
                 "agent_name": field,
                 "error": "failed",
             }
         assert route_after_research(state) == ROUTE_PROCEED
 
     def test_route_research_empty_state_returns_proceed(self) -> None:
-        empty: InvestmentState = {}  # type: ignore[typeddict-item]
+        empty: InvestmentState = cast(InvestmentState, {})
         assert route_after_research(empty) == ROUTE_PROCEED
 
     # route_after_contrarian
@@ -732,7 +731,7 @@ class TestRoutingFunctions:
         assert route_after_contrarian(state) == ROUTE_PROCEED
 
     def test_route_contrarian_empty_state_returns_proceed(self) -> None:
-        empty: InvestmentState = {}  # type: ignore[typeddict-item]
+        empty: InvestmentState = cast(InvestmentState, {})
         assert route_after_contrarian(empty) == ROUTE_PROCEED
 
 
@@ -865,7 +864,7 @@ class TestEdgeStructure:
     def _mermaid(self) -> str:
         from backend.graph.graph import build_graph
 
-        return build_graph().get_graph().draw_mermaid()
+        return cast(str, build_graph().get_graph().draw_mermaid())
 
     def test_planner_to_fundamental_edge_present(self) -> None:
         mermaid = self._mermaid()

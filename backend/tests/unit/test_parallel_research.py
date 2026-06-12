@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 os.environ.setdefault("ENVIRONMENT", "test")
@@ -721,7 +721,7 @@ class TestRouteAfterResearch:
         assert result == ROUTE_PROCEED
 
     def test_empty_state_proceeds(self) -> None:
-        empty: InvestmentState = {}  # type: ignore[typeddict-item]
+        empty: InvestmentState = cast(InvestmentState, {})
         result = route_after_research(empty)
         assert result == ROUTE_PROCEED
 
