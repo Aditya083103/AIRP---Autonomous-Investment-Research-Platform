@@ -69,7 +69,7 @@ Usage in LangGraph (Phase 3)
 """
 
 import logging
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -853,7 +853,7 @@ def _classify_sector_impact(sector: str, rate_stance: str) -> str:
     """
     sector_rules = _SECTOR_MACRO_RULES.get(sector, {})
     stance_rules = sector_rules.get(rate_stance, {})
-    return stance_rules.get("impact", "neutral")
+    return cast(str, stance_rules.get("impact", "neutral"))
 
 
 def _build_tailwinds_headwinds(

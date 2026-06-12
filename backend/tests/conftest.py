@@ -82,7 +82,7 @@ def test_settings() -> Settings:
         # LLM — Groq by default in dev; tests mock the actual calls
         llm_provider="groq",
         groq_api_key="gsk_test-groq-key-for-unit-tests",
-        groq_model="llama3-70b-8192",
+        groq_model="llama-3.3-70b-versatile",
         anthropic_api_key="sk-ant-test-key-for-unit-tests",
         anthropic_model="claude-haiku-4-5-20251001",
         anthropic_max_tokens=4096,

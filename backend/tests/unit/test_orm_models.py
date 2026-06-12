@@ -35,7 +35,7 @@ import os  # noqa: E402
 os.environ.setdefault("ENVIRONMENT", "test")
 
 from inspect import isasyncgenfunction  # noqa: E402
-from typing import Any  # noqa: E402
+from typing import Any, cast  # noqa: E402
 from unittest.mock import patch  # noqa: E402
 import uuid  # noqa: E402
 
@@ -352,7 +352,7 @@ class TestInvestmentMemoColumns:
 class TestRelationships:
     def _rel(self, model: Any, name: str) -> "RelationshipProperty[Any]":
         mapper = sa_inspect(model)
-        return mapper.relationships[name]  # type: ignore[return-value]
+        return cast("RelationshipProperty[Any]", mapper.relationships[name])
 
     def test_user_has_analyses_relationship(self) -> None:
         rel = self._rel(User, "analyses")
