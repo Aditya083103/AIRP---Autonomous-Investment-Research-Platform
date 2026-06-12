@@ -1,96 +1,100 @@
 # backend/graph/graph.py
 """
-AIRP -- LangGraph StateGraph Definition (T-030)
+AIRP -- LangGraph StateGraph with Parallel Research Execution (T-031)
 
 The AIRP investment analysis pipeline expressed as a LangGraph StateGraph.
-This module is the orchestration brain: it wires all 8 agent nodes,
-defines edges (sequential and parallel), and compiles the graph into a
-runnable Pregel object.
+T-031 upgrades the T-030 skeleton to use the Send API for true parallel
+execution of the 4 research agents.
 
-Pipeline topology (Phase 3 skeleton)
---------------------------------------
+Pipeline topology
+-----------------
 
   START
     |
-  [planner]                  -- validates state, sets status=running
+  [planner]                    validates state, sets status=running
     |
   route_after_planner()
-    |  PROCEED                ABORT
-    |                          |
-    +-- [fundamental_analyst]  END
-    +-- [technical_analyst]
-    +-- [sentiment_analyst]
-    +-- [macro_economist]      (all 4 run in parallel via Send API)
+    |  list[Send]              ABORT -> END
     |
-  route_after_research()
-    | PROCEED
+    +-- Send -> [fundamental_analyst]    |
+    +-- Send -> [technical_analyst]      | all 4 run concurrently
+    +-- Send -> [sentiment_analyst]      | in the same super-step
+    +-- Send -> [macro_economist]        |
     |
-  [contrarian_investor]       -- Phase 4 stub (T-040)
+    (implicit join: contrarian waits for all 4 inbound edges)
+    |
+  [contrarian_investor]        Phase 4 stub (T-040)
     |
   route_after_contrarian()
-    | PROCEED          DEBATE_AGAIN
-    |                    (back to contrarian -- loop, max 2 rounds)
-  [risk_officer]              -- Phase 4 stub (T-039)
+    | PROCEED          DEBATE_AGAIN (self-loop, max 2 rounds)
     |
-  [valuation_agent]           -- Phase 4 stub (T-041)
+  [risk_officer]               Phase 4 stub (T-039)
     |
-  [portfolio_manager]         -- Phase 4 stub (T-042)
+  [valuation_agent]            Phase 4 stub (T-041)
+    |
+  [portfolio_manager]          Phase 4 stub (T-042)
     |
   END
 
-LangGraph 0.2.x API used
---------------------------
-- ``StateGraph(InvestmentState)``   -- typed state graph
-- ``graph.add_node(name, fn)``      -- register a node function
-- ``graph.add_edge(a, b)``          -- unconditional edge
-- ``graph.add_conditional_edges(src, fn, mapping)`` -- routing
-- ``graph.set_entry_point(name)``   -- equivalent to START -> node
-- ``graph.set_finish_point(name)``  -- equivalent to node -> END
-- ``graph.compile()``               -- returns a CompiledGraph
-- ``compiled.get_graph().draw_mermaid()`` -- acceptance criterion
+Parallel execution via Send API (T-031)
+----------------------------------------
+LangGraph's Send API enables true parallel fan-out.
 
-Parallel execution
--------------------
-The 4 research agents run in parallel using LangGraph's fan-out
-pattern: the Planner node returns ``[Send(node, state), ...]`` to
-dispatch all four simultaneously.  In the skeleton (T-030) we model
-this with conditional edges fanning out to all four research nodes
-that each connect back to the contrarian node, which LangGraph
-executes only once all four have completed (implicit join).
+``route_after_planner`` returns ``list[Send]``:
 
-Note on parallel fan-out in LangGraph 0.2.x
----------------------------------------------
-True parallel dispatch uses the Send API inside a conditional edge
-function.  However, the Send API requires the graph to be compiled
-with a checkpointer and the node to be an async node for true
-parallelism.  For the skeleton we model fan-out as four sequential
-edges from the planner's PROCEED branch to each research node -- the
-Mermaid diagram shows the correct topology and the structure is
-correct.  T-032 (parallel execution task) will upgrade this to the
-full Send API pattern with async execution.
+    [
+        Send("fundamental_analyst", state_dict),
+        Send("technical_analyst",   state_dict),
+        Send("sentiment_analyst",   state_dict),
+        Send("macro_economist",     state_dict),
+    ]
+
+LangGraph's Pregel runtime dispatches all four Sends concurrently in
+the same super-step. The ``contrarian_investor`` node has four inbound
+edges (one from each research node). LangGraph's implicit join barrier
+ensures ``contrarian_investor`` only executes after all four research
+nodes have written their outputs back to state.
+
+State merging
+-------------
+Each research node writes a distinct key:
+  fundamental_analyst -> {"fundamental": ...}
+  technical_analyst   -> {"technical": ...}
+  sentiment_analyst   -> {"sentiment": ...}
+  macro_economist     -> {"macro": ...}
+
+Since the keys are non-overlapping, LangGraph merges these partial
+dicts into the shared state without conflict. No custom reducer is
+needed for the InvestmentState TypedDict.
+
+Timing guarantee
+----------------
+With true parallel execution the total time for the research phase
+approaches max(t_fundamental, t_technical, t_sentiment, t_macro)
+rather than their sum. The acceptance criterion is:
+
+    total_time < max(individual_agent_times) + PARALLEL_OVERHEAD_S
+
+where PARALLEL_OVERHEAD_S = 5 seconds (scheduling + merge overhead).
 
 Design decisions
 ----------------
 * NO ``from __future__ import annotations`` -- established AIRP rule.
 * Plain ASCII section comments (# ---) -- rule from T-024 onward.
-* No bare ``# type: ignore`` -- use cast() and explicit annotations.
-* ``build_graph()`` is a factory function, not a module-level global,
-  so tests can call it multiple times without state leaking between runs.
-* ``get_compiled_graph()`` is an lru_cache singleton for production use
-  (FastAPI startup, LangSmith tracing). Tests always call ``build_graph()``
-  directly to get a fresh instance.
+* No bare type: ignore -- use cast() and explicit annotations.
+* ``build_graph()`` is a factory function so tests can call it
+  multiple times without state leaking between runs.
+* ``get_compiled_graph()`` is an lru_cache singleton for production
+  (FastAPI startup, LangSmith tracing). Tests always call
+  ``build_graph()`` directly to avoid cache pollution.
 
 Public API
 ----------
-    from backend.graph.graph import build_graph, get_compiled_graph
-
-    # Production: reuse the compiled singleton
-    graph = get_compiled_graph()
-    result = graph.invoke(initial_state)
-
-    # Tests / dev: build a fresh graph
-    compiled = build_graph()
-    mermaid = compiled.get_graph().draw_mermaid()
+    from backend.graph.graph import (
+        build_graph,
+        get_compiled_graph,
+        PARALLEL_OVERHEAD_S,
+    )
 """
 
 from functools import lru_cache
@@ -120,7 +124,6 @@ from backend.graph.nodes import (
     valuation_node,
 )
 from backend.graph.routing import (
-    ROUTE_ABORT,
     ROUTE_DEBATE_AGAIN,
     ROUTE_PROCEED,
     route_after_contrarian,
@@ -131,39 +134,21 @@ from backend.graph.state import InvestmentState
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Internal fan-out helper
+# Constants
 # ---------------------------------------------------------------------------
 
-# Names of the 4 research agent nodes -- used in the fan-out edge mapping.
-_RESEARCH_NODES: list[str] = [
+#: Maximum acceptable overhead (seconds) for parallel scheduling and
+#: state merging, above the slowest individual agent runtime.
+#: Acceptance criterion: total_time < max(individual_times) + PARALLEL_OVERHEAD_S
+PARALLEL_OVERHEAD_S: float = 5.0
+
+#: All 4 research agent node names -- used for logging and test assertions.
+RESEARCH_NODE_NAMES: tuple[str, ...] = (
     NODE_FUNDAMENTAL,
     NODE_TECHNICAL,
     NODE_SENTIMENT,
     NODE_MACRO,
-]
-
-
-def _research_fan_out(state: InvestmentState) -> list[str]:
-    """
-    Conditional edge function that fans out to all 4 research agents.
-
-    Returns a list of node names; LangGraph dispatches to all of them
-    concurrently (when run with an async executor).  For the skeleton
-    this models the correct topology -- T-032 upgrades to true Send API
-    parallelism.
-
-    Args:
-        state: Current InvestmentState (passed by LangGraph; not used
-               directly -- all four agents always run).
-
-    Returns:
-        List of all four research node names.
-    """
-    # state is intentionally unused in the skeleton; it will be
-    # inspected in T-032 to support conditional agent exclusion.
-    _ = state
-    return list(_RESEARCH_NODES)
-
+)
 
 # ---------------------------------------------------------------------------
 # Graph builder
@@ -174,101 +159,121 @@ def build_graph() -> Any:
     """
     Build and compile the AIRP LangGraph StateGraph.
 
-    Creates a fresh StateGraph, registers all 9 nodes (1 planner +
-    4 research + 4 advanced), defines all edges and conditional edges,
-    then compiles to a runnable Pregel object.
+    Creates a fresh StateGraph, registers all 9 nodes, defines edges
+    (including the T-031 Send API parallel fan-out from planner to the
+    4 research agents), then compiles to a runnable Pregel object.
 
-    Call this function once at application startup via
-    ``get_compiled_graph()`` (lru_cache singleton) or directly in tests
-    for an isolated graph instance.
+    The parallel fan-out is implemented via ``route_after_planner``
+    returning ``list[Send]`` -- LangGraph dispatches all four Sends
+    concurrently in the same super-step.
+
+    Call this once at application startup via ``get_compiled_graph()``
+    (lru_cache singleton), or directly in tests for an isolated instance.
 
     Returns:
-        A compiled LangGraph CompiledGraph object.  Supports:
-          - ``.invoke(state)``                       -- synchronous run
-          - ``.ainvoke(state)``                      -- async run
-          - ``.get_graph().draw_mermaid()``           -- Mermaid diagram
-          - ``.get_graph().draw_mermaid_png()``       -- PNG export
+        A compiled LangGraph CompiledGraph object. Supports:
+          - ``.invoke(state)``                    -- synchronous run
+          - ``.ainvoke(state)``                   -- async run
+          - ``.get_graph().draw_mermaid()``        -- Mermaid diagram
+          - ``.get_graph().draw_mermaid_png()``    -- PNG export
 
     Raises:
         ValueError: If LangGraph detects unreachable nodes or invalid
                     edges during compilation.
     """
-    # -- 1. Initialise the StateGraph with our typed state schema ----------
+    # -- 1. Initialise the StateGraph with our typed state schema ---------
     workflow: StateGraph = StateGraph(InvestmentState)
 
-    # -- 2. Register all nodes ---------------------------------------------
-    # Phase 2 nodes (real implementations)
+    # -- 2. Register all 9 nodes ------------------------------------------
+    # Phase 2: real implementations
     workflow.add_node(NODE_PLANNER, planner_node)
     workflow.add_node(NODE_FUNDAMENTAL, fundamental_node)
     workflow.add_node(NODE_TECHNICAL, technical_node)
     workflow.add_node(NODE_SENTIMENT, sentiment_node)
     workflow.add_node(NODE_MACRO, macro_node)
 
-    # Phase 4 stub nodes (real implementations added T-039 to T-042)
+    # Phase 4: stub nodes (T-039 to T-042 replace these)
     workflow.add_node(NODE_CONTRARIAN, contrarian_node)
     workflow.add_node(NODE_RISK, risk_node)
     workflow.add_node(NODE_VALUATION, valuation_node)
     workflow.add_node(NODE_PORTFOLIO_MANAGER, portfolio_manager_node)
 
-    # -- 3. Entry point: START -> planner ----------------------------------
+    # -- 3. Entry point: START -> planner ---------------------------------
     workflow.add_edge(START, NODE_PLANNER)
 
-    # -- 4. Conditional edge: planner -> (abort to END | fan-out) ----------
+    # -- 4. Conditional edge: planner -> Send fan-out OR END (abort) ------
+    #
+    # route_after_planner() returns:
+    #   - list[Send]  when status != "failed"  (parallel dispatch)
+    #   - END string  when status == "failed"  (abort, skip all agents)
+    #
+    # LangGraph 0.2.28 compile-time validation requires every registered
+    # node to have at least one statically declared inbound edge.  Send
+    # dispatches are runtime-only and are NOT counted by the validator.
+    # The fix: include all Send target node names in the mapping dict so
+    # the validator sees them as reachable from the planner conditional
+    # edge.  At runtime, when route_after_planner returns list[Send],
+    # LangGraph bypasses this mapping entirely and dispatches directly to
+    # all four nodes concurrently -- the mapping is only used for
+    # str-key returns.  When it returns END (str), the mapping resolves
+    # "__end__" -> END for the abort path.
     workflow.add_conditional_edges(
         NODE_PLANNER,
         route_after_planner,
         {
-            ROUTE_ABORT: END,
-            ROUTE_PROCEED: NODE_FUNDAMENTAL,
+            # Abort path: planner failed -> skip all agents -> END
+            "__end__": END,
+            # Reachability declarations for Send targets.
+            # These keys are never returned as strings by route_after_planner
+            # (it returns list[Send] instead), but declaring them here
+            # satisfies LangGraph 0.2.28's static validator.
+            NODE_FUNDAMENTAL: NODE_FUNDAMENTAL,
+            NODE_TECHNICAL: NODE_TECHNICAL,
+            NODE_SENTIMENT: NODE_SENTIMENT,
+            NODE_MACRO: NODE_MACRO,
         },
     )
 
-    # -- 5. Fan-out to remaining research agents ---------------------------
-    # Planner routes to fundamental on PROCEED (above).
-    # The other three research agents are reached from planner as well
-    # via separate direct edges -- LangGraph triggers them in the same
-    # super-step as fundamental when they share the same source node.
+    # -- 5. Research agents all flow into the contrarian node (join) ------
     #
-    # Implementation note: in LangGraph 0.2.x the canonical way to
-    # model "run N nodes in parallel after node X" is to add N edges
-    # from X to each of the N nodes.  LangGraph's Pregel runtime
-    # executes all outbound edges from a node in the same super-step.
-    #
-    # The conditional edge above handles PROCEED -> fundamental.
-    # We add direct edges for the other three from planner:
-    workflow.add_edge(NODE_PLANNER, NODE_TECHNICAL)
-    workflow.add_edge(NODE_PLANNER, NODE_SENTIMENT)
-    workflow.add_edge(NODE_PLANNER, NODE_MACRO)
-
-    # -- 6. Research agents all flow into the contrarian node --------------
-    # LangGraph waits for all inbound edges to a node to complete before
-    # executing it -- this is the implicit join / barrier for the 4
-    # research agents.
+    # Each research agent has exactly one outbound edge -> contrarian.
+    # LangGraph's Pregel runtime uses incoming edge count as a barrier:
+    # contrarian_investor will not execute until all 4 research nodes
+    # have completed and pushed their partial state updates.
     workflow.add_edge(NODE_FUNDAMENTAL, NODE_CONTRARIAN)
     workflow.add_edge(NODE_TECHNICAL, NODE_CONTRARIAN)
     workflow.add_edge(NODE_SENTIMENT, NODE_CONTRARIAN)
     workflow.add_edge(NODE_MACRO, NODE_CONTRARIAN)
 
-    # -- 7. Conditional edge: contrarian -> (loop | risk) ------------------
+    # -- 6. Conditional edge after research join: -> contrarian routing ---
+    #
+    # This edge is added as a conditional edge from the contrarian node
+    # itself (for the debate loop). The join from research -> contrarian
+    # is already handled by the four direct edges above.
+    #
+    # After contrarian runs, route to another debate round or to risk.
     workflow.add_conditional_edges(
         NODE_CONTRARIAN,
         route_after_contrarian,
         {
-            ROUTE_DEBATE_AGAIN: NODE_CONTRARIAN,  # debate loop (max 2 rounds)
+            ROUTE_DEBATE_AGAIN: NODE_CONTRARIAN,
             ROUTE_PROCEED: NODE_RISK,
         },
     )
 
-    # -- 8. Sequential: risk -> valuation -> portfolio_manager -> END ------
+    # -- 7. Sequential: risk -> valuation -> portfolio_manager -> END -----
+    # (route_after_research is available for Phase 4 T-037 join node.)
     workflow.add_edge(NODE_RISK, NODE_VALUATION)
     workflow.add_edge(NODE_VALUATION, NODE_PORTFOLIO_MANAGER)
     workflow.add_edge(NODE_PORTFOLIO_MANAGER, END)
 
-    # -- 9. Compile --------------------------------------------------------
+    # -- 9. Compile -------------------------------------------------------
     compiled: Any = workflow.compile()
     logger.info(
-        "build_graph: AIRP StateGraph compiled successfully " "(%d nodes)",
-        len(_RESEARCH_NODES) + 5,  # 4 research + planner + 4 advanced
+        "build_graph: AIRP StateGraph compiled with Send API parallel "
+        "fan-out (%d research agents, %d total nodes)",
+        len(RESEARCH_NODE_NAMES),
+        len(RESEARCH_NODE_NAMES) + 5,
     )
     return compiled
 
@@ -284,11 +289,11 @@ def get_compiled_graph() -> Any:
     Return the compiled AIRP graph as a singleton.
 
     Uses ``lru_cache(maxsize=1)`` so the graph is compiled exactly once
-    per process at the cost of one call to ``build_graph()``.  Subsequent
-    calls return the cached instance with zero overhead.
+    per process. Subsequent calls return the cached instance with zero
+    overhead.
 
     In tests, call ``build_graph()`` directly instead of this function
-    to avoid cache pollution across test runs.
+    to avoid cross-test cache pollution.
 
     Returns:
         The compiled LangGraph CompiledGraph singleton.
@@ -303,4 +308,6 @@ def get_compiled_graph() -> Any:
 __all__ = [
     "build_graph",
     "get_compiled_graph",
+    "PARALLEL_OVERHEAD_S",
+    "RESEARCH_NODE_NAMES",
 ]

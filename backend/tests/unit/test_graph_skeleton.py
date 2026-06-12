@@ -521,14 +521,17 @@ class TestResearchNodeWrappers:
         assert "fundamental" in result
         assert result["fundamental"]["score"] == 8
 
-    def test_fundamental_node_sets_current_node(self) -> None:
+    def test_fundamental_node_does_not_set_current_node(self) -> None:
+        # T-031: parallel research nodes must NOT write current_node;
+        # all 4 run in the same super-step and LangGraph raises
+        # InvalidUpdateError on multiple writes to a LastValue key.
         state = _make_state()
         with patch(
             "backend.graph.nodes.run_fundamental_analysis",
             return_value={"fundamental": {}},
         ):
             result = fundamental_node(state)
-        assert result.get("current_node") == NODE_FUNDAMENTAL
+        assert "current_node" not in result
 
     def test_technical_node_delegates(self) -> None:
         state = _make_state()
@@ -541,14 +544,15 @@ class TestResearchNodeWrappers:
         assert "technical" in result
         assert result["technical"]["signal"] == "BUY"
 
-    def test_technical_node_sets_current_node(self) -> None:
+    def test_technical_node_does_not_set_current_node(self) -> None:
+        # T-031: parallel super-step constraint -- see fundamental.
         state = _make_state()
         with patch(
             "backend.graph.nodes.run_technical_analysis",
             return_value={"technical": {}},
         ):
             result = technical_node(state)
-        assert result.get("current_node") == NODE_TECHNICAL
+        assert "current_node" not in result
 
     def test_sentiment_node_delegates(self) -> None:
         state = _make_state()
@@ -561,14 +565,15 @@ class TestResearchNodeWrappers:
         assert "sentiment" in result
         assert result["sentiment"]["sentiment_score"] == 0.5
 
-    def test_sentiment_node_sets_current_node(self) -> None:
+    def test_sentiment_node_does_not_set_current_node(self) -> None:
+        # T-031: parallel super-step constraint -- see fundamental.
         state = _make_state()
         with patch(
             "backend.graph.nodes.run_sentiment_analysis",
             return_value={"sentiment": {}},
         ):
             result = sentiment_node(state)
-        assert result.get("current_node") == NODE_SENTIMENT
+        assert "current_node" not in result
 
     def test_macro_node_delegates(self) -> None:
         state = _make_state()
@@ -581,14 +586,15 @@ class TestResearchNodeWrappers:
         assert "macro" in result
         assert result["macro"]["macro_environment"] == "neutral"
 
-    def test_macro_node_sets_current_node(self) -> None:
+    def test_macro_node_does_not_set_current_node(self) -> None:
+        # T-031: parallel super-step constraint -- see fundamental.
         state = _make_state()
         with patch(
             "backend.graph.nodes.run_macro_analysis",
             return_value={"macro": {}},
         ):
             result = macro_node(state)
-        assert result.get("current_node") == NODE_MACRO
+        assert "current_node" not in result
 
 
 # ---------------------------------------------------------------------------
@@ -601,26 +607,46 @@ class TestRoutingFunctions:
 
     # route_after_planner
 
-    def test_route_planner_running_returns_proceed(self) -> None:
+    def test_route_planner_running_returns_send_list(self) -> None:
+        # T-031: route_after_planner now returns list[Send] for parallel
+        # fan-out, not ROUTE_PROCEED string.
+        from langgraph.types import Send
+
         state = _make_state()
         state["status"] = "running"
-        assert route_after_planner(state) == ROUTE_PROCEED
+        result = route_after_planner(state)
+        assert isinstance(result, list)
+        assert all(isinstance(s, Send) for s in result)
+        assert len(result) == 4
 
-    def test_route_planner_pending_returns_proceed(self) -> None:
+    def test_route_planner_pending_returns_send_list(self) -> None:
+        # T-031: pending status (not failed) -> list[Send] fan-out.
+        from langgraph.types import Send
+
         state = _make_state()
         state["status"] = "pending"
-        assert route_after_planner(state) == ROUTE_PROCEED
+        result = route_after_planner(state)
+        assert isinstance(result, list)
+        assert all(isinstance(s, Send) for s in result)
 
-    def test_route_planner_failed_returns_abort(self) -> None:
+    def test_route_planner_failed_returns_end(self) -> None:
+        # T-031: abort path returns langgraph.graph.END sentinel,
+        # not the ROUTE_ABORT string (which no longer exists in routing).
+        from langgraph.graph import END
+
         state = _make_state()
         state["status"] = "failed"
-        assert route_after_planner(state) == ROUTE_ABORT
+        result = route_after_planner(state)
+        assert result is END
 
-    def test_route_planner_missing_status_returns_proceed(self) -> None:
-        """Empty state has no status key -- defaults to 'pending' -> PROCEED."""
+    def test_route_planner_missing_status_returns_send_list(self) -> None:
+        """Empty state has no status key -- not 'failed' -> Send fan-out."""
+        from langgraph.types import Send
+
         empty: InvestmentState = {}  # type: ignore[typeddict-item]
         result = route_after_planner(empty)
-        assert result == ROUTE_PROCEED
+        assert isinstance(result, list)
+        assert all(isinstance(s, Send) for s in result)
 
     # route_after_research
 

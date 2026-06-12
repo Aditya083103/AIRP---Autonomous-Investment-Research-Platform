@@ -1,6 +1,6 @@
 # backend/graph/nodes.py
 """
-AIRP -- LangGraph Node Functions (T-030)
+AIRP -- LangGraph Node Functions (T-030 / T-031)
 
 Thin wrapper functions that adapt each agent's public API to the
 LangGraph node contract: receive InvestmentState, return a partial
@@ -15,19 +15,19 @@ Every node function follows the same pattern::
         return {"field": value}
 
 LangGraph merges the returned dict into the current state automatically.
-Nodes never receive the entire state to overwrite -- they return only the
-keys they own.
+Nodes never receive the entire state to overwrite -- they return only
+the keys they own.
 
-Phase 2 nodes (implemented)
-----------------------------
-planner_node          -- resolves ticker, initialises pipeline status
+Phase 2 nodes (implemented -- T-022 to T-025)
+----------------------------------------------
+planner_node          -- validates state, sets pipeline status
 fundamental_node      -- delegates to run_fundamental_analysis()
 technical_node        -- delegates to run_technical_analysis()
 sentiment_node        -- delegates to run_sentiment_analysis()
 macro_node            -- delegates to run_macro_analysis()
 
-Phase 4 stub nodes (skeleton only -- logic added in T-037 to T-044)
---------------------------------------------------------------------
+Phase 4 stub nodes (skeleton -- logic added in T-037 to T-044)
+---------------------------------------------------------------
 risk_node             -- Risk Officer agent (T-039)
 contrarian_node       -- Contrarian Investor agent (T-040)
 valuation_node        -- Valuation Agent (T-041)
@@ -41,18 +41,12 @@ Design decisions
 * Plain ASCII section comments (# ---) -- avoids flake8 E501 from
   Unicode box-drawing chars (established rule from T-024 onward).
 
-* Stub nodes return {"status": "running"} plus a sentinel output dict
-  so the graph compiles and the Mermaid diagram is correct. Phase 4
-  tasks replace these stubs with real implementations.
+* Stub nodes return a sentinel output dict so the graph compiles and
+  the Mermaid diagram is correct. Phase 4 tasks replace these stubs
+  with real implementations.
 
 * cast() used where mypy needs help narrowing dict[str, Any] access --
-  no bare ``# type: ignore`` comments anywhere in this file.
-
-* All node functions are typed as::
-
-      Callable[[InvestmentState], dict[str, Any]]
-
-  which matches LangGraph's expected node signature.
+  no bare type: ignore comments anywhere in this file.
 
 Public API
 ----------
@@ -104,24 +98,18 @@ def planner_node(state: InvestmentState) -> dict[str, Any]:
     """
     Pipeline entry point -- validates state and sets running status.
 
-    The Planner is the first node executed after START.  Its job in the
-    skeleton is to:
+    Verifies that ``ticker`` and ``company_name`` are present, sets
+    ``status`` to ``"running"`` and records ``started_at``.
 
-    1. Verify that ``ticker`` and ``company_name`` are present.
-    2. Set ``status`` to ``"running"`` and record ``started_at``.
-    3. Set ``current_node`` so the WebSocket stream can emit a progress
-       event.
-
-    In Phase 3 (T-031) this node will also resolve a raw company name
-    to a Yahoo Finance ticker via a dedicated ticker-resolution tool.
-    For the skeleton it simply validates the state already contains a
-    ticker and passes through.
+    In Phase 3 (T-031) the Planner feeds the parallel dispatcher which
+    fans out to all four research agents simultaneously via Send API.
 
     Args:
         state: Current InvestmentState from LangGraph.
 
     Returns:
         Partial state dict with status, current_node, and started_at.
+        Returns status="failed" with pipeline_error when validation fails.
     """
     ticker: str = state.get("ticker", "")
     company_name: str = state.get("company_name", "")
@@ -167,17 +155,22 @@ def fundamental_node(state: InvestmentState) -> dict[str, Any]:
 
     Args:
         state: Current InvestmentState (must contain ticker, company_name,
-               job_id).
+               job_id). Dispatched via Send API in T-031 parallel execution.
 
     Returns:
         Partial state dict: ``{"fundamental": <model_dump dict>}``.
+        Note: current_node is NOT set here -- all 4 research agents run in
+        the same parallel super-step and LangGraph forbids multiple writes
+        to the same key per step.
     """
     logger.info(
         "fundamental_node: running for ticker=%s",
         state.get("ticker", "unknown"),
     )
     result: dict[str, Any] = run_fundamental_analysis(state)
-    result["current_node"] = NODE_FUNDAMENTAL
+    # Do NOT set current_node here: all 4 research agents run in the same
+    # parallel super-step. Setting current_node from multiple nodes in one
+    # step causes InvalidUpdateError (LangGraph LastValue channel conflict).
     return result
 
 
@@ -189,18 +182,18 @@ def technical_node(state: InvestmentState) -> dict[str, Any]:
     all error cases internally and never raises.
 
     Args:
-        state: Current InvestmentState (must contain ticker, company_name,
-               job_id).
+        state: Current InvestmentState. Dispatched via Send API in T-031.
 
     Returns:
         Partial state dict: ``{"technical": <model_dump dict>}``.
+        Note: current_node is NOT set -- parallel super-step constraint.
     """
     logger.info(
         "technical_node: running for ticker=%s",
         state.get("ticker", "unknown"),
     )
     result: dict[str, Any] = run_technical_analysis(state)
-    result["current_node"] = NODE_TECHNICAL
+    # Do NOT set current_node -- parallel super-step constraint.
     return result
 
 
@@ -212,18 +205,18 @@ def sentiment_node(state: InvestmentState) -> dict[str, Any]:
     all error cases internally and never raises.
 
     Args:
-        state: Current InvestmentState (must contain ticker, company_name,
-               job_id).
+        state: Current InvestmentState. Dispatched via Send API in T-031.
 
     Returns:
         Partial state dict: ``{"sentiment": <model_dump dict>}``.
+        Note: current_node is NOT set -- parallel super-step constraint.
     """
     logger.info(
         "sentiment_node: running for ticker=%s",
         state.get("ticker", "unknown"),
     )
     result: dict[str, Any] = run_sentiment_analysis(state)
-    result["current_node"] = NODE_SENTIMENT
+    # Do NOT set current_node -- parallel super-step constraint.
     return result
 
 
@@ -235,18 +228,18 @@ def macro_node(state: InvestmentState) -> dict[str, Any]:
     all error cases internally and never raises.
 
     Args:
-        state: Current InvestmentState (must contain ticker, company_name,
-               job_id).
+        state: Current InvestmentState. Dispatched via Send API in T-031.
 
     Returns:
         Partial state dict: ``{"macro": <model_dump dict>}``.
+        Note: current_node is NOT set -- parallel super-step constraint.
     """
     logger.info(
         "macro_node: running for ticker=%s",
         state.get("ticker", "unknown"),
     )
     result: dict[str, Any] = run_macro_analysis(state)
-    result["current_node"] = NODE_MACRO
+    # Do NOT set current_node -- parallel super-step constraint.
     return result
 
 
@@ -265,8 +258,7 @@ def risk_node(state: InvestmentState) -> dict[str, Any]:
 
     Current behaviour (skeleton): returns a sentinel output dict with
     ``error="not_implemented"`` so the graph compiles and downstream
-    nodes can still run.  The Portfolio Manager checks ``risk["error"]``
-    and adapts its analysis accordingly.
+    nodes can still run.
 
     Args:
         state: Current InvestmentState after debate loop completion.
@@ -300,9 +292,7 @@ def contrarian_node(state: InvestmentState) -> dict[str, Any]:
     """
     Stub for the Contrarian Investor agent (implemented in T-040).
 
-    Its only job: disagree.  Finds flaws in every bullish thesis,
-    surfaces overlooked risks, and challenges assumptions made by all
-    other agents.
+    Its only job: disagree. Finds flaws in every bullish thesis.
 
     Current behaviour (skeleton): returns a sentinel output dict so
     the graph compiles correctly.
@@ -314,7 +304,7 @@ def contrarian_node(state: InvestmentState) -> dict[str, Any]:
         Partial state dict with sentinel ``contrarian`` output.
     """
     logger.info(
-        "contrarian_node: STUB -- Contrarian Investor not yet implemented " "(T-040)"
+        "contrarian_node: STUB -- Contrarian Investor not yet " "implemented (T-040)"
     )
     return {
         "contrarian": {
@@ -327,8 +317,8 @@ def contrarian_node(state: InvestmentState) -> dict[str, Any]:
             "challenged_agents": [],
             "overlooked_risks": [],
             "bear_conviction": 1,
-            "strongest_argument": "Contrarian stub -- full analysis in T-040.",
-            "summary": "Contrarian Investor stub -- full analysis in T-040.",
+            "strongest_argument": ("Contrarian stub -- full analysis in T-040."),
+            "summary": ("Contrarian Investor stub -- full analysis in T-040."),
         },
         "current_node": NODE_CONTRARIAN,
     }
@@ -339,7 +329,7 @@ def valuation_node(state: InvestmentState) -> dict[str, Any]:
     Stub for the Valuation Agent (implemented in T-041).
 
     Runs a DCF valuation model and compares PE/PB/EV-EBITDA against
-    sector peers.  Calculates upside/downside to intrinsic value.
+    sector peers.
 
     Current behaviour (skeleton): returns a sentinel output dict so
     the graph compiles correctly.
@@ -350,7 +340,9 @@ def valuation_node(state: InvestmentState) -> dict[str, Any]:
     Returns:
         Partial state dict with sentinel ``valuation`` output.
     """
-    logger.info("valuation_node: STUB -- Valuation Agent not yet implemented (T-041)")
+    logger.info(
+        "valuation_node: STUB -- Valuation Agent not yet " "implemented (T-041)"
+    )
     return {
         "valuation": {
             "agent_name": "valuation_agent",
@@ -370,12 +362,11 @@ def portfolio_manager_node(state: InvestmentState) -> dict[str, Any]:
     """
     Stub for the Portfolio Manager agent (implemented in T-042/T-043).
 
-    Reads the complete InvestmentState (all 8 prior agent outputs plus
-    the debate transcript) and delivers the final BUY/HOLD/SELL verdict
-    with a conviction score and written Investment Memo sections.
+    Reads the complete InvestmentState and delivers the final
+    BUY/HOLD/SELL verdict with a conviction score and memo.
 
-    Current behaviour (skeleton): returns a sentinel output dict so the
-    graph compiles and can reach END.
+    Current behaviour (skeleton): returns a sentinel output dict so
+    the graph compiles and can reach END.
 
     Args:
         state: Fully-populated InvestmentState (all agents complete).
@@ -399,7 +390,7 @@ def portfolio_manager_node(state: InvestmentState) -> dict[str, Any]:
             "conviction_score": 5,
             "debate_rounds_used": state.get("debate_round_count", 0),
             "agent_weights": {},
-            "summary": ("Portfolio Manager stub -- full analysis in T-042."),
+            "summary": "Portfolio Manager stub -- full analysis in T-042.",
         },
         "final_verdict": "HOLD",
         "conviction_score": 5,
