@@ -57,7 +57,7 @@ Public API
 """
 
 import logging
-from typing import Any, Union, cast
+from typing import Any, Union
 
 from langgraph.graph import END
 from langgraph.types import Send
@@ -125,7 +125,7 @@ def route_after_planner(state: InvestmentState) -> _PlannerRoute:
             "route_after_planner: pipeline_error=%r -- aborting",
             state.get("pipeline_error"),
         )
-        return cast(str, END)
+        return END
 
     # Build a state snapshot to send to each research agent.
     # We pass the full state so each agent can read job_id, ticker,
