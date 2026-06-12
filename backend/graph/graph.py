@@ -99,7 +99,7 @@ Public API
 
 from functools import lru_cache
 import logging
-from typing import Any
+from typing import Any, cast
 
 from langgraph.graph import END, START, StateGraph
 
@@ -219,7 +219,7 @@ def build_graph() -> Any:
     # "__end__" -> END for the abort path.
     workflow.add_conditional_edges(
         NODE_PLANNER,
-        route_after_planner,
+        cast(Any, route_after_planner),
         {
             # Abort path: planner failed -> skip all agents -> END
             "__end__": END,
