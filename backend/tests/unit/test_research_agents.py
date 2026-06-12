@@ -533,7 +533,7 @@ class TestFundamentalAnalystEmptyData:
 
     def test_income_statement_empty_list(self) -> None:
         """income_statement present but empty -> no crash."""
-        sparse = {
+        sparse: dict[str, Any] = {
             "income_statement": [],
             "balance_sheet": [],
             "cash_flow": [],
@@ -866,7 +866,7 @@ class TestMacroAnalystEmptyData:
         assert result.error is None
 
     def test_all_none_produces_valid_labels(self) -> None:
-        null_macro = {
+        null_macro: dict[str, Any] = {
             "repo_rate": None,
             "cpi_inflation": None,
             "gdp_growth": None,
