@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 os.environ.setdefault("ENVIRONMENT", "test")
@@ -794,7 +794,7 @@ class TestRunMacroAnalysisNode:
             ),
         ):
             mock_macro.invoke.return_value = macro_result
-            return run_macro_analysis(state)
+            return cast(dict[str, Any], run_macro_analysis(state))
 
     def test_returns_dict_with_macro_key(self) -> None:
         result = self._invoke(_STATE_HDFC)

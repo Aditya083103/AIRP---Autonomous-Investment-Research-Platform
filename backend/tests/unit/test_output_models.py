@@ -24,6 +24,7 @@ from datetime import datetime
 import json
 from typing import Any
 
+from pydantic import BaseModel
 import pytest
 
 from backend.agents.output_models import (
@@ -740,7 +741,7 @@ class TestCrossModel:
             assert parsed["agent_name"] == m.agent_name
 
     def test_all_schemas_auto_generated(self) -> None:
-        models = [
+        models: list[type[BaseModel]] = [
             FundamentalAnalysis,
             TechnicalAnalysis,
             SentimentAnalysis,
