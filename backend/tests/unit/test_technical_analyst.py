@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 # ENVIRONMENT must be set before any backend module is imported.
@@ -752,7 +752,7 @@ class TestRunTechnicalAnalysisNode:
             ),
         ):
             mock_sp.invoke.return_value = price_data
-            return run_technical_analysis(state)
+            return cast(dict[str, Any], run_technical_analysis(state))
 
     def test_returns_dict_with_technical_key(self) -> None:
         result = self._invoke(_STATE_TCS)

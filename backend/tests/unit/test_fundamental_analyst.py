@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 # ENVIRONMENT must be set before any backend module is imported.
@@ -193,7 +193,7 @@ class TestRevenueCagr:
         assert _revenue_cagr([]) is None
 
     def test_none_revenues_skipped(self) -> None:
-        income: list[dict[str, Any]] = [
+        income = [
             {"revenue_crores": 200_000.0},
             {"revenue_crores": None},
             {"revenue_crores": 150_000.0},
@@ -618,7 +618,7 @@ class TestRunFundamentalAnalysisNode:
         ):
             mock_fin.invoke.return_value = financials
             mock_rat.invoke.return_value = ratios
-            return run_fundamental_analysis(state)
+            return cast(dict[str, Any], run_fundamental_analysis(state))
 
     def test_returns_dict_with_fundamental_key(self) -> None:
         result = self._invoke_node(STATE_TCS)
