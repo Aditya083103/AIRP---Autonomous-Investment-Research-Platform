@@ -265,18 +265,18 @@ class TestFundamentalAnalystSchemaValidation:
 
     def test_missing_score_raises(self) -> None:
         with pytest.raises(ValidationError):
-            FundamentalAnalysis(**_BASE_KWARGS)  # type: ignore[call-arg]
+            FundamentalAnalysis.model_validate({**_BASE_KWARGS})
 
     def test_missing_analysis_id_raises(self) -> None:
         with pytest.raises(ValidationError):
-            FundamentalAnalysis(  # type: ignore[call-arg]
-                company_name="TCS", ticker="TCS.NS", score=7
+            FundamentalAnalysis.model_validate(
+                {"company_name": "TCS", "ticker": "TCS.NS", "score": 7}
             )
 
     def test_missing_ticker_raises(self) -> None:
         with pytest.raises(ValidationError):
-            FundamentalAnalysis(  # type: ignore[call-arg]
-                analysis_id="x", company_name="TCS", score=7
+            FundamentalAnalysis.model_validate(
+                {"analysis_id": "x", "company_name": "TCS", "score": 7}
             )
 
     def test_optional_fields_default_none(self) -> None:
@@ -345,13 +345,11 @@ class TestTechnicalAnalystSchemaValidation:
 
     def test_missing_signal_raises(self) -> None:
         with pytest.raises(ValidationError):
-            TechnicalAnalysis(  # type: ignore[call-arg]
-                **_BASE_KWARGS, signal_strength=5
-            )
+            TechnicalAnalysis.model_validate({**_BASE_KWARGS, "signal_strength": 5})
 
     def test_missing_signal_strength_raises(self) -> None:
         with pytest.raises(ValidationError):
-            TechnicalAnalysis(**_BASE_KWARGS, signal="BUY")  # type: ignore[call-arg]
+            TechnicalAnalysis.model_validate({**_BASE_KWARGS, "signal": "BUY"})
 
     def test_optional_price_fields_default_none(self) -> None:
         m = TechnicalAnalysis(**_BASE_KWARGS, signal="HOLD", signal_strength=5)
@@ -410,13 +408,15 @@ class TestSentimentAnalystSchemaValidation:
 
     def test_missing_sentiment_score_raises(self) -> None:
         with pytest.raises(ValidationError):
-            SentimentAnalysis(  # type: ignore[call-arg]
-                **_BASE_KWARGS,
-                sentiment_label="neutral",
-                articles_analysed=0,
-                positive_articles=0,
-                negative_articles=0,
-                neutral_articles=0,
+            SentimentAnalysis.model_validate(
+                {
+                    **_BASE_KWARGS,
+                    "sentiment_label": "neutral",
+                    "articles_analysed": 0,
+                    "positive_articles": 0,
+                    "negative_articles": 0,
+                    "neutral_articles": 0,
+                }
             )
 
     def test_red_flags_defaults_empty(self) -> None:
@@ -446,14 +446,12 @@ class TestMacroAnalystSchemaValidation:
 
     def test_missing_macro_environment_raises(self) -> None:
         with pytest.raises(ValidationError):
-            MacroAnalysis(  # type: ignore[call-arg]
-                **_BASE_KWARGS, sector_impact="neutral"
-            )
+            MacroAnalysis.model_validate({**_BASE_KWARGS, "sector_impact": "neutral"})
 
     def test_missing_sector_impact_raises(self) -> None:
         with pytest.raises(ValidationError):
-            MacroAnalysis(  # type: ignore[call-arg]
-                **_BASE_KWARGS, macro_environment="neutral"
+            MacroAnalysis.model_validate(
+                {**_BASE_KWARGS, "macro_environment": "neutral"}
             )
 
     def test_optional_rate_fields_default_none(self) -> None:
@@ -535,7 +533,7 @@ class TestFundamentalAnalystEmptyData:
 
     def test_income_statement_empty_list(self) -> None:
         """income_statement present but empty -> no crash."""
-        sparse = {
+        sparse: dict[str, Any] = {
             "income_statement": [],
             "balance_sheet": [],
             "cash_flow": [],
@@ -868,7 +866,7 @@ class TestMacroAnalystEmptyData:
         assert result.error is None
 
     def test_all_none_produces_valid_labels(self) -> None:
-        null_macro = {
+        null_macro: dict[str, Any] = {
             "repo_rate": None,
             "cpi_inflation": None,
             "gdp_growth": None,

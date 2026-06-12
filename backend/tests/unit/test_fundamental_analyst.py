@@ -193,7 +193,7 @@ class TestRevenueCagr:
         assert _revenue_cagr([]) is None
 
     def test_none_revenues_skipped(self) -> None:
-        income = [
+        income: list[dict[str, Any]] = [
             {"revenue_crores": 200_000.0},
             {"revenue_crores": None},
             {"revenue_crores": 150_000.0},

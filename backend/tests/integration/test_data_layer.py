@@ -402,7 +402,8 @@ class TestFetchNewsMissingKey:
                 ticker=ticker,
                 max_articles=max_articles,
             )
-            return result.model_dump(mode="json")  # type: ignore[union-attr]
+            assert result is not None, "_fetch_news_from_api returned None"
+            return result.model_dump(mode="json")
 
         with patch.object(news_mod, "settings", None):
             with patch.object(

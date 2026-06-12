@@ -45,7 +45,7 @@ import functools
 import inspect
 import json
 import logging
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 import redis
 
@@ -90,11 +90,11 @@ except ImportError:
     RATIOS_TTL = 3_600
     MACRO_TTL = 86_400
 
-    def get_client() -> redis.Redis | None:  # type: ignore[misc]
+    def get_client() -> redis.Redis | None:
         """Fallback get_client when redis_client module is unavailable."""
         return None
 
-    def reset_client() -> None:  # type: ignore[misc]
+    def reset_client() -> None:
         """Fallback reset_client when redis_client module is unavailable."""
         pass
 
@@ -156,7 +156,7 @@ def cache_get_json(key: str) -> dict[str, Any] | None:
         logger.warning("Cached value for %r is not a JSON object — ignoring", key)
         return None
 
-    return data  # type: ignore[return-value]
+    return cast(dict[str, Any], data)
 
 
 def cache_set_json(key: str, value: dict[str, Any], ttl_seconds: int) -> bool:
@@ -246,6 +246,6 @@ def cached(*, key: str, ttl: int) -> Callable[[_FuncT], _FuncT]:
 
             return result
 
-        return wrapper  # type: ignore[return-value]
+        return cast(_FuncT, wrapper)
 
     return decorator
