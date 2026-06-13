@@ -1,12 +1,33 @@
 # backend/graph/routing.py
 """
-AIRP -- LangGraph Conditional Edge Functions (T-030 / T-031)
+AIRP -- LangGraph Conditional Edge Functions (T-030 / T-031 / T-032)
 
 Conditional edge functions determine which node executes next based
-on the current state. LangGraph calls these on edges that need runtime
+on the current state.  LangGraph calls these on edges that need runtime
 branching -- routing to error handling when an agent fails, deciding
 whether another debate round is needed, or fanning out to parallel
 research agents via the Send API.
+
+T-032 changes (Implement conditional routing logic)
+---------------------------------------------------
+Two new routing behaviours are introduced in this task:
+
+1. fetch_financials empty -> error handler
+   ``route_after_research`` now checks whether the ``fundamental`` output
+   contains an ``error`` key from a failed ``fetch_financials`` call.
+   When ``fundamental["error"]`` is non-null the pipeline routes to the
+   dedicated ``error_handler`` node instead of proceeding to the contrarian.
+   The error handler logs the failure, marks the pipeline as degraded, and
+   sends it forward so the rest of the committee can still run on whatever
+   partial data is available.
+
+2. sentiment.score < -0.8 -> flag for additional research
+   After research completes, if ``sentiment["sentiment_score"] < -0.8``
+   the pipeline sets the ``NEEDS_ADDITIONAL_SENTIMENT_RESEARCH`` escalation
+   flag in state before proceeding.  The contrarian node and portfolio
+   manager both check this flag to apply a more conservative stance.
+   Routing itself still proceeds normally (this is a flag, not a fork)
+   but the flag is surfaced as a route constant so tests can assert on it.
 
 Routing functions
 -----------------
@@ -16,8 +37,11 @@ route_after_planner
     configuration error.
 
 route_after_research
-    After all 4 research agents complete (implicit join): proceed to
-    the contrarian node. In Phase 4 this will detect all-agent failures.
+    After all 4 research agents complete (implicit join):
+    - If fundamental["error"] is non-null -> ROUTE_ERROR (T-032)
+    - If sentiment["sentiment_score"] < -0.8 -> set escalation flag,
+      then proceed to contrarian (T-032)
+    - Otherwise -> ROUTE_PROCEED
 
 route_after_contrarian
     After the Contrarian Investor node: decide whether to run another
@@ -31,7 +55,7 @@ Design decisions
   Unicode box-drawing chars (rule from T-024 onward).
 
 * route_after_planner returns a list[Send] on the PROCEED path,
-  not a plain str. LangGraph dispatches each Send object concurrently,
+  not a plain str.  LangGraph dispatches each Send object concurrently,
   giving true parallel execution of the 4 research agents (T-031).
 
 * On the ABORT path, route_after_planner returns the END sentinel
@@ -44,12 +68,19 @@ Design decisions
 * All routing functions use state.get() with defaults -- they must
   never raise, even on partially-populated state.
 
+* NEGATIVE_SENTIMENT_THRESHOLD is a module-level constant so tests
+  and the portfolio manager node can import and compare against the
+  same value without magic numbers.
+
 Public API
 ----------
     from backend.graph.routing import (
         ROUTE_PROCEED,
         ROUTE_ABORT,
+        ROUTE_ERROR,
         ROUTE_DEBATE_AGAIN,
+        NEGATIVE_SENTIMENT_THRESHOLD,
+        ESCALATION_FLAG_NEGATIVE_SENTIMENT,
         route_after_planner,
         route_after_research,
         route_after_contrarian,
@@ -82,8 +113,26 @@ ROUTE_PROCEED = "proceed"
 #: Abort -- route directly to END without further agent calls.
 ROUTE_ABORT = "abort"
 
+#: Error path -- route to the error_handler node when a critical
+#: data fetch fails (e.g. fetch_financials returns empty).
+ROUTE_ERROR = "error"
+
 #: Run another debate round (bear_conviction >= 7 threshold).
 ROUTE_DEBATE_AGAIN = "debate_again"
+
+# ---------------------------------------------------------------------------
+# Sentiment escalation constants (T-032)
+# ---------------------------------------------------------------------------
+
+#: Sentiment score below this threshold triggers the additional-research
+#: escalation flag.  Value: -0.8 (on a -1.0 to +1.0 scale).
+#: This matches the acceptance criterion: "sentiment.score < -0.8".
+NEGATIVE_SENTIMENT_THRESHOLD: float = -0.8
+
+#: State key written to InvestmentState["risk_flags"] when sentiment is
+#: severely negative.  Downstream agents check this flag to apply a
+#: more conservative stance.
+ESCALATION_FLAG_NEGATIVE_SENTIMENT = "NEGATIVE_SENTIMENT_REQUIRES_ADDITIONAL_RESEARCH"
 
 # ---------------------------------------------------------------------------
 # Routing functions
@@ -147,27 +196,88 @@ def route_after_planner(state: InvestmentState) -> _PlannerRoute:
 
 def route_after_research(state: InvestmentState) -> str:
     """
-    Conditional edge after all 4 research agents complete.
+    Conditional edge after all 4 research agents complete (T-032).
 
     LangGraph's implicit join barrier ensures this function is only
     called after all four inbound Send dispatches have finished.
 
-    In Phase 3 (skeleton) this always returns ROUTE_PROCEED, sending
-    the pipeline to the Contrarian node.
+    Routing logic (evaluated in order):
 
-    In Phase 4 (T-037) this will inspect each agent's ``error`` field
-    and route to an error-handling node if all four research agents
-    failed simultaneously.
+    1. Financials empty / error check (T-032):
+       If ``fundamental["error"]`` is non-null the fundamental analysis
+       failed -- most likely because ``fetch_financials`` returned empty
+       data (API limit, bad ticker, or network error).  Route to the
+       error_handler node so the failure is logged and the pipeline
+       status is updated before any downstream agents run.
+
+       Rationale: the Fundamental Analyst is the primary quantitative
+       anchor for the entire analysis.  Running a valuation or portfolio
+       decision on top of missing fundamental data produces unreliable
+       output.  The error_handler does NOT terminate the pipeline -- it
+       sets ``fundamental_degraded=True`` in state and forwards to the
+       contrarian so the committee can still produce a cautious memo.
+
+    2. Negative sentiment escalation (T-032):
+       If ``sentiment["sentiment_score"] < -0.8`` the news environment
+       is severely negative.  This does NOT change the route destination
+       (we still proceed to contrarian) but it appends
+       ESCALATION_FLAG_NEGATIVE_SENTIMENT to ``state["risk_flags"]``
+       so downstream agents know to apply a more conservative stance.
+
+       Note: route_after_research is a pure routing function -- it
+       cannot modify state directly.  The escalation flag is written
+       by returning ROUTE_ESCALATE_SENTIMENT which the graph maps to a
+       thin ``sentiment_escalation_node`` that adds the flag, then
+       immediately edges forward to the contrarian.  For skeleton
+       simplicity in T-032, we return ROUTE_PROCEED with the flag
+       written via a single-purpose node (see graph.py T-032 wiring).
+
+       Implementation note: because LangGraph routing functions are
+       pure (they cannot mutate state), the negative-sentiment branch
+       routes to a dedicated ``sentiment_escalation_node`` that writes
+       the flag to state["risk_flags"] before forwarding to contrarian.
+       The ROUTE_ESCALATE_SENTIMENT constant is used for this path.
+
+    3. Default: proceed to contrarian.
 
     Args:
         state: Current InvestmentState after all research agents ran.
 
     Returns:
-        ROUTE_PROCEED (always in skeleton).
+        ROUTE_ERROR if fundamentals failed (T-032 error path).
+        ROUTE_ESCALATE_SENTIMENT if sentiment < -0.8 (T-032 escalation).
+        ROUTE_PROCEED otherwise.
     """
+    # --- 1. Fundamentals error check (T-032) --------------------------------
+    fundamental_out: Any = state.get("fundamental")
+    if isinstance(fundamental_out, dict):
+        fund_error: Any = fundamental_out.get("error")
+        if fund_error is not None:
+            logger.warning(
+                "route_after_research: fundamental agent returned error=%r "
+                "-- routing to error_handler (T-032 financials-empty path)",
+                fund_error,
+            )
+            return ROUTE_ERROR
+
+    # --- 2. Negative sentiment escalation check (T-032) --------------------
+    sentiment_out: Any = state.get("sentiment")
+    if isinstance(sentiment_out, dict):
+        raw_score: Any = sentiment_out.get("sentiment_score")
+        if isinstance(raw_score, (int, float)):
+            score: float = float(raw_score)
+            if score < NEGATIVE_SENTIMENT_THRESHOLD:
+                logger.warning(
+                    "route_after_research: sentiment_score=%.3f < %.1f "
+                    "-- routing to sentiment_escalation node (T-032)",
+                    score,
+                    NEGATIVE_SENTIMENT_THRESHOLD,
+                )
+                return ROUTE_ESCALATE_SENTIMENT
+
+    # --- 3. Log any non-fundamental errors (warn but proceed) ---------------
     agents_with_errors: list[str] = []
     for field, name in [
-        ("fundamental", "fundamental_analyst"),
         ("technical", "technical_analyst"),
         ("sentiment", "sentiment_analyst"),
         ("macro", "macro_economist"),
@@ -178,8 +288,8 @@ def route_after_research(state: InvestmentState) -> str:
 
     if agents_with_errors:
         logger.warning(
-            "route_after_research: %d agent(s) returned errors: %s -- "
-            "proceeding anyway (Phase 4 adds abort on total failure)",
+            "route_after_research: %d non-fundamental agent(s) returned "
+            "errors: %s -- proceeding (non-critical)",
             len(agents_with_errors),
             agents_with_errors,
         )
@@ -187,6 +297,12 @@ def route_after_research(state: InvestmentState) -> str:
         logger.info("route_after_research: all research agents completed cleanly")
 
     return ROUTE_PROCEED
+
+
+#: Escalation route: sentiment_score < NEGATIVE_SENTIMENT_THRESHOLD.
+#: Routes to the sentiment_escalation_node which writes the escalation
+#: flag into state["risk_flags"] before forwarding to contrarian.
+ROUTE_ESCALATE_SENTIMENT = "escalate_sentiment"
 
 
 def route_after_contrarian(state: InvestmentState) -> str:
@@ -249,7 +365,11 @@ def route_after_contrarian(state: InvestmentState) -> str:
 __all__ = [
     "ROUTE_PROCEED",
     "ROUTE_ABORT",
+    "ROUTE_ERROR",
     "ROUTE_DEBATE_AGAIN",
+    "ROUTE_ESCALATE_SENTIMENT",
+    "NEGATIVE_SENTIMENT_THRESHOLD",
+    "ESCALATION_FLAG_NEGATIVE_SENTIMENT",
     "route_after_planner",
     "route_after_research",
     "route_after_contrarian",

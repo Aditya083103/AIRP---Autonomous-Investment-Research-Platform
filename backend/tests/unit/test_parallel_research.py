@@ -43,12 +43,15 @@ from backend.graph.graph import (  # noqa: E402
 )
 from backend.graph.nodes import (  # noqa: E402
     NODE_CONTRARIAN,
+    NODE_ERROR_HANDLER,
     NODE_FUNDAMENTAL,
     NODE_MACRO,
     NODE_PLANNER,
     NODE_PORTFOLIO_MANAGER,
+    NODE_RESEARCH_JOIN,
     NODE_RISK,
     NODE_SENTIMENT,
+    NODE_SENTIMENT_ESCALATION,
     NODE_TECHNICAL,
     NODE_VALUATION,
     fundamental_node,
@@ -78,6 +81,9 @@ _ALL_NODE_NAMES: list[str] = [
     NODE_TECHNICAL,
     NODE_SENTIMENT,
     NODE_MACRO,
+    NODE_RESEARCH_JOIN,
+    NODE_ERROR_HANDLER,
+    NODE_SENTIMENT_ESCALATION,
     NODE_CONTRARIAN,
     NODE_RISK,
     NODE_VALUATION,
@@ -642,8 +648,8 @@ class TestGraphStructure:
         compiled = build_graph()
         nodes = compiled.get_graph().nodes
         content_nodes = [n for n in nodes if not n.startswith("__")]
-        assert len(content_nodes) == 9, (
-            f"Expected 9 content nodes, got {len(content_nodes)}: " f"{content_nodes}"
+        assert len(content_nodes) == 12, (
+            f"Expected 12 content nodes, got {len(content_nodes)}: " f"{content_nodes}"
         )
 
     def test_all_node_names_registered(self) -> None:
@@ -704,21 +710,27 @@ class TestRouteAfterResearch:
         state["macro"] = {"agent_name": "ma", "macro_environment": "neutral"}
         assert route_after_research(state) == ROUTE_PROCEED
 
-    def test_all_errors_still_proceeds(self) -> None:
+    def test_all_errors_fundamental_routes_to_error_handler(self) -> None:
+        """T-032: fundamental error -> ROUTE_ERROR, not ROUTE_PROCEED."""
+        from backend.graph.routing import ROUTE_ERROR
+
         state = _make_state()
         state["fundamental"] = {"agent_name": "fa", "error": "timeout"}
         state["technical"] = {"agent_name": "ta", "error": "timeout"}
         state["sentiment"] = {"agent_name": "sa", "error": "timeout"}
         state["macro"] = {"agent_name": "ma", "error": "timeout"}
         result = route_after_research(state)
-        assert result == ROUTE_PROCEED
+        assert result == ROUTE_ERROR
 
-    def test_partial_errors_proceeds(self) -> None:
+    def test_partial_fundamental_error_routes_to_error_handler(self) -> None:
+        """T-032: fundamental error (even with other agents clean) -> ROUTE_ERROR."""
+        from backend.graph.routing import ROUTE_ERROR
+
         state = _make_state()
         state["fundamental"] = {"agent_name": "fa", "error": "API limit"}
         state["technical"] = {"agent_name": "ta", "signal": "HOLD"}
         result = route_after_research(state)
-        assert result == ROUTE_PROCEED
+        assert result == ROUTE_ERROR
 
     def test_empty_state_proceeds(self) -> None:
         empty: InvestmentState = cast(InvestmentState, {})
