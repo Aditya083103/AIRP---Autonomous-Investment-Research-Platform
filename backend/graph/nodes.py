@@ -1,6 +1,6 @@
 # backend/graph/nodes.py
 """
-AIRP -- LangGraph Node Functions (T-030 / T-031)
+AIRP -- LangGraph Node Functions (T-030 / T-031 / T-032)
 
 Thin wrapper functions that adapt each agent's public API to the
 LangGraph node contract: receive InvestmentState, return a partial
@@ -18,6 +18,48 @@ LangGraph merges the returned dict into the current state automatically.
 Nodes never receive the entire state to overwrite -- they return only
 the keys they own.
 
+T-032 additions (conditional routing logic)
+-------------------------------------------
+The key topology insight (T-032):
+
+In T-031, all 4 research nodes had direct edges to contrarian_investor.
+LangGraph's implicit join barrier meant contrarian waited for all 4.
+
+In T-032, we want to inspect research outputs and branch AFTER the join.
+The problem: if we put conditional edges on each of the 4 research nodes,
+route_after_research fires 4 times in the same super-step -> 4 writes to
+the same destination node in one step -> InvalidUpdateError on any channel
+that destination writes.
+
+Solution: introduce ``research_join_node`` as an explicit join choke-point.
+All 4 research agents have direct edges -> research_join_node.
+research_join_node runs SEQUENTIALLY (one step, after the join barrier).
+The conditional edge sits on research_join_node alone, so route_after_research
+fires exactly once, and only one destination node is chosen per step.
+
+Node flow:
+    [fundamental]  --|
+    [technical]    --+--> [research_join] --> route_after_research()
+    [sentiment]    --|         |                    |
+    [macro]        --|         |        ROUTE_ERROR -> [error_handler] -> [contrarian]
+                               |  ROUTE_ESCALATE -> [sentiment_escalation] -> [contra]
+                               |       ROUTE_PROCEED -> [contrarian]
+
+research_join_node
+    Explicit join node. Receives state after all 4 research agents have
+    written their outputs. Does nothing itself -- just provides a single
+    sequential choke-point so route_after_research fires exactly once.
+    Sets current_node = NODE_RESEARCH_JOIN for LangSmith tracing.
+
+error_handler_node
+    Receives control when route_after_research detects fundamental["error"]
+    is non-null. Writes degraded-pipeline flags. Forwards to contrarian.
+    CAN now safely set current_node because it runs in its own step.
+
+sentiment_escalation_node
+    Receives control when sentiment_score < -0.8. Writes escalation flag.
+    Forwards to contrarian. CAN now safely set current_node.
+
 Phase 2 nodes (implemented -- T-022 to T-025)
 ----------------------------------------------
 planner_node          -- validates state, sets pipeline status
@@ -25,6 +67,12 @@ fundamental_node      -- delegates to run_fundamental_analysis()
 technical_node        -- delegates to run_technical_analysis()
 sentiment_node        -- delegates to run_sentiment_analysis()
 macro_node            -- delegates to run_macro_analysis()
+
+Phase 3 nodes (T-031 / T-032)
+------------------------------
+research_join_node        -- explicit join after parallel research (T-032)
+error_handler_node        -- handles fetch_financials empty (T-032)
+sentiment_escalation_node -- flags severe negative sentiment (T-032)
 
 Phase 4 stub nodes (skeleton -- logic added in T-037 to T-044)
 ---------------------------------------------------------------
@@ -41,12 +89,11 @@ Design decisions
 * Plain ASCII section comments (# ---) -- avoids flake8 E501 from
   Unicode box-drawing chars (established rule from T-024 onward).
 
-* Stub nodes return a sentinel output dict so the graph compiles and
-  the Mermaid diagram is correct. Phase 4 tasks replace these stubs
-  with real implementations.
+* No bare type: ignore -- use cast() and explicit annotations.
 
-* cast() used where mypy needs help narrowing dict[str, Any] access --
-  no bare type: ignore comments anywhere in this file.
+* research_join_node is the correct LangGraph pattern for "branch after
+  parallel join". The conditional edge belongs on the join node, not on
+  each of the 4 parallel nodes.
 
 Public API
 ----------
@@ -56,6 +103,9 @@ Public API
         technical_node,
         sentiment_node,
         macro_node,
+        research_join_node,
+        error_handler_node,
+        sentiment_escalation_node,
         risk_node,
         contrarian_node,
         valuation_node,
@@ -84,6 +134,9 @@ NODE_FUNDAMENTAL = "fundamental_analyst"
 NODE_TECHNICAL = "technical_analyst"
 NODE_SENTIMENT = "sentiment_analyst"
 NODE_MACRO = "macro_economist"
+NODE_RESEARCH_JOIN = "research_join"
+NODE_ERROR_HANDLER = "error_handler"
+NODE_SENTIMENT_ESCALATION = "sentiment_escalation"
 NODE_RISK = "risk_officer"
 NODE_CONTRARIAN = "contrarian_investor"
 NODE_VALUATION = "valuation_agent"
@@ -100,9 +153,6 @@ def planner_node(state: InvestmentState) -> dict[str, Any]:
 
     Verifies that ``ticker`` and ``company_name`` are present, sets
     ``status`` to ``"running"`` and records ``started_at``.
-
-    In Phase 3 (T-031) the Planner feeds the parallel dispatcher which
-    fans out to all four research agents simultaneously via Send API.
 
     Args:
         state: Current InvestmentState from LangGraph.
@@ -153,24 +203,21 @@ def fundamental_node(state: InvestmentState) -> dict[str, Any]:
     Delegates directly to ``run_fundamental_analysis()`` which handles
     all error cases internally and never raises.
 
+    Note: current_node is NOT set -- parallel super-step constraint.
+    All 4 research agents run in the same super-step via Send API;
+    writing current_node from multiple nodes raises InvalidUpdateError.
+
     Args:
-        state: Current InvestmentState (must contain ticker, company_name,
-               job_id). Dispatched via Send API in T-031 parallel execution.
+        state: Current InvestmentState. Dispatched via Send API (T-031).
 
     Returns:
         Partial state dict: ``{"fundamental": <model_dump dict>}``.
-        Note: current_node is NOT set here -- all 4 research agents run in
-        the same parallel super-step and LangGraph forbids multiple writes
-        to the same key per step.
     """
     logger.info(
         "fundamental_node: running for ticker=%s",
         state.get("ticker", "unknown"),
     )
     result: dict[str, Any] = run_fundamental_analysis(state)
-    # Do NOT set current_node here: all 4 research agents run in the same
-    # parallel super-step. Setting current_node from multiple nodes in one
-    # step causes InvalidUpdateError (LangGraph LastValue channel conflict).
     return result
 
 
@@ -178,22 +225,19 @@ def technical_node(state: InvestmentState) -> dict[str, Any]:
     """
     LangGraph node for the Technical Analyst agent.
 
-    Delegates directly to ``run_technical_analysis()`` which handles
-    all error cases internally and never raises.
+    Note: current_node is NOT set -- parallel super-step constraint.
 
     Args:
-        state: Current InvestmentState. Dispatched via Send API in T-031.
+        state: Current InvestmentState. Dispatched via Send API (T-031).
 
     Returns:
         Partial state dict: ``{"technical": <model_dump dict>}``.
-        Note: current_node is NOT set -- parallel super-step constraint.
     """
     logger.info(
         "technical_node: running for ticker=%s",
         state.get("ticker", "unknown"),
     )
     result: dict[str, Any] = run_technical_analysis(state)
-    # Do NOT set current_node -- parallel super-step constraint.
     return result
 
 
@@ -201,22 +245,19 @@ def sentiment_node(state: InvestmentState) -> dict[str, Any]:
     """
     LangGraph node for the News Sentiment Agent.
 
-    Delegates directly to ``run_sentiment_analysis()`` which handles
-    all error cases internally and never raises.
+    Note: current_node is NOT set -- parallel super-step constraint.
 
     Args:
-        state: Current InvestmentState. Dispatched via Send API in T-031.
+        state: Current InvestmentState. Dispatched via Send API (T-031).
 
     Returns:
         Partial state dict: ``{"sentiment": <model_dump dict>}``.
-        Note: current_node is NOT set -- parallel super-step constraint.
     """
     logger.info(
         "sentiment_node: running for ticker=%s",
         state.get("ticker", "unknown"),
     )
     result: dict[str, Any] = run_sentiment_analysis(state)
-    # Do NOT set current_node -- parallel super-step constraint.
     return result
 
 
@@ -224,23 +265,187 @@ def macro_node(state: InvestmentState) -> dict[str, Any]:
     """
     LangGraph node for the Macro Economist agent.
 
-    Delegates directly to ``run_macro_analysis()`` which handles
-    all error cases internally and never raises.
+    Note: current_node is NOT set -- parallel super-step constraint.
 
     Args:
-        state: Current InvestmentState. Dispatched via Send API in T-031.
+        state: Current InvestmentState. Dispatched via Send API (T-031).
 
     Returns:
         Partial state dict: ``{"macro": <model_dump dict>}``.
-        Note: current_node is NOT set -- parallel super-step constraint.
     """
     logger.info(
         "macro_node: running for ticker=%s",
         state.get("ticker", "unknown"),
     )
     result: dict[str, Any] = run_macro_analysis(state)
-    # Do NOT set current_node -- parallel super-step constraint.
     return result
+
+
+# ---------------------------------------------------------------------------
+# T-032 join node -- explicit sequential choke-point after parallel research
+# ---------------------------------------------------------------------------
+
+
+def research_join_node(state: InvestmentState) -> dict[str, Any]:
+    """
+    Explicit join node after parallel research execution (T-032).
+
+    All 4 research nodes have direct edges to this node.  LangGraph's
+    Pregel runtime uses incoming edge count as a barrier: this node runs
+    only after all 4 research agents have completed and merged their
+    partial state updates.
+
+    This node is intentionally a passthrough -- it does no computation.
+    Its sole purpose is to provide a single sequential step where
+    route_after_research can fire exactly once (instead of 4 times from
+    4 separate conditional edges on the research nodes, which would cause
+    InvalidUpdateError).
+
+    The conditional edge is attached here, not on the individual research
+    nodes. This is the correct LangGraph pattern for "branch after parallel
+    join".
+
+    Args:
+        state: Fully-merged InvestmentState after all 4 research agents ran.
+
+    Returns:
+        Partial state dict setting current_node for LangSmith tracing.
+    """
+    ticker: str = state.get("ticker", "unknown")
+    logger.info(
+        "research_join_node: all 4 research agents complete for %s -- "
+        "evaluating routing conditions",
+        ticker,
+    )
+    return {"current_node": NODE_RESEARCH_JOIN}
+
+
+# ---------------------------------------------------------------------------
+# T-032 routing nodes -- error handler and sentiment escalation
+# ---------------------------------------------------------------------------
+
+
+def error_handler_node(state: InvestmentState) -> dict[str, Any]:
+    """
+    Error handler node for failed fundamental data fetch (T-032).
+
+    Receives control when ``route_after_research`` (on research_join_node)
+    detects that ``fundamental["error"]`` is non-null.
+
+    This node does NOT terminate the pipeline.  It marks the pipeline as
+    degraded and writes flags so downstream agents apply maximum caution.
+    After this node, the graph forwards to the contrarian node.
+
+    Because this node is reached from research_join_node (a single
+    sequential node, not 4 parallel ones), it runs in its own step and
+    can safely write current_node.
+
+    Args:
+        state: Current InvestmentState.
+
+    Returns:
+        Partial state dict with pipeline_error, risk_flags, critical_flags,
+        and current_node.
+    """
+    fundamental_out: Any = state.get("fundamental")
+    fund_error: str = "unknown fundamental data error"
+
+    if isinstance(fundamental_out, dict):
+        raw_err: Any = fundamental_out.get("error")
+        if raw_err is not None:
+            fund_error = str(raw_err)
+
+    ticker: str = state.get("ticker", "unknown")
+    company: str = state.get("company_name", "unknown")
+
+    logger.error(
+        "error_handler_node: fundamental data unavailable for %s (%s): %s",
+        company,
+        ticker,
+        fund_error,
+    )
+
+    existing_risk_flags: list[str] = list(state.get("risk_flags", []))
+    existing_critical_flags: list[str] = list(state.get("critical_flags", []))
+
+    flag = "FUNDAMENTAL_DATA_UNAVAILABLE"
+    if flag not in existing_risk_flags:
+        existing_risk_flags.append(flag)
+    if flag not in existing_critical_flags:
+        existing_critical_flags.append(flag)
+
+    pipeline_error_msg = (
+        f"Fundamental data unavailable for {company} ({ticker}): {fund_error}. "
+        f"Analysis continues with degraded fundamental data -- treat all "
+        f"quantitative conclusions with elevated caution."
+    )
+
+    return {
+        "pipeline_error": pipeline_error_msg,
+        "risk_flags": existing_risk_flags,
+        "critical_flags": existing_critical_flags,
+        "current_node": NODE_ERROR_HANDLER,
+    }
+
+
+def sentiment_escalation_node(state: InvestmentState) -> dict[str, Any]:
+    """
+    Sentiment escalation node for severely negative news environment (T-032).
+
+    Receives control when ``route_after_research`` (on research_join_node)
+    detects ``sentiment["sentiment_score"] < -0.8``.
+
+    Appends ESCALATION_FLAG_NEGATIVE_SENTIMENT to risk_flags and
+    critical_flags.  Forwards to contrarian node.
+
+    Because this node is reached from research_join_node (a single
+    sequential node), it runs in its own step and can safely write
+    current_node.
+
+    Args:
+        state: Current InvestmentState.
+
+    Returns:
+        Partial state dict with risk_flags, critical_flags, current_node.
+    """
+    from backend.graph.routing import (  # noqa: PLC0415 -- local to avoid cycle
+        ESCALATION_FLAG_NEGATIVE_SENTIMENT,
+        NEGATIVE_SENTIMENT_THRESHOLD,
+    )
+
+    sentiment_out: Any = state.get("sentiment")
+    actual_score: float = 0.0
+
+    if isinstance(sentiment_out, dict):
+        raw_score: Any = sentiment_out.get("sentiment_score")
+        if isinstance(raw_score, (int, float)):
+            actual_score = float(raw_score)
+
+    ticker: str = state.get("ticker", "unknown")
+    company: str = state.get("company_name", "unknown")
+
+    logger.warning(
+        "sentiment_escalation_node: sentiment_score=%.3f < %.1f for %s (%s) "
+        "-- flagging for additional research",
+        actual_score,
+        NEGATIVE_SENTIMENT_THRESHOLD,
+        company,
+        ticker,
+    )
+
+    existing_risk_flags: list[str] = list(state.get("risk_flags", []))
+    existing_critical_flags: list[str] = list(state.get("critical_flags", []))
+
+    if ESCALATION_FLAG_NEGATIVE_SENTIMENT not in existing_risk_flags:
+        existing_risk_flags.append(ESCALATION_FLAG_NEGATIVE_SENTIMENT)
+    if ESCALATION_FLAG_NEGATIVE_SENTIMENT not in existing_critical_flags:
+        existing_critical_flags.append(ESCALATION_FLAG_NEGATIVE_SENTIMENT)
+
+    return {
+        "risk_flags": existing_risk_flags,
+        "critical_flags": existing_critical_flags,
+        "current_node": NODE_SENTIMENT_ESCALATION,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -251,14 +456,6 @@ def macro_node(state: InvestmentState) -> dict[str, Any]:
 def risk_node(state: InvestmentState) -> dict[str, Any]:
     """
     Stub for the Risk Officer agent (implemented in T-039).
-
-    Reads all prior research agent outputs and the debate transcript to
-    identify governance failures, fraud indicators, regulatory risks,
-    and concentration risks.
-
-    Current behaviour (skeleton): returns a sentinel output dict with
-    ``error="not_implemented"`` so the graph compiles and downstream
-    nodes can still run.
 
     Args:
         state: Current InvestmentState after debate loop completion.
@@ -292,11 +489,6 @@ def contrarian_node(state: InvestmentState) -> dict[str, Any]:
     """
     Stub for the Contrarian Investor agent (implemented in T-040).
 
-    Its only job: disagree. Finds flaws in every bullish thesis.
-
-    Current behaviour (skeleton): returns a sentinel output dict so
-    the graph compiles correctly.
-
     Args:
         state: Current InvestmentState after research agents complete.
 
@@ -304,7 +496,7 @@ def contrarian_node(state: InvestmentState) -> dict[str, Any]:
         Partial state dict with sentinel ``contrarian`` output.
     """
     logger.info(
-        "contrarian_node: STUB -- Contrarian Investor not yet " "implemented (T-040)"
+        "contrarian_node: STUB -- Contrarian Investor not yet implemented (T-040)"
     )
     return {
         "contrarian": {
@@ -317,8 +509,8 @@ def contrarian_node(state: InvestmentState) -> dict[str, Any]:
             "challenged_agents": [],
             "overlooked_risks": [],
             "bear_conviction": 1,
-            "strongest_argument": ("Contrarian stub -- full analysis in T-040."),
-            "summary": ("Contrarian Investor stub -- full analysis in T-040."),
+            "strongest_argument": "Contrarian stub -- full analysis in T-040.",
+            "summary": "Contrarian Investor stub -- full analysis in T-040.",
         },
         "current_node": NODE_CONTRARIAN,
     }
@@ -328,21 +520,13 @@ def valuation_node(state: InvestmentState) -> dict[str, Any]:
     """
     Stub for the Valuation Agent (implemented in T-041).
 
-    Runs a DCF valuation model and compares PE/PB/EV-EBITDA against
-    sector peers.
-
-    Current behaviour (skeleton): returns a sentinel output dict so
-    the graph compiles correctly.
-
     Args:
         state: Current InvestmentState after debate and risk assessment.
 
     Returns:
         Partial state dict with sentinel ``valuation`` output.
     """
-    logger.info(
-        "valuation_node: STUB -- Valuation Agent not yet " "implemented (T-041)"
-    )
+    logger.info("valuation_node: STUB -- Valuation Agent not yet implemented (T-041)")
     return {
         "valuation": {
             "agent_name": "valuation_agent",
@@ -361,12 +545,6 @@ def valuation_node(state: InvestmentState) -> dict[str, Any]:
 def portfolio_manager_node(state: InvestmentState) -> dict[str, Any]:
     """
     Stub for the Portfolio Manager agent (implemented in T-042/T-043).
-
-    Reads the complete InvestmentState and delivers the final
-    BUY/HOLD/SELL verdict with a conviction score and memo.
-
-    Current behaviour (skeleton): returns a sentinel output dict so
-    the graph compiles and can reach END.
 
     Args:
         state: Fully-populated InvestmentState (all agents complete).
@@ -411,6 +589,9 @@ __all__ = [
     "NODE_TECHNICAL",
     "NODE_SENTIMENT",
     "NODE_MACRO",
+    "NODE_RESEARCH_JOIN",
+    "NODE_ERROR_HANDLER",
+    "NODE_SENTIMENT_ESCALATION",
     "NODE_RISK",
     "NODE_CONTRARIAN",
     "NODE_VALUATION",
@@ -421,6 +602,9 @@ __all__ = [
     "technical_node",
     "sentiment_node",
     "macro_node",
+    "research_join_node",
+    "error_handler_node",
+    "sentiment_escalation_node",
     "risk_node",
     "contrarian_node",
     "valuation_node",

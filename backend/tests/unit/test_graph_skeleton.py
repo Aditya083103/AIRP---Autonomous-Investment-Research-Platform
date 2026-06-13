@@ -39,12 +39,15 @@ os.environ.setdefault("ENVIRONMENT", "test")
 
 from backend.graph.nodes import (  # noqa: E402
     NODE_CONTRARIAN,
+    NODE_ERROR_HANDLER,
     NODE_FUNDAMENTAL,
     NODE_MACRO,
     NODE_PLANNER,
     NODE_PORTFOLIO_MANAGER,
+    NODE_RESEARCH_JOIN,
     NODE_RISK,
     NODE_SENTIMENT,
+    NODE_SENTIMENT_ESCALATION,
     NODE_TECHNICAL,
     NODE_VALUATION,
     contrarian_node,
@@ -82,6 +85,9 @@ _ALL_NODE_NAMES: list[str] = [
     NODE_TECHNICAL,
     NODE_SENTIMENT,
     NODE_MACRO,
+    NODE_RESEARCH_JOIN,
+    NODE_ERROR_HANDLER,
+    NODE_SENTIMENT_ESCALATION,
     NODE_CONTRARIAN,
     NODE_RISK,
     NODE_VALUATION,
@@ -300,11 +306,12 @@ class TestNodeRegistration:
         assert NODE_PORTFOLIO_MANAGER in nodes
 
     def test_exactly_nine_content_nodes(self) -> None:
-        """Exactly 9 content nodes (excludes __start__ and __end__)."""
+        """Exactly 12 content nodes (9 original + 3 T-032 nodes;
+        excludes __start__ and __end__)."""
         nodes = self._get_nodes()
         content_nodes = [n for n in nodes if not n.startswith("__")]
-        assert len(content_nodes) == 9, (
-            f"Expected 9 content nodes, got {len(content_nodes)}: " f"{content_nodes}"
+        assert len(content_nodes) == 12, (
+            f"Expected 11 content nodes, got {len(content_nodes)}: " f"{content_nodes}"
         )
 
 
@@ -664,25 +671,31 @@ class TestRoutingFunctions:
         }
         assert route_after_research(state) == ROUTE_PROCEED
 
-    def test_route_research_partial_errors_still_proceeds(self) -> None:
-        """Skeleton: partial agent errors do not abort the pipeline."""
+    def test_route_research_fundamental_error_routes_to_error_handler(self) -> None:
+        """T-032: fundamental["error"] non-null -> ROUTE_ERROR, not ROUTE_PROCEED."""
         state = _make_state()
         state["fundamental"] = {
             "agent_name": "fundamental_analyst",
             "error": "API timeout",
         }
         state["technical"] = {"agent_name": "technical_analyst", "signal": "HOLD"}
-        assert route_after_research(state) == ROUTE_PROCEED
+        from backend.graph.routing import ROUTE_ERROR
 
-    def test_route_research_all_errors_still_proceeds_in_skeleton(self) -> None:
-        """Skeleton always proceeds -- Phase 4 will add abort logic."""
+        assert route_after_research(state) == ROUTE_ERROR
+
+    def test_route_research_all_errors_fundamental_routes_to_error_handler(
+        self,
+    ) -> None:
+        """T-032: when fundamental has an error, ROUTE_ERROR takes priority."""
         state = _make_state()
         for field in ("fundamental", "technical", "sentiment", "macro"):
             cast(Any, state)[field] = {
                 "agent_name": field,
                 "error": "failed",
             }
-        assert route_after_research(state) == ROUTE_PROCEED
+        from backend.graph.routing import ROUTE_ERROR
+
+        assert route_after_research(state) == ROUTE_ERROR
 
     def test_route_research_empty_state_returns_proceed(self) -> None:
         empty: InvestmentState = cast(InvestmentState, {})
