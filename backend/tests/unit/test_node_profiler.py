@@ -34,7 +34,7 @@ so tests don't accidentally race against the 30-second limit.
 
 import logging
 import os
-from typing import Any
+from typing import Any, Literal
 from unittest.mock import MagicMock, patch
 
 os.environ.setdefault("ENVIRONMENT", "test")
@@ -278,7 +278,7 @@ class TestProfileNodeTimeout:
                     elapsed_s=seconds + 1.0,
                 )
 
-            def __exit__(self, *args: Any) -> bool:
+            def __exit__(self, *args: Any) -> Literal[False]:
                 return False
 
         return _AlwaysTimeout()
@@ -569,7 +569,7 @@ class TestNodesIntegration:
 
     def _run_node(self, node_fn: Any, state: dict[str, Any]) -> dict[str, Any]:
         """Run a node function and return its partial dict."""
-        return node_fn(state)  # type: ignore[no-untyped-call]
+        return node_fn(state)  # type: ignore[no-any-return]
 
     def test_planner_node_adds_latency(self) -> None:
         from backend.graph.nodes import planner_node
