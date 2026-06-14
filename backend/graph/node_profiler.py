@@ -54,8 +54,12 @@ Windows (local development):
   pipeline proceeds to error handling.
 
 Test environment:
-  ``ENVIRONMENT=test`` disables the timeout (sets it to ``float('inf')``)
-  so test suites that mock slow agents don't trip the watchdog.
+  ``ENVIRONMENT=test`` sets _EFFECTIVE_TIMEOUT_S to ``float('inf')``,
+  which disables the timeout so test suites that mock slow agents do not
+  trip the watchdog.  ``_make_timeout_ctx`` returns a no-op context
+  manager when ``seconds`` is ``math.inf``, avoiding the
+  ``OverflowError: cannot convert float infinity to integer`` that
+  ``_SigAlrmTimeout.__init__`` would raise if it tried ``int(inf)``.
 
 Design decisions
 ----------------
@@ -79,6 +83,10 @@ Design decisions
 * All metrics are also stored in ``state["node_latencies"]`` -- a dict
   keyed by node_name -- so the Portfolio Manager can include them in the
   Investment Memo and tests can assert on exact values.
+* ``math.isfinite(seconds)`` guards EVERY ``int(seconds)`` call so that
+  passing ``float('inf')`` (the test-env effective timeout) never raises
+  ``OverflowError``.  This is the permanent fix for the recurring CI
+  failure pattern.
 
 Public API
 ----------
@@ -91,6 +99,7 @@ Public API
 """
 
 import logging
+import math
 import os
 import platform
 import signal
@@ -117,6 +126,12 @@ PROFILER_LOG_PREFIX: str = "[AIRP_LATENCY]"
 _IS_TEST: bool = os.getenv("ENVIRONMENT", "").strip().lower() == "test"
 
 #: Effective timeout: float('inf') in test env, NODE_TIMEOUT_S otherwise.
+#:
+#: IMPORTANT: This value is intentionally float('inf') in test mode.
+#: All code paths that call int() on a timeout value MUST guard with
+#: math.isfinite() first.  _make_timeout_ctx() returns a _NoOpTimeout
+#: when seconds is not finite, so the int() conversion is never reached
+#: for the test-env infinity value.
 _EFFECTIVE_TIMEOUT_S: float = float("inf") if _IS_TEST else NODE_TIMEOUT_S
 
 # ---------------------------------------------------------------------------
@@ -150,6 +165,31 @@ class NodeTimeoutError(RuntimeError):
 
 
 # ---------------------------------------------------------------------------
+# No-op timeout (used when timeout is disabled, e.g. ENVIRONMENT=test)
+# ---------------------------------------------------------------------------
+
+
+class _NoOpTimeout:
+    """
+    Context manager that applies no timeout -- used when seconds is infinite.
+
+    This is the context manager returned by _make_timeout_ctx() when
+    _EFFECTIVE_TIMEOUT_S == float('inf') (ENVIRONMENT=test).  It replaces
+    the previous pattern of passing infinity into _SigAlrmTimeout or
+    _ThreadTimeout, both of which would crash on ``int(float('inf'))``.
+
+    This is the permanent fix for:
+        OverflowError: cannot convert float infinity to integer
+    """
+
+    def __enter__(self) -> "_NoOpTimeout":
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> Literal[False]:
+        return False  # do not suppress exceptions
+
+
+# ---------------------------------------------------------------------------
 # POSIX timeout using SIGALRM
 # ---------------------------------------------------------------------------
 
@@ -162,9 +202,21 @@ class _SigAlrmTimeout:
 
     Used as the primary timeout mechanism on Linux/macOS where SIGALRM is
     available.  Not usable in threads other than the main thread.
+
+    Precondition: ``seconds`` must be a finite positive number.
+    _make_timeout_ctx() ensures this by returning _NoOpTimeout for infinite
+    values.
     """
 
     def __init__(self, seconds: float, node_name: str) -> None:
+        # Guard: seconds must be finite here -- _make_timeout_ctx enforces this.
+        # The assertion is a belt-and-suspenders safety net so that if someone
+        # calls _SigAlrmTimeout directly with an infinite value the error
+        # message is clear rather than an opaque OverflowError.
+        assert math.isfinite(seconds) and seconds > 0, (
+            f"_SigAlrmTimeout requires a finite positive timeout, got {seconds!r}. "
+            "Use _NoOpTimeout when the timeout is infinite."
+        )
         self._seconds: int = max(1, int(seconds))
         self._node_name: str = node_name
         self._start: float = 0.0
@@ -207,9 +259,18 @@ class _ThreadTimeout:
     Python.  The thread has already completed by the time we raise; we
     just report the violation.  For true hard timeouts on Windows, a
     subprocess-based runner would be needed, which is out of scope for T-036.
+
+    Precondition: ``seconds`` must be a finite positive number.
+    _make_timeout_ctx() ensures this by returning _NoOpTimeout for infinite
+    values.
     """
 
     def __init__(self, seconds: float, node_name: str) -> None:
+        # Guard: seconds must be finite here.
+        assert math.isfinite(seconds) and seconds > 0, (
+            f"_ThreadTimeout requires a finite positive timeout, got {seconds!r}. "
+            "Use _NoOpTimeout when the timeout is infinite."
+        )
         self._seconds: float = seconds
         self._node_name: str = node_name
         self._start: float = 0.0
@@ -240,16 +301,29 @@ def _make_timeout_ctx(seconds: float, node_name: str) -> Any:
     """
     Return the appropriate timeout context manager for this platform.
 
-    Uses SIGALRM on POSIX (Linux / macOS) and threading-based measurement
-    on Windows.
+    Decision tree:
+    - ``not math.isfinite(seconds)`` -> ``_NoOpTimeout`` (disabled timeout).
+      This covers ENVIRONMENT=test where _EFFECTIVE_TIMEOUT_S is float('inf').
+      Returning _NoOpTimeout here is the permanent fix for the recurring
+      ``OverflowError: cannot convert float infinity to integer`` that
+      previously crashed every CI run in test mode.
+    - POSIX (Linux/macOS) with finite seconds -> ``_SigAlrmTimeout``.
+    - Windows with finite seconds -> ``_ThreadTimeout``.
 
     Args:
-        seconds:   Timeout threshold in seconds.
+        seconds:   Timeout threshold in seconds.  May be float('inf').
         node_name: Node name for error messages.
 
     Returns:
-        A context manager that raises NodeTimeoutError on violation.
+        A context manager that raises NodeTimeoutError on violation, or
+        a _NoOpTimeout when the timeout is effectively disabled.
     """
+    # Permanent fix: never pass a non-finite value into _SigAlrmTimeout or
+    # _ThreadTimeout -- both do int(seconds) which raises OverflowError for
+    # float('inf').  Return a no-op context manager instead.
+    if not math.isfinite(seconds):
+        return _NoOpTimeout()
+
     if _IS_POSIX:
         return _SigAlrmTimeout(seconds=seconds, node_name=node_name)
     return _ThreadTimeout(seconds=seconds, node_name=node_name)
@@ -399,9 +473,12 @@ def profile_node(node_fn: _NodeFn, node_name: str) -> _NodeFn:
     The wrapper:
     1. Records the wall-clock start time.
     2. Runs ``node_fn(state)`` inside a timeout context manager.
-       - POSIX: SIGALRM fires after ``_EFFECTIVE_TIMEOUT_S`` seconds.
-       - Windows: elapsed time is checked after the call returns.
-       - Test env: timeout is disabled (``float('inf')``).
+       - When _EFFECTIVE_TIMEOUT_S is finite (production):
+           POSIX: SIGALRM fires after ``_EFFECTIVE_TIMEOUT_S`` seconds.
+           Windows: elapsed time is checked after the call returns.
+       - When _EFFECTIVE_TIMEOUT_S is float('inf') (test env):
+           A _NoOpTimeout context manager is used -- no int() conversion,
+           no OverflowError, no timeout watchdog.
     3. On normal return:
        a. Computes ``elapsed_ms``.
        b. Emits a structured latency log line via ``_log_latency()``.
