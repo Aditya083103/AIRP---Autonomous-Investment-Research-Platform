@@ -35,6 +35,22 @@ from unittest.mock import MagicMock, patch
 
 os.environ.setdefault("ENVIRONMENT", "test")
 
+import pytest  # noqa: E402
+
+# ---------------------------------------------------------------------------
+# T-033: patch _run_persist so graph tests never touch the database
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _no_db_persist(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Prevent state_persistence from opening DB connections in graph tests."""
+    monkeypatch.setattr(
+        "backend.graph.nodes._run_persist",
+        lambda *args, **kwargs: None,
+    )
+
+
 from backend.graph.graph import (  # noqa: E402
     PARALLEL_OVERHEAD_S,
     RESEARCH_NODE_NAMES,
