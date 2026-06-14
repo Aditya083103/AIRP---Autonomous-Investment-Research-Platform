@@ -180,15 +180,13 @@ class _SigAlrmTimeout:
 
     def __enter__(self) -> "_SigAlrmTimeout":
         self._start = time.perf_counter()
-        self._old_handler = signal.signal(
-            signal.SIGALRM, self._handler  # type: ignore[attr-defined]
-        )
-        signal.alarm(self._seconds)  # type: ignore[attr-defined]
+        self._old_handler = signal.signal(signal.SIGALRM, self._handler)
+        signal.alarm(self._seconds)
         return self
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> Literal[False]:
-        signal.alarm(0)  # type: ignore[attr-defined]
-        signal.signal(signal.SIGALRM, self._old_handler)  # type: ignore[attr-defined]
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, self._old_handler)
         return False  # do not suppress exceptions
 
 
