@@ -1,6 +1,6 @@
 # backend/graph/graph.py
 """
-AIRP -- LangGraph StateGraph with Conditional Routing (T-031 / T-032)
+AIRP -- LangGraph StateGraph with Conditional Routing (T-031 / T-032 / T-034)
 
 The AIRP investment analysis pipeline expressed as a LangGraph StateGraph.
 T-032 extends T-031 to wire two conditional routing paths after the research
@@ -73,6 +73,9 @@ Design decisions
 * ``build_graph()`` is a factory function so tests can call it
   multiple times without state leaking between runs.
 * ``get_compiled_graph()`` is an lru_cache singleton for production.
+* T-034: ``export_mermaid_diagram`` is called at the end of ``build_graph()``
+  to write ``docs/GRAPH_DIAGRAM.md`` after every compile.  In ENVIRONMENT=test
+  the export is skipped so tests do not touch the filesystem.
 
 Public API
 ----------
@@ -91,6 +94,7 @@ from typing import Any, cast
 
 from langgraph.graph import END, START, StateGraph
 
+from backend.graph.graph_visualisation import export_mermaid_diagram
 from backend.graph.nodes import (
     NODE_CONTRARIAN,
     NODE_ERROR_HANDLER,
@@ -265,6 +269,12 @@ def build_graph() -> Any:
         len(RESEARCH_NODE_NAMES),
         len(ROUTING_NODE_NAMES),
     )
+
+    # -- 11. Export Mermaid diagram (T-034) --------------------------------
+    # Skipped automatically in ENVIRONMENT=test.
+    # I/O errors are swallowed inside export_mermaid_diagram (non-fatal).
+    export_mermaid_diagram(compiled)
+
     return compiled
 
 
@@ -296,4 +306,5 @@ __all__ = [
     "PARALLEL_OVERHEAD_S",
     "RESEARCH_NODE_NAMES",
     "ROUTING_NODE_NAMES",
+    "export_mermaid_diagram",
 ]
