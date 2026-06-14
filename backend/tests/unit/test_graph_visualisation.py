@@ -173,7 +173,7 @@ class TestExportSkippedInTestEnv:
 
     def test_skips_even_with_bad_graph(self) -> None:
         """A broken compiled graph object must not cause a crash in test env."""
-        export_mermaid_diagram(None)  # type: ignore[arg-type]
+        export_mermaid_diagram(None)
 
 
 # ---------------------------------------------------------------------------

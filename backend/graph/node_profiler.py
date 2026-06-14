@@ -95,7 +95,7 @@ import os
 import platform
 import signal
 import time
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 logger = logging.getLogger(__name__)
 
@@ -180,13 +180,13 @@ class _SigAlrmTimeout:
 
     def __enter__(self) -> "_SigAlrmTimeout":
         self._start = time.perf_counter()
-        self._old_handler = signal.signal(  # type: ignore[attr-defined]
+        self._old_handler = signal.signal(
             signal.SIGALRM, self._handler  # type: ignore[attr-defined]
         )
         signal.alarm(self._seconds)  # type: ignore[attr-defined]
         return self
 
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> Literal[False]:
         signal.alarm(0)  # type: ignore[attr-defined]
         signal.signal(signal.SIGALRM, self._old_handler)  # type: ignore[attr-defined]
         return False  # do not suppress exceptions
@@ -220,7 +220,7 @@ class _ThreadTimeout:
         self._start = time.perf_counter()
         return self
 
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> Literal[False]:
         if exc_type is None:
             # No exception from the node -- check elapsed time.
             elapsed = time.perf_counter() - self._start

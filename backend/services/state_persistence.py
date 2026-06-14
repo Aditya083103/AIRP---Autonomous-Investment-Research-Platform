@@ -144,7 +144,7 @@ class StatePersistenceService:
             )
             await self._session.commit()
 
-            rows_affected: int = result.rowcount  # type: ignore[union-attr]
+            rows_affected: int = result.rowcount  # type: ignore[attr-defined]
             if rows_affected == 0:
                 logger.warning(
                     "state_persistence.save: no analyses row for job_id=%s "
