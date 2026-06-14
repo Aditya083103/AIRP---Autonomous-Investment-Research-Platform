@@ -41,16 +41,6 @@ ignore_missing_imports = true
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-# _SigAlrmTimeout uses signal.SIGALRM / signal.alarm which exist on POSIX
-# (Linux/macOS) but not on Windows. mypy's bundled signal stubs include these
-# on Linux (CI), so the attr-defined ignores are flagged as unused there, yet
-# they ARE needed on Windows (local dev). Disabling warn_unused_ignores for
-# this single module keeps both environments green without weakening anything
-# else.
-module = ["backend.graph.node_profiler"]
-warn_unused_ignores = false
-
-[[tool.mypy.overrides]]
 module = ["backend.tests.*", "tests.*"]
 disallow_untyped_defs = false
 disallow_untyped_calls = false
