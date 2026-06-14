@@ -1,6 +1,6 @@
 # backend/graph/nodes.py
 """
-AIRP -- LangGraph Node Functions (T-030 / T-031 / T-032 / T-033)
+AIRP -- LangGraph Node Functions (T-030 / T-031 / T-032 / T-033 / T-036)
 
 Thin wrapper functions that adapt each agent's public API to the
 LangGraph node contract: receive InvestmentState, return a partial
@@ -47,6 +47,14 @@ T-033 persistence wrappers (sequential nodes only):
     sentiment_escalation_node, contrarian_node, risk_node,
     valuation_node, portfolio_manager_node
 
+T-036 performance profiling (all nodes including parallel research):
+    profile_node() wraps every impl function as the INNER layer so it
+    measures only the agent business logic (not DB persistence time).
+    _persist_after wraps the profiled function as the OUTER layer.
+    Composition order: impl -> profile_node -> _persist_after -> node
+    For parallel research nodes (no persistence wrapper), composition
+    is: impl -> profile_node -> node
+
 Design decisions
 ----------------
 * NO ``from __future__ import annotations`` -- established AIRP rule.
@@ -83,6 +91,7 @@ from backend.agents.fundamental_analyst import run_fundamental_analysis
 from backend.agents.macro_economist import run_macro_analysis
 from backend.agents.sentiment_analyst import run_sentiment_analysis
 from backend.agents.technical_analyst import run_technical_analysis
+from backend.graph.node_profiler import NodeTimeoutError, profile_node
 from backend.graph.state import InvestmentState
 
 logger = logging.getLogger(__name__)
@@ -241,7 +250,9 @@ def _planner_node_impl(state: InvestmentState) -> dict[str, Any]:
     }
 
 
-planner_node: _NodeFn = _persist_after(_planner_node_impl, NODE_PLANNER)
+planner_node: _NodeFn = _persist_after(
+    profile_node(_planner_node_impl, NODE_PLANNER), NODE_PLANNER
+)
 
 # ---------------------------------------------------------------------------
 # Phase 2 research agent nodes -- NOT wrapped (parallel super-step)
@@ -262,7 +273,7 @@ def fundamental_node(state: InvestmentState) -> dict[str, Any]:
         "fundamental_node: running for ticker=%s",
         state.get("ticker", "unknown"),
     )
-    return run_fundamental_analysis(state)
+    return profile_node(run_fundamental_analysis, NODE_FUNDAMENTAL)(state)
 
 
 def technical_node(state: InvestmentState) -> dict[str, Any]:
@@ -278,7 +289,7 @@ def technical_node(state: InvestmentState) -> dict[str, Any]:
         "technical_node: running for ticker=%s",
         state.get("ticker", "unknown"),
     )
-    return run_technical_analysis(state)
+    return profile_node(run_technical_analysis, NODE_TECHNICAL)(state)
 
 
 def sentiment_node(state: InvestmentState) -> dict[str, Any]:
@@ -294,7 +305,7 @@ def sentiment_node(state: InvestmentState) -> dict[str, Any]:
         "sentiment_node: running for ticker=%s",
         state.get("ticker", "unknown"),
     )
-    return run_sentiment_analysis(state)
+    return profile_node(run_sentiment_analysis, NODE_SENTIMENT)(state)
 
 
 def macro_node(state: InvestmentState) -> dict[str, Any]:
@@ -310,7 +321,7 @@ def macro_node(state: InvestmentState) -> dict[str, Any]:
         "macro_node: running for ticker=%s",
         state.get("ticker", "unknown"),
     )
-    return run_macro_analysis(state)
+    return profile_node(run_macro_analysis, NODE_MACRO)(state)
 
 
 # ---------------------------------------------------------------------------
@@ -335,7 +346,9 @@ def _research_join_impl(state: InvestmentState) -> dict[str, Any]:
     return {"current_node": NODE_RESEARCH_JOIN}
 
 
-research_join_node: _NodeFn = _persist_after(_research_join_impl, NODE_RESEARCH_JOIN)
+research_join_node: _NodeFn = _persist_after(
+    profile_node(_research_join_impl, NODE_RESEARCH_JOIN), NODE_RESEARCH_JOIN
+)
 
 # ---------------------------------------------------------------------------
 # T-032 routing nodes -- persistence-wrapped (run in own sequential steps)
@@ -385,7 +398,9 @@ def _error_handler_impl(state: InvestmentState) -> dict[str, Any]:
     }
 
 
-error_handler_node: _NodeFn = _persist_after(_error_handler_impl, NODE_ERROR_HANDLER)
+error_handler_node: _NodeFn = _persist_after(
+    profile_node(_error_handler_impl, NODE_ERROR_HANDLER), NODE_ERROR_HANDLER
+)
 
 
 def _sentiment_escalation_impl(state: InvestmentState) -> dict[str, Any]:
@@ -431,7 +446,8 @@ def _sentiment_escalation_impl(state: InvestmentState) -> dict[str, Any]:
 
 
 sentiment_escalation_node: _NodeFn = _persist_after(
-    _sentiment_escalation_impl, NODE_SENTIMENT_ESCALATION
+    profile_node(_sentiment_escalation_impl, NODE_SENTIMENT_ESCALATION),
+    NODE_SENTIMENT_ESCALATION,
 )
 
 # ---------------------------------------------------------------------------
@@ -462,7 +478,7 @@ def _risk_impl(state: InvestmentState) -> dict[str, Any]:
     }
 
 
-risk_node: _NodeFn = _persist_after(_risk_impl, NODE_RISK)
+risk_node: _NodeFn = _persist_after(profile_node(_risk_impl, NODE_RISK), NODE_RISK)
 
 
 def _contrarian_impl(state: InvestmentState) -> dict[str, Any]:
@@ -487,7 +503,9 @@ def _contrarian_impl(state: InvestmentState) -> dict[str, Any]:
     }
 
 
-contrarian_node: _NodeFn = _persist_after(_contrarian_impl, NODE_CONTRARIAN)
+contrarian_node: _NodeFn = _persist_after(
+    profile_node(_contrarian_impl, NODE_CONTRARIAN), NODE_CONTRARIAN
+)
 
 
 def _valuation_impl(state: InvestmentState) -> dict[str, Any]:
@@ -507,7 +525,9 @@ def _valuation_impl(state: InvestmentState) -> dict[str, Any]:
     }
 
 
-valuation_node: _NodeFn = _persist_after(_valuation_impl, NODE_VALUATION)
+valuation_node: _NodeFn = _persist_after(
+    profile_node(_valuation_impl, NODE_VALUATION), NODE_VALUATION
+)
 
 
 def _portfolio_manager_impl(state: InvestmentState) -> dict[str, Any]:
@@ -537,7 +557,8 @@ def _portfolio_manager_impl(state: InvestmentState) -> dict[str, Any]:
 
 
 portfolio_manager_node: _NodeFn = _persist_after(
-    _portfolio_manager_impl, NODE_PORTFOLIO_MANAGER
+    profile_node(_portfolio_manager_impl, NODE_PORTFOLIO_MANAGER),
+    NODE_PORTFOLIO_MANAGER,
 )
 
 # ---------------------------------------------------------------------------
@@ -558,6 +579,8 @@ __all__ = [
     "NODE_CONTRARIAN",
     "NODE_VALUATION",
     "NODE_PORTFOLIO_MANAGER",
+    # T-036 profiler exports
+    "NodeTimeoutError",
     # Node functions
     "planner_node",
     "fundamental_node",
