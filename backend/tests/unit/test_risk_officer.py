@@ -1143,7 +1143,9 @@ class TestTracingIntegration:
 
     def test_wrapped_function_is_callable(self) -> None:
         # __wrapped__ is set by functools.wraps inside traced_agent decorator.
-        # We already confirmed hasattr in test_run_risk_analysis_is_traced.
-        # Access via __wrapped__ directly -- mypy sees the attr via the assert.
+        # Use hasattr only -- direct attribute access causes mypy[misc] when
+        # langsmith is installed in CI (warn_unused_ignores fires on strict mode).
         assert hasattr(run_risk_analysis, "__wrapped__")
-        assert callable(run_risk_analysis.__wrapped__)  # type: ignore[misc]
+        wrapped = getattr(run_risk_analysis, "__wrapped__", None)
+        assert wrapped is not None
+        assert callable(wrapped)
