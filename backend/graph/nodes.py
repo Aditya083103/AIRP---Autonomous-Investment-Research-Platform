@@ -87,6 +87,7 @@ from datetime import datetime
 import logging
 from typing import Any, Callable
 
+from backend.agents.contrarian_investor import run_contrarian_analysis
 from backend.agents.fundamental_analyst import run_fundamental_analysis
 from backend.agents.macro_economist import run_macro_analysis
 from backend.agents.risk_officer import run_risk_analysis
@@ -473,25 +474,16 @@ risk_node: _NodeFn = _persist_after(profile_node(_risk_impl, NODE_RISK), NODE_RI
 
 
 def _contrarian_impl(state: InvestmentState) -> dict[str, Any]:
-    logger.info(
-        "contrarian_node: STUB -- Contrarian Investor not yet implemented (T-040)"
-    )
-    return {
-        "contrarian": {
-            "agent_name": "contrarian_investor",
-            "analysis_id": state.get("job_id", "unknown"),
-            "company_name": state.get("company_name", "unknown"),
-            "ticker": state.get("ticker", "unknown"),
-            "error": "not_implemented: contrarian_investor stub (T-040)",
-            "counter_arguments": [],
-            "challenged_agents": [],
-            "overlooked_risks": [],
-            "bear_conviction": 1,
-            "strongest_argument": "Contrarian stub -- full analysis in T-040.",
-            "summary": "Contrarian Investor stub -- full analysis in T-040.",
-        },
-        "current_node": NODE_CONTRARIAN,
-    }
+    """
+    Delegate to the real Contrarian Investor agent (T-038).
+
+    run_contrarian_analysis reads fundamental, technical, sentiment, macro,
+    and risk from state, returning 'contrarian' and 'debate_round_count'.
+    We merge current_node into the returned dict for LangGraph tracking.
+    """
+    partial: dict[str, Any] = run_contrarian_analysis(state)
+    partial["current_node"] = NODE_CONTRARIAN
+    return partial
 
 
 contrarian_node: _NodeFn = _persist_after(
