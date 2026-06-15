@@ -89,6 +89,7 @@ from typing import Any, Callable
 
 from backend.agents.fundamental_analyst import run_fundamental_analysis
 from backend.agents.macro_economist import run_macro_analysis
+from backend.agents.risk_officer import run_risk_analysis
 from backend.agents.sentiment_analyst import run_sentiment_analysis
 from backend.agents.technical_analyst import run_technical_analysis
 from backend.graph.node_profiler import NodeTimeoutError, profile_node
@@ -451,31 +452,21 @@ sentiment_escalation_node: _NodeFn = _persist_after(
 )
 
 # ---------------------------------------------------------------------------
-# Phase 4 stub nodes -- persistence-wrapped stubs
+# Phase 4 nodes -- T-037 Risk Officer is now fully implemented
 # ---------------------------------------------------------------------------
 
 
 def _risk_impl(state: InvestmentState) -> dict[str, Any]:
-    logger.info("risk_node: STUB -- Risk Officer not yet implemented (T-039)")
-    return {
-        "risk": {
-            "agent_name": "risk_officer",
-            "analysis_id": state.get("job_id", "unknown"),
-            "company_name": state.get("company_name", "unknown"),
-            "ticker": state.get("ticker", "unknown"),
-            "error": "not_implemented: risk_officer stub (T-039)",
-            "risk_score": 5,
-            "governance_risk": 5,
-            "regulatory_risk": 5,
-            "financial_risk": 5,
-            "concentration_risk": 5,
-            "risk_flags": [],
-            "critical_flags": [],
-            "risk_recommendation": "pending",
-            "summary": "Risk Officer stub -- full analysis in T-039.",
-        },
-        "current_node": NODE_RISK,
-    }
+    """
+    Delegate to the real Risk Officer agent (T-037).
+
+    run_risk_analysis reads fundamental, technical, sentiment, and macro
+    from state and returns a dict with keys: risk, risk_flags, critical_flags.
+    We merge current_node into the returned dict so LangGraph tracking works.
+    """
+    partial: dict[str, Any] = run_risk_analysis(state)
+    partial["current_node"] = NODE_RISK
+    return partial
 
 
 risk_node: _NodeFn = _persist_after(profile_node(_risk_impl, NODE_RISK), NODE_RISK)
