@@ -326,12 +326,64 @@ class TestParallelTiming:
         )
         sa_mock = self._make_agent_mock("sentiment", self._SLEEP_SA, "news_sentiment")
         ma_mock = self._make_agent_mock("macro", self._SLEEP_MA, "macro_economist")
+        # Phase 4 agent mocks -- prevent real LLM/API calls from inflating latency
+        _contrarian_out: dict[str, Any] = {
+            "contrarian": {
+                "agent_name": "contrarian_investor",
+                "bear_conviction": 3,
+                "counter_arguments": ["Mock challenge"],
+                "overlooked_risks": [],
+                "challenged_agents": [],
+                "strongest_argument": "Mock argument",
+                "summary": "Mock summary",
+                "error": None,
+            },
+            "debate_round_count": 1,
+        }
+        _risk_out: dict[str, Any] = {
+            "risk": {
+                "agent_name": "risk_officer",
+                "risk_score": 4,
+                "governance_risk": 4,
+                "regulatory_risk": 4,
+                "financial_risk": 4,
+                "concentration_risk": 4,
+                "risk_flags": [],
+                "critical_flags": [],
+                "risk_recommendation": "proceed_with_caution",
+                "summary": "Mock risk summary",
+                "error": None,
+            },
+            "risk_flags": [],
+            "critical_flags": [],
+        }
+        _valuation_out: dict[str, Any] = {
+            "valuation": {
+                "agent_name": "valuation_agent",
+                "valuation_verdict": "fairly_valued",
+                "peer_tickers": [],
+                "summary": "Mock valuation summary",
+                "error": None,
+            }
+        }
 
         with (
             patch("backend.graph.nodes.run_fundamental_analysis", fa_mock),
             patch("backend.graph.nodes.run_technical_analysis", ta_mock),
             patch("backend.graph.nodes.run_sentiment_analysis", sa_mock),
             patch("backend.graph.nodes.run_macro_analysis", ma_mock),
+            patch(
+                "backend.graph.nodes.run_contrarian_analysis",
+                return_value=_contrarian_out,
+            ),
+            patch(
+                "backend.graph.nodes.run_risk_analysis",
+                return_value=_risk_out,
+            ),
+            patch(
+                "backend.graph.nodes.run_valuation_analysis",
+                return_value=_valuation_out,
+            ),
             patch.dict(
                 os.environ,
                 {"LANGCHAIN_TRACING_V2": "false", "LANGSMITH_API_KEY": ""},
@@ -368,12 +420,64 @@ class TestParallelTiming:
         )
         sa_mock = self._make_agent_mock("sentiment", self._SLEEP_SA, "news_sentiment")
         ma_mock = self._make_agent_mock("macro", self._SLEEP_MA, "macro_economist")
+        # Phase 4 agent mocks -- prevent real LLM/API calls from inflating latency
+        _contrarian_out2: dict[str, Any] = {
+            "contrarian": {
+                "agent_name": "contrarian_investor",
+                "bear_conviction": 3,
+                "counter_arguments": ["Mock challenge"],
+                "overlooked_risks": [],
+                "challenged_agents": [],
+                "strongest_argument": "Mock argument",
+                "summary": "Mock summary",
+                "error": None,
+            },
+            "debate_round_count": 1,
+        }
+        _risk_out2: dict[str, Any] = {
+            "risk": {
+                "agent_name": "risk_officer",
+                "risk_score": 4,
+                "governance_risk": 4,
+                "regulatory_risk": 4,
+                "financial_risk": 4,
+                "concentration_risk": 4,
+                "risk_flags": [],
+                "critical_flags": [],
+                "risk_recommendation": "proceed_with_caution",
+                "summary": "Mock risk summary",
+                "error": None,
+            },
+            "risk_flags": [],
+            "critical_flags": [],
+        }
+        _valuation_out2: dict[str, Any] = {
+            "valuation": {
+                "agent_name": "valuation_agent",
+                "valuation_verdict": "fairly_valued",
+                "peer_tickers": [],
+                "summary": "Mock valuation summary",
+                "error": None,
+            }
+        }
 
         with (
             patch("backend.graph.nodes.run_fundamental_analysis", fa_mock),
             patch("backend.graph.nodes.run_technical_analysis", ta_mock),
             patch("backend.graph.nodes.run_sentiment_analysis", sa_mock),
             patch("backend.graph.nodes.run_macro_analysis", ma_mock),
+            patch(
+                "backend.graph.nodes.run_contrarian_analysis",
+                return_value=_contrarian_out2,
+            ),
+            patch(
+                "backend.graph.nodes.run_risk_analysis",
+                return_value=_risk_out2,
+            ),
+            patch(
+                "backend.graph.nodes.run_valuation_analysis",
+                return_value=_valuation_out2,
+            ),
             patch.dict(
                 os.environ,
                 {"LANGCHAIN_TRACING_V2": "false", "LANGSMITH_API_KEY": ""},

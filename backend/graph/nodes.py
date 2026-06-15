@@ -93,6 +93,7 @@ from backend.agents.macro_economist import run_macro_analysis
 from backend.agents.risk_officer import run_risk_analysis
 from backend.agents.sentiment_analyst import run_sentiment_analysis
 from backend.agents.technical_analyst import run_technical_analysis
+from backend.agents.valuation_agent import run_valuation_analysis
 from backend.graph.node_profiler import NodeTimeoutError, profile_node
 from backend.graph.state import InvestmentState
 
@@ -492,20 +493,15 @@ contrarian_node: _NodeFn = _persist_after(
 
 
 def _valuation_impl(state: InvestmentState) -> dict[str, Any]:
-    logger.info("valuation_node: STUB -- Valuation Agent not yet implemented (T-041)")
-    return {
-        "valuation": {
-            "agent_name": "valuation_agent",
-            "analysis_id": state.get("job_id", "unknown"),
-            "company_name": state.get("company_name", "unknown"),
-            "ticker": state.get("ticker", "unknown"),
-            "error": "not_implemented: valuation_agent stub (T-041)",
-            "valuation_verdict": "fairly_valued",
-            "peer_tickers": [],
-            "summary": "Valuation Agent stub -- full analysis in T-041.",
-        },
-        "current_node": NODE_VALUATION,
-    }
+    """
+    Delegate to the real Valuation Agent (T-039).
+
+    run_valuation_analysis fetches financials, ratios, and Screener.in
+    peer data, runs a DCF, and returns the 'valuation' dict.
+    """
+    partial: dict[str, Any] = run_valuation_analysis(state)
+    partial["current_node"] = NODE_VALUATION
+    return partial
 
 
 valuation_node: _NodeFn = _persist_after(
