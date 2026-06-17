@@ -55,6 +55,7 @@ def _no_db_persist(monkeypatch: pytest.MonkeyPatch) -> None:
 
 from backend.graph.nodes import (  # noqa: E402
     NODE_CONTRARIAN,
+    NODE_DEBATE_LOOP,
     NODE_ERROR_HANDLER,
     NODE_FUNDAMENTAL,
     NODE_MACRO,
@@ -105,6 +106,7 @@ _ALL_NODE_NAMES: list[str] = [
     NODE_ERROR_HANDLER,
     NODE_SENTIMENT_ESCALATION,
     NODE_CONTRARIAN,
+    NODE_DEBATE_LOOP,
     NODE_RISK,
     NODE_VALUATION,
     NODE_PORTFOLIO_MANAGER,
@@ -309,6 +311,11 @@ class TestNodeRegistration:
         nodes = self._get_nodes()
         assert NODE_CONTRARIAN in nodes
 
+    def test_debate_loop_registered(self) -> None:
+        """T-040: debate_loop node sits between contrarian and risk."""
+        nodes = self._get_nodes()
+        assert NODE_DEBATE_LOOP in nodes
+
     def test_risk_registered(self) -> None:
         nodes = self._get_nodes()
         assert NODE_RISK in nodes
@@ -322,12 +329,12 @@ class TestNodeRegistration:
         assert NODE_PORTFOLIO_MANAGER in nodes
 
     def test_exactly_nine_content_nodes(self) -> None:
-        """Exactly 12 content nodes (9 original + 3 T-032 nodes;
-        excludes __start__ and __end__)."""
+        """Exactly 13 content nodes (9 original + 3 T-032 nodes + 1 T-040
+        debate_loop node; excludes __start__ and __end__)."""
         nodes = self._get_nodes()
         content_nodes = [n for n in nodes if not n.startswith("__")]
-        assert len(content_nodes) == 12, (
-            f"Expected 11 content nodes, got {len(content_nodes)}: " f"{content_nodes}"
+        assert len(content_nodes) == 13, (
+            f"Expected 13 content nodes, got {len(content_nodes)}: " f"{content_nodes}"
         )
 
 

@@ -1,10 +1,46 @@
 # backend/graph/nodes.py
 """
-AIRP -- LangGraph Node Functions (T-030 / T-031 / T-032 / T-033 / T-036)
+AIRP -- LangGraph Node Functions (T-030 / T-031 / T-032 / T-033 / T-036 / T-040)
 
 Thin wrapper functions that adapt each agent's public API to the
 LangGraph node contract: receive InvestmentState, return a partial
 dict that LangGraph merges back into state.
+
+T-040 additions (multi-round debate loop)
+-------------------------------------------
+``debate_loop_node`` runs immediately after ``contrarian_node`` on every
+debate round.  Its job is the missing piece between T-038 (Contrarian
+agent that *decides* whether the consensus is wrong) and T-032's
+self-loop (which only counted rounds): it builds the actual
+``debate_rounds[]`` transcript entry that the acceptance criteria require.
+
+For each completed round it:
+  1. Reads the four research agents' outputs (fundamental, technical,
+     sentiment, macro) plus the Risk Officer's output, all already in
+     state from earlier nodes.
+  2. Reads the Contrarian's current-round output (bear_conviction,
+     strongest_argument, challenged_agents) -- this is the "challenge"
+     every other agent is reacting to.
+  3. Deterministically synthesises a short ``agent_responses`` dict:
+     one sentence per agent stating whether it holds its position or
+     concedes ground, based on whether the Contrarian explicitly
+     challenged it and how strong the challenge is (bear_conviction).
+     This is pure data transformation -- NO additional LLM calls --
+     so a 2-round debate stays well under the <3 minute acceptance
+     criterion (the only LLM cost per round is the Contrarian's own
+     call, already paid for by contrarian_node).
+  4. Appends one dict to ``state["debate_rounds"]`` matching the
+     ``DebateRound`` shape documented in ``backend.graph.state``:
+     ``{round_number, agent_responses, contrarian, completed_at}``.
+  5. Returns the updated ``debate_rounds`` list.  Termination (max
+     rounds OR no further escalation) is still decided by
+     ``route_after_contrarian`` in routing.py, evaluated immediately
+     after this node -- debate_loop_node never decides routing itself,
+     it only records what happened in the round that just finished.
+
+Topology change: contrarian_node -> debate_loop_node -> route_after_contrarian
+(previously contrarian_node -> route_after_contrarian directly).  This is
+purely additive; route_after_contrarian's decision logic is unchanged.
 
 T-033 additions (state persistence)
 -------------------------------------
@@ -34,18 +70,24 @@ Every node function follows the same pattern::
 
 LangGraph merges the returned dict into the current state automatically.
 
-T-032 topology (unchanged):
+T-040 topology:
     [fundamental]  --|
     [technical]    --+--> [research_join] --> route_after_research()
     [sentiment]    --|         |                    |
     [macro]        --|    ROUTE_ERROR -> [error_handler] -> [contrarian]
                           ROUTE_ESCALATE -> [sentiment_escalation] -> [contra]
                              ROUTE_PROCEED -> [contrarian]
+                                                   |
+                                          [debate_loop]  (T-040: NEW)
+                                                   |
+                                        route_after_contrarian()
+                                          |-- DEBATE_AGAIN -> [contrarian]
+                                          |-- PROCEED -> [risk_officer]
 
 T-033 persistence wrappers (sequential nodes only):
     planner_node, research_join_node, error_handler_node,
-    sentiment_escalation_node, contrarian_node, risk_node,
-    valuation_node, portfolio_manager_node
+    sentiment_escalation_node, contrarian_node, debate_loop_node,
+    risk_node, valuation_node, portfolio_manager_node
 
 T-036 performance profiling (all nodes including parallel research):
     profile_node() wraps every impl function as the INNER layer so it
@@ -77,7 +119,7 @@ Public API
         planner_node, fundamental_node, technical_node,
         sentiment_node, macro_node, research_join_node,
         error_handler_node, sentiment_escalation_node,
-        risk_node, contrarian_node, valuation_node,
+        risk_node, contrarian_node, debate_loop_node, valuation_node,
         portfolio_manager_node,
     )
 """
@@ -113,6 +155,7 @@ NODE_ERROR_HANDLER = "error_handler"
 NODE_SENTIMENT_ESCALATION = "sentiment_escalation"
 NODE_RISK = "risk_officer"
 NODE_CONTRARIAN = "contrarian_investor"
+NODE_DEBATE_LOOP = "debate_loop"
 NODE_VALUATION = "valuation_agent"
 NODE_PORTFOLIO_MANAGER = "portfolio_manager"
 
@@ -491,6 +534,188 @@ contrarian_node: _NodeFn = _persist_after(
     profile_node(_contrarian_impl, NODE_CONTRARIAN), NODE_CONTRARIAN
 )
 
+# ---------------------------------------------------------------------------
+# T-040 debate loop node -- builds the debate_rounds[] transcript entry
+# ---------------------------------------------------------------------------
+
+#: Bear conviction threshold above which an agent is described as having
+#: "conceded ground" rather than merely "acknowledged" the challenge.
+#: Matches the ROUTE_DEBATE_AGAIN threshold in routing.py (>= 7) so the
+#: transcript language stays consistent with the routing decision that
+#: follows immediately after this node.
+_CONCEDE_THRESHOLD = 7
+
+
+def _agent_response_text(
+    agent_field_name: str,
+    agent_label: str,
+    agent_out: dict[str, Any],
+    challenged_agents: list[str],
+    bear_conviction: int,
+) -> str:
+    """
+    Build one deterministic sentence describing how a single research
+    agent "responds" to the Contrarian's current-round challenge.
+
+    Pure function, no LLM call -- this keeps the debate loop fast enough
+    to satisfy the "<3min for 2 rounds" acceptance criterion regardless
+    of how many agents participate.
+
+    Three cases:
+      1. Agent output missing/errored -> neutral "no position" response.
+      2. Agent was named in challenged_agents -> reacts based on
+         bear_conviction (concede if >= _CONCEDE_THRESHOLD, otherwise
+         push back while acknowledging the point).
+      3. Agent was NOT named -> briefly reaffirms its original summary.
+
+    Args:
+        agent_field_name: InvestmentState key (e.g. "fundamental").
+        agent_label:       Human-readable agent name for the sentence.
+        agent_out:         The agent's own output dict (may be empty).
+        challenged_agents: Contrarian's challenged_agents list this round.
+        bear_conviction:   Contrarian's bear_conviction score (1-10).
+
+    Returns:
+        A single-sentence string capturing this agent's stance.
+    """
+    if not agent_out or agent_out.get("error"):
+        return f"{agent_label} has no position this round (data unavailable)."
+
+    own_summary: str = str(agent_out.get("summary") or "").strip()
+    was_challenged: bool = agent_field_name in challenged_agents or any(
+        agent_field_name in c for c in challenged_agents
+    )
+
+    if not was_challenged:
+        if own_summary:
+            return f"{agent_label} reaffirms its prior position: {own_summary}"
+        return f"{agent_label} reaffirms its prior position; no new evidence."
+
+    if bear_conviction >= _CONCEDE_THRESHOLD:
+        return (
+            f"{agent_label} concedes the Contrarian's challenge raises a "
+            f"material point and acknowledges elevated uncertainty in its "
+            f"original assessment."
+        )
+    return (
+        f"{agent_label} acknowledges the Contrarian's challenge but "
+        f"maintains its original assessment stands on the available evidence."
+    )
+
+
+def _build_agent_responses(
+    state: InvestmentState,
+    challenged_agents: list[str],
+    bear_conviction: int,
+) -> dict[str, str]:
+    """
+    Build the ``agent_responses`` dict for one debate round.
+
+    One entry per agent that has run by this point in the pipeline:
+    the four research agents plus the Risk Officer (when available --
+    Risk Officer runs AFTER the debate loop in the T-032/T-038 topology,
+    so on round 1 it is typically absent; this is handled gracefully by
+    ``_agent_response_text``'s "no position" branch).
+
+    Args:
+        state:              Current InvestmentState.
+        challenged_agents:  Contrarian's challenged_agents for this round.
+        bear_conviction:    Contrarian's bear_conviction for this round.
+
+    Returns:
+        Dict mapping agent_name -> one-sentence response string.
+    """
+    agents: list[tuple[str, str]] = [
+        ("fundamental", "Fundamental Analyst"),
+        ("technical", "Technical Analyst"),
+        ("sentiment", "News Sentiment Agent"),
+        ("macro", "Macro Economist"),
+        ("risk", "Risk Officer"),
+    ]
+
+    responses: dict[str, str] = {}
+    for field_name, label in agents:
+        agent_out: dict[str, Any] = dict(state.get(field_name) or {})
+        responses[field_name] = _agent_response_text(
+            agent_field_name=field_name,
+            agent_label=label,
+            agent_out=agent_out,
+            challenged_agents=challenged_agents,
+            bear_conviction=bear_conviction,
+        )
+    return responses
+
+
+def _debate_loop_impl(state: InvestmentState) -> dict[str, Any]:
+    """
+    Core debate_loop logic -- appends one entry to state["debate_rounds"].
+
+    Reads the Contrarian's output that was just written by contrarian_node
+    (the round that just completed) and synthesises every other agent's
+    deterministic response to it, then records the whole round as a single
+    dict matching the DebateRound shape documented in backend.graph.state.
+
+    Never raises -- on missing/malformed contrarian output it still
+    appends a degraded-but-valid round entry so debate_rounds[] always
+    grows by exactly one entry per loop iteration (acceptance criterion:
+    "debate_rounds[] contains responses from each agent").
+
+    Args:
+        state: InvestmentState immediately after contrarian_node ran.
+
+    Returns:
+        Partial state dict: {"debate_rounds": <updated list>}.
+    """
+    contrarian_out: dict[str, Any] = dict(state.get("contrarian") or {})
+
+    bear_conviction_raw: Any = contrarian_out.get("bear_conviction", 1)
+    bear_conviction: int = (
+        int(bear_conviction_raw) if isinstance(bear_conviction_raw, int) else 1
+    )
+
+    challenged_agents: list[str] = [
+        str(a) for a in (contrarian_out.get("challenged_agents") or [])
+    ]
+
+    round_number: int = int(state.get("debate_round_count") or 1)
+
+    agent_responses: dict[str, str] = _build_agent_responses(
+        state=state,
+        challenged_agents=challenged_agents,
+        bear_conviction=bear_conviction,
+    )
+
+    contrarian_text: str = str(
+        contrarian_out.get("strongest_argument")
+        or contrarian_out.get("summary")
+        or "Contrarian challenge unavailable for this round."
+    )
+
+    round_entry: dict[str, Any] = {
+        "round_number": round_number,
+        "agent_responses": agent_responses,
+        "contrarian": contrarian_text,
+        "completed_at": datetime.utcnow().isoformat() + "Z",
+    }
+
+    existing_rounds: list[dict[str, Any]] = list(state.get("debate_rounds") or [])
+    existing_rounds.append(round_entry)
+
+    logger.info(
+        "debate_loop_node: recorded round %d with %d agent response(s), "
+        "bear_conviction=%d",
+        round_number,
+        len(agent_responses),
+        bear_conviction,
+    )
+
+    return {"debate_rounds": existing_rounds, "current_node": NODE_DEBATE_LOOP}
+
+
+debate_loop_node: _NodeFn = _persist_after(
+    profile_node(_debate_loop_impl, NODE_DEBATE_LOOP), NODE_DEBATE_LOOP
+)
+
 
 def _valuation_impl(state: InvestmentState) -> dict[str, Any]:
     """
@@ -556,6 +781,7 @@ __all__ = [
     "NODE_SENTIMENT_ESCALATION",
     "NODE_RISK",
     "NODE_CONTRARIAN",
+    "NODE_DEBATE_LOOP",
     "NODE_VALUATION",
     "NODE_PORTFOLIO_MANAGER",
     # T-036 profiler exports
@@ -571,6 +797,7 @@ __all__ = [
     "sentiment_escalation_node",
     "risk_node",
     "contrarian_node",
+    "debate_loop_node",
     "valuation_node",
     "portfolio_manager_node",
 ]
