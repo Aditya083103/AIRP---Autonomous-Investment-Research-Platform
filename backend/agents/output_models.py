@@ -862,6 +862,16 @@ class InvestmentDecision(AgentOutput):
             "None when valuation is inconclusive"
         ),
     )
+    time_horizon: str = Field(
+        default="12 months",
+        description=(
+            "Recommended holding period for this verdict, expressed as a "
+            "short phrase (e.g. '12 months', '3-5 years', '6-9 months'). "
+            "Derived from the nature of the investment thesis -- a momentum "
+            "BUY driven by technicals implies a shorter horizon than a "
+            "value BUY driven by a multi-year DCF re-rating story."
+        ),
+    )
 
     # ── Investment Memo sections ──────────────────────────────────────────
     executive_summary: str = Field(
@@ -904,6 +914,26 @@ class InvestmentDecision(AgentOutput):
         description=(
             "Valuation perspective — DCF and peer comparison summary "
             "from the Valuation Agent"
+        ),
+    )
+
+    # ── Structured risk / catalyst lists ───────────────────────────────────
+    key_risks: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Top risks the investor must monitor, as discrete one-sentence "
+            "items ready for bullet-point rendering in the Investment Memo. "
+            "Sourced primarily from RiskAnalysis.critical_flags and the "
+            "Contrarian's strongest counter-arguments; ranked by severity."
+        ),
+    )
+    key_catalysts: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Specific forward-looking events or trends that could move the "
+            "thesis in either direction (e.g. 'Q3 FY25 earnings on 14 Jan', "
+            "'RBI rate decision in next MPC meeting'). Sourced from macro "
+            "tailwinds/headwinds and sector-specific news."
         ),
     )
 
