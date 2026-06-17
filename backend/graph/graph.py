@@ -1,13 +1,15 @@
 # backend/graph/graph.py
 """
-AIRP -- LangGraph StateGraph with Conditional Routing (T-031 / T-032 / T-034)
+AIRP -- LangGraph StateGraph with Conditional Routing (T-031 / T-032 / T-034 / T-040)
 
 The AIRP investment analysis pipeline expressed as a LangGraph StateGraph.
 T-032 extends T-031 to wire two conditional routing paths after the research
 phase: an error handler for failed fundamental data, and a sentiment
-escalation node for severely negative news environments.
+escalation node for severely negative news environments.  T-040 inserts the
+``debate_loop`` node between the Contrarian and the post-contrarian routing
+decision so every debate round is recorded in ``state["debate_rounds"]``.
 
-Pipeline topology (T-032)
+Pipeline topology (T-040)
 --------------------------
 
   START
@@ -31,13 +33,17 @@ Pipeline topology (T-032)
           +-- ROUTE_ESCALATE -> [sentiment_escalation] -> [contrarian_investor]
           +-- ROUTE_PROCEED -> [contrarian_investor]
                   |
+         [contrarian_investor]     T-038: deterministic + LLM bear case
+                  |
+         [debate_loop]              T-040: NEW -- records debate_rounds[]
+                  |
          route_after_contrarian()
-          +-- DEBATE_AGAIN -> [contrarian_investor]  (self-loop)
+          +-- DEBATE_AGAIN -> [contrarian_investor]  (loop back for round 2)
           +-- PROCEED -> [risk_officer]
                   |
-         [risk_officer]             Phase 4 stub (T-039)
+         [risk_officer]             T-037
                   |
-         [valuation_agent]          Phase 4 stub (T-041)
+         [valuation_agent]          T-039
                   |
          [portfolio_manager]        Phase 4 stub (T-042)
                   |
@@ -60,10 +66,22 @@ barrier ensures research_join_node runs only after all 4 complete.
 The conditional edge is then attached to research_join_node alone.
 route_after_research fires exactly once, in its own sequential step.
 
-This is 12 nodes total:
+Why debate_loop as a separate node from contrarian? (T-040 topology)
+-----------------------------------------------------------------------
+contrarian_node (T-038) already decides HOW contra-consensus the bear
+case is (bear_conviction) and route_after_contrarian (T-032) already
+decides WHETHER to loop based on that score.  Neither of them builds the
+actual debate transcript that other agents "respond" with -- that was
+the missing piece T-040 closes.  Putting it in its own node rather than
+folding it into contrarian_node keeps each node single-purpose (testable
+in isolation) and keeps contrarian_node's existing T-038 test suite
+completely unaffected, since contrarian_node's return contract did not
+change.
+
+This is 13 nodes total:
   planner, fundamental, technical, sentiment, macro,
   research_join, error_handler, sentiment_escalation,
-  contrarian, risk, valuation, portfolio_manager
+  contrarian, debate_loop, risk, valuation, portfolio_manager
 
 Design decisions
 ----------------
@@ -97,6 +115,7 @@ from langgraph.graph import END, START, StateGraph
 from backend.graph.graph_visualisation import export_mermaid_diagram
 from backend.graph.nodes import (
     NODE_CONTRARIAN,
+    NODE_DEBATE_LOOP,
     NODE_ERROR_HANDLER,
     NODE_FUNDAMENTAL,
     NODE_MACRO,
@@ -109,6 +128,7 @@ from backend.graph.nodes import (
     NODE_TECHNICAL,
     NODE_VALUATION,
     contrarian_node,
+    debate_loop_node,
     error_handler_node,
     fundamental_node,
     macro_node,
@@ -166,14 +186,16 @@ def build_graph() -> Any:
     """
     Build and compile the AIRP LangGraph StateGraph.
 
-    Creates a fresh StateGraph, registers all 12 nodes, and wires:
+    Creates a fresh StateGraph, registers all 13 nodes, and wires:
     - T-031 Send API parallel fan-out: planner -> 4 research agents
     - T-032 explicit join: 4 research agents -> research_join_node
     - T-032 conditional routing: research_join -> error_handler OR
       sentiment_escalation OR contrarian (based on route_after_research)
     - Forward edges: error_handler -> contrarian, sentiment_escalation
       -> contrarian
-    - Debate loop: contrarian -> route_after_contrarian -> contrarian OR risk
+    - T-040 debate loop: contrarian -> debate_loop -> route_after_contrarian
+      -> debate_loop OR risk (debate_loop records the round, then contrarian
+      decides whether to run another one)
     - Sequential tail: risk -> valuation -> portfolio_manager -> END
 
     Returns:
@@ -185,7 +207,7 @@ def build_graph() -> Any:
     # -- 1. Initialise the StateGraph -------------------------------------
     workflow: StateGraph = StateGraph(InvestmentState)
 
-    # -- 2. Register all 12 nodes -----------------------------------------
+    # -- 2. Register all 13 nodes -----------------------------------------
     workflow.add_node(NODE_PLANNER, planner_node)
     workflow.add_node(NODE_FUNDAMENTAL, fundamental_node)
     workflow.add_node(NODE_TECHNICAL, technical_node)
@@ -197,6 +219,7 @@ def build_graph() -> Any:
     workflow.add_node(NODE_SENTIMENT_ESCALATION, sentiment_escalation_node)
     # Phase 4 stubs
     workflow.add_node(NODE_CONTRARIAN, contrarian_node)
+    workflow.add_node(NODE_DEBATE_LOOP, debate_loop_node)
     workflow.add_node(NODE_RISK, risk_node)
     workflow.add_node(NODE_VALUATION, valuation_node)
     workflow.add_node(NODE_PORTFOLIO_MANAGER, portfolio_manager_node)
@@ -246,9 +269,13 @@ def build_graph() -> Any:
     workflow.add_edge(NODE_ERROR_HANDLER, NODE_CONTRARIAN)
     workflow.add_edge(NODE_SENTIMENT_ESCALATION, NODE_CONTRARIAN)
 
-    # -- 8. Contrarian -> debate loop or risk -----------------------------
+    # -- 8. Contrarian -> debate_loop (T-040: always runs after each round) -
+    workflow.add_edge(NODE_CONTRARIAN, NODE_DEBATE_LOOP)
+
+    # -- 8b. debate_loop -> debate loop or risk (T-040: routing function is
+    # unchanged from T-032/T-038, only its position in the graph moved) ----
     workflow.add_conditional_edges(
-        NODE_CONTRARIAN,
+        NODE_DEBATE_LOOP,
         route_after_contrarian,
         {
             ROUTE_DEBATE_AGAIN: NODE_CONTRARIAN,
@@ -265,7 +292,7 @@ def build_graph() -> Any:
     compiled: Any = workflow.compile()
     logger.info(
         "build_graph: AIRP StateGraph compiled -- %d research agents, "
-        "%d routing nodes, 12 total nodes",
+        "%d routing nodes, 13 total nodes",
         len(RESEARCH_NODE_NAMES),
         len(ROUTING_NODE_NAMES),
     )

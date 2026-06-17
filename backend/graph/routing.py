@@ -1,12 +1,25 @@
 # backend/graph/routing.py
 """
-AIRP -- LangGraph Conditional Edge Functions (T-030 / T-031 / T-032)
+AIRP -- LangGraph Conditional Edge Functions (T-030 / T-031 / T-032 / T-040)
 
 Conditional edge functions determine which node executes next based
 on the current state.  LangGraph calls these on edges that need runtime
 branching -- routing to error handling when an agent fails, deciding
 whether another debate round is needed, or fanning out to parallel
 research agents via the Send API.
+
+T-040 changes (Multi-round debate loop)
+----------------------------------------
+``MAX_DEBATE_ROUNDS`` is promoted to a module-level constant (previously a
+local literal inside ``route_after_contrarian``) so that ``backend.graph.
+nodes.debate_loop_node`` and tests can reference the exact same value --
+no magic numbers duplicated across files.  ``route_after_contrarian``'s
+behaviour is otherwise UNCHANGED from T-032/T-038: it is still the single
+source of truth for whether another debate round runs, evaluated AFTER
+the new ``debate_loop_node`` has appended the round's transcript entry to
+``state["debate_rounds"]``.  This keeps every existing T-032/T-038 routing
+test passing unmodified while T-040 adds the missing transcript-building
+step in between.
 
 T-032 changes (Implement conditional routing logic)
 ---------------------------------------------------
@@ -119,6 +132,12 @@ ROUTE_ERROR = "error"
 
 #: Run another debate round (bear_conviction >= 7 threshold).
 ROUTE_DEBATE_AGAIN = "debate_again"
+
+#: Maximum number of debate rounds the contrarian/debate_loop pair will run
+#: before being forced to proceed to Risk Officer regardless of conviction.
+#: T-040 acceptance criterion: "max 2 rounds".  Shared by route_after_contrarian
+#: and backend.graph.nodes.debate_loop_node so both enforce the identical cap.
+MAX_DEBATE_ROUNDS: int = 2
 
 # ---------------------------------------------------------------------------
 # Sentiment escalation constants (T-032)
@@ -307,19 +326,23 @@ ROUTE_ESCALATE_SENTIMENT = "escalate_sentiment"
 
 def route_after_contrarian(state: InvestmentState) -> str:
     """
-    Conditional edge after the Contrarian Investor node.
+    Conditional edge after the debate_loop node (T-040; was after
+    contrarian_node directly in T-032/T-038).
 
-    Routing logic:
-    - ``contrarian["bear_conviction"] >= 7`` AND rounds < 2
+    Routing logic (unchanged from T-038):
+    - ``contrarian["bear_conviction"] >= 7`` AND rounds < MAX_DEBATE_ROUNDS
       -> ROUTE_DEBATE_AGAIN (the Contrarian is strongly contra-consensus)
     - Otherwise -> ROUTE_PROCEED (move to Risk Officer)
 
-    In the skeleton (T-030/T-031) the contrarian stub always sets
-    ``bear_conviction = 1``, so this will always route PROCEED.
-    The actual debate loop logic is added in T-037/T-038.
+    T-040 note: this function's edge in graph.py now fires after
+    debate_loop_node (which has already appended the round's transcript
+    entry to ``state["debate_rounds"]``), not directly after contrarian_node.
+    The decision logic itself is identical to T-038 -- only its position in
+    the graph topology changed, which is why every pre-existing
+    route_after_contrarian test continues to pass unmodified.
 
     Args:
-        state: Current InvestmentState after contrarian_node() ran.
+        state: Current InvestmentState after debate_loop_node() ran.
 
     Returns:
         ROUTE_DEBATE_AGAIN or ROUTE_PROCEED string.
@@ -327,12 +350,11 @@ def route_after_contrarian(state: InvestmentState) -> str:
     contrarian_out: Any = state.get("contrarian")
     debate_count: int = state.get("debate_round_count", 0)
 
-    max_rounds: int = 2
-    if debate_count >= max_rounds:
+    if debate_count >= MAX_DEBATE_ROUNDS:
         logger.info(
             "route_after_contrarian: max debate rounds (%d) reached "
             "-- proceeding to risk/valuation",
-            max_rounds,
+            MAX_DEBATE_ROUNDS,
         )
         return ROUTE_PROCEED
 
@@ -368,6 +390,7 @@ __all__ = [
     "ROUTE_ERROR",
     "ROUTE_DEBATE_AGAIN",
     "ROUTE_ESCALATE_SENTIMENT",
+    "MAX_DEBATE_ROUNDS",
     "NEGATIVE_SENTIMENT_THRESHOLD",
     "ESCALATION_FLAG_NEGATIVE_SENTIMENT",
     "route_after_planner",

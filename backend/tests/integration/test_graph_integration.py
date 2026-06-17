@@ -14,9 +14,9 @@ Acceptance criteria (from project plan):
 Why integration tests (not unit tests)?
 ----------------------------------------
 These tests call build_graph().invoke() which runs the REAL compiled
-LangGraph graph -- all 12 nodes, real routing functions, real state
-merging.  The only mocking is at the agent layer (the four research
-agents and the state persistence layer).  This gives us:
+LangGraph graph -- all 13 nodes (T-040 adds debate_loop), real routing
+functions, real state merging.  The only mocking is at the agent layer
+(the four research agents and the state persistence layer).  This gives us:
 
   - Proof that the graph compiles and runs end-to-end
   - Proof that LangGraph's parallel fan-out, join barrier, and conditional
