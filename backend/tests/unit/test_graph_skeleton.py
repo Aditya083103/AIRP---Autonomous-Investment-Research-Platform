@@ -61,6 +61,7 @@ from backend.graph.nodes import (  # noqa: E402
     NODE_MACRO,
     NODE_PLANNER,
     NODE_PORTFOLIO_MANAGER,
+    NODE_REPORT_GENERATOR,
     NODE_RESEARCH_JOIN,
     NODE_RISK,
     NODE_SENTIMENT,
@@ -72,6 +73,7 @@ from backend.graph.nodes import (  # noqa: E402
     macro_node,
     planner_node,
     portfolio_manager_node,
+    report_generator_node,
     risk_node,
     sentiment_node,
     technical_node,
@@ -110,6 +112,7 @@ _ALL_NODE_NAMES: list[str] = [
     NODE_RISK,
     NODE_VALUATION,
     NODE_PORTFOLIO_MANAGER,
+    NODE_REPORT_GENERATOR,
 ]
 
 
@@ -251,6 +254,10 @@ class TestMermaidDiagram:
         mermaid = self._get_mermaid()
         assert NODE_PORTFOLIO_MANAGER in mermaid
 
+    def test_mermaid_contains_report_generator(self) -> None:
+        mermaid = self._get_mermaid()
+        assert NODE_REPORT_GENERATOR in mermaid
+
     def test_mermaid_has_start_marker(self) -> None:
         """LangGraph Mermaid diagrams always start with 'stateDiagram'
         or '%%' or 'flowchart' depending on the version."""
@@ -328,13 +335,18 @@ class TestNodeRegistration:
         nodes = self._get_nodes()
         assert NODE_PORTFOLIO_MANAGER in nodes
 
+    def test_report_generator_registered(self) -> None:
+        nodes = self._get_nodes()
+        assert NODE_REPORT_GENERATOR in nodes
+
     def test_exactly_nine_content_nodes(self) -> None:
-        """Exactly 13 content nodes (9 original + 3 T-032 nodes + 1 T-040
-        debate_loop node; excludes __start__ and __end__)."""
+        """Exactly 14 content nodes (9 original + 3 T-032 nodes + 1 T-040
+        debate_loop node + 1 T-042 report_generator node; excludes
+        __start__ and __end__)."""
         nodes = self._get_nodes()
         content_nodes = [n for n in nodes if not n.startswith("__")]
-        assert len(content_nodes) == 13, (
-            f"Expected 13 content nodes, got {len(content_nodes)}: " f"{content_nodes}"
+        assert len(content_nodes) == 14, (
+            f"Expected 14 content nodes, got {len(content_nodes)}: " f"{content_nodes}"
         )
 
 
@@ -503,10 +515,41 @@ class TestStubNodes:
         result = portfolio_manager_node(_make_state())
         assert result.get("current_node") == NODE_PORTFOLIO_MANAGER
 
+    def test_report_generator_returns_memo_markdown(self) -> None:
+        result = report_generator_node(_make_state())
+        assert "memo_markdown" in result
+        assert isinstance(result["memo_markdown"], str)
+        assert len(result["memo_markdown"]) > 0
+
+    def test_report_generator_sets_status_completed(self) -> None:
+        result = report_generator_node(_make_state())
+        assert result.get("status") == "completed"
+
+    def test_report_generator_sets_current_node(self) -> None:
+        result = report_generator_node(_make_state())
+        assert result.get("current_node") == NODE_REPORT_GENERATOR
+
+    def test_report_generator_handles_missing_decision(self) -> None:
+        """state["decision"] absent (e.g. portfolio_manager has not run
+        yet in this isolated node test) must still render a complete,
+        readable fallback memo rather than raising."""
+        state = _make_state()
+        state.pop("decision", None)
+        result = report_generator_node(state)
+        assert "memo_markdown" in result
+        assert "could not be completed" in result["memo_markdown"].lower()
+
     def test_all_stub_nodes_never_raise(self) -> None:
-        """All Phase 4 stub nodes must be robust to any state content."""
+        """All Phase 4 nodes (and the T-042 report_generator node) must
+        be robust to any state content, even completely empty state."""
         empty: InvestmentState = cast(InvestmentState, {})
-        for fn in (risk_node, contrarian_node, valuation_node, portfolio_manager_node):
+        for fn in (
+            risk_node,
+            contrarian_node,
+            valuation_node,
+            portfolio_manager_node,
+            report_generator_node,
+        ):
             result = fn(empty)
             assert isinstance(result, dict)
 
@@ -806,6 +849,9 @@ class TestNodeNameConstants:
     def test_node_portfolio_manager_is_string(self) -> None:
         assert isinstance(NODE_PORTFOLIO_MANAGER, str) and NODE_PORTFOLIO_MANAGER
 
+    def test_node_report_generator_is_string(self) -> None:
+        assert isinstance(NODE_REPORT_GENERATOR, str) and NODE_REPORT_GENERATOR
+
     def test_all_node_names_unique(self) -> None:
         assert len(set(_ALL_NODE_NAMES)) == len(_ALL_NODE_NAMES)
 
@@ -819,6 +865,7 @@ class TestNodeNameConstants:
         assert NODE_RISK == "risk_officer"
         assert NODE_VALUATION == "valuation_agent"
         assert NODE_PORTFOLIO_MANAGER == "portfolio_manager"
+        assert NODE_REPORT_GENERATOR == "report_generator"
 
 
 # ---------------------------------------------------------------------------
@@ -918,6 +965,10 @@ class TestEdgeStructure:
     def test_valuation_to_portfolio_manager_edge(self) -> None:
         mermaid = self._mermaid()
         assert NODE_VALUATION in mermaid and NODE_PORTFOLIO_MANAGER in mermaid
+
+    def test_portfolio_manager_to_report_generator_edge(self) -> None:
+        mermaid = self._mermaid()
+        assert NODE_PORTFOLIO_MANAGER in mermaid and NODE_REPORT_GENERATOR in mermaid
 
     def test_graph_has_edges_attribute(self) -> None:
         from backend.graph.graph import build_graph

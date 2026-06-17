@@ -849,12 +849,13 @@ class TestGraphCompilationWithRoutingNodes:
         assert compiled is not None
 
     def test_twelve_content_nodes_registered(self) -> None:
-        """T-040: 13 content nodes (9 original + 3 T-032 + 1 T-040 debate_loop)."""
+        """T-042: 14 content nodes (9 original + 3 T-032 + 1 T-040
+        debate_loop + 1 T-042 report_generator)."""
         compiled = build_graph()
         nodes = compiled.get_graph().nodes
         content_nodes = [n for n in nodes if not n.startswith("__")]
-        assert len(content_nodes) == 13, (
-            f"Expected 13 content nodes, got {len(content_nodes)}: " f"{content_nodes}"
+        assert len(content_nodes) == 14, (
+            f"Expected 14 content nodes, got {len(content_nodes)}: " f"{content_nodes}"
         )
 
     def test_research_join_registered(self) -> None:

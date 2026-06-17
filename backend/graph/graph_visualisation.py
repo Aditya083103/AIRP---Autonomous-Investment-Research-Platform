@@ -126,6 +126,8 @@ Node categories:
 - **sentiment_escalation** -- Flags severely negative news environment (T-032)
 - **contrarian_investor** -- Challenges every bullish thesis; drives the debate loop
 - **risk_officer, valuation_agent, portfolio_manager** -- Final analysis sequence
+- **report_generator** -- Renders the Investment Memo (Markdown) from the
+  Portfolio Manager's decision; final node before END
 
 ## Graph
 
