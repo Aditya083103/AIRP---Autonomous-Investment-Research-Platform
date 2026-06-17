@@ -865,11 +865,9 @@ class InvestmentDecision(AgentOutput):
     time_horizon: str = Field(
         default="12 months",
         description=(
-            "Recommended holding period for this verdict, expressed as a "
-            "short phrase (e.g. '12 months', '3-5 years', '6-9 months'). "
-            "Derived from the nature of the investment thesis -- a momentum "
-            "BUY driven by technicals implies a shorter horizon than a "
-            "value BUY driven by a multi-year DCF re-rating story."
+            "Suggested holding period for this verdict, e.g. "
+            "'3-6 months', '12 months', '3-5 years', or "
+            "'quarterly review (3 months)' for HOLD verdicts."
         ),
     )
 
@@ -917,23 +915,22 @@ class InvestmentDecision(AgentOutput):
         ),
     )
 
-    # ── Structured risk / catalyst lists ───────────────────────────────────
+    # ── Structured memo inputs (T-041, consumed by T-042 memo generator) ──
     key_risks: list[str] = Field(
         default_factory=list,
         description=(
-            "Top risks the investor must monitor, as discrete one-sentence "
-            "items ready for bullet-point rendering in the Investment Memo. "
-            "Sourced primarily from RiskAnalysis.critical_flags and the "
-            "Contrarian's strongest counter-arguments; ranked by severity."
+            "Structured list of the most important risks (critical Risk "
+            "Officer flags first, then the Contrarian's strongest "
+            "argument and overlooked risks), capped at 6 entries. "
+            "Used directly by the Investment Memo's Risk Analysis section."
         ),
     )
     key_catalysts: list[str] = Field(
         default_factory=list,
         description=(
-            "Specific forward-looking events or trends that could move the "
-            "thesis in either direction (e.g. 'Q3 FY25 earnings on 14 Jan', "
-            "'RBI rate decision in next MPC meeting'). Sourced from macro "
-            "tailwinds/headwinds and sector-specific news."
+            "Structured list of factors that could move the thesis "
+            "forward (macro tailwinds, valuation re-rating triggers, "
+            "fundamental strengths), capped at 5 entries."
         ),
     )
 

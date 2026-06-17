@@ -1,24 +1,23 @@
 # backend/graph/nodes.py
 """
-AIRP -- LangGraph Node Functions (T-030 / T-031 / T-032 / T-033 / T-036 / T-040 / T-041)
+AIRP -- LangGraph Node Functions
+(T-030 / T-031 / T-032 / T-033 / T-036 / T-040 / T-041 / T-042)
 
 Thin wrapper functions that adapt each agent's public API to the
 LangGraph node contract: receive InvestmentState, return a partial
 dict that LangGraph merges back into state.
 
-T-041 addition (Portfolio Manager)
+T-042 addition (Investment Memo generator)
 -------------------------------------------
-``_portfolio_manager_impl`` now delegates to the real Portfolio Manager
-agent (``run_portfolio_manager_decision`` in
-``backend.agents.portfolio_manager``) instead of the T-032-era stub.
-It reads every prior committee output -- the 4 research agents, Risk
-Officer, Contrarian Investor, and Valuation Agent -- plus the full
-``debate_rounds`` transcript, and writes the final ``decision``,
-``final_verdict``, ``conviction_score``, and ``price_target`` into
-state.  The wrapper here only adds pipeline bookkeeping (``status``,
-``completed_at``, ``current_node``) on top of the agent's own return
-dict, following the same thin-wrapper pattern as ``_risk_impl`` and
-``_valuation_impl``.
+``report_generator_node`` runs immediately after ``portfolio_manager_node``,
+the new final node before END. It reads ``state["decision"]`` (the
+InvestmentDecision produced by T-041) and renders a structured, readable
+Markdown Investment Memo into ``state["memo_markdown"]``. Like
+``debate_loop_node``, this is pure data transformation with NO additional
+LLM calls -- every prose section in the memo was already written by the
+Portfolio Manager's own LLM synthesis step, so T-042 only formats and
+assembles what already exists in state. See
+``backend.services.memo_generator`` for the full implementation.
 
 T-040 additions (multi-round debate loop)
 -------------------------------------------
@@ -101,7 +100,7 @@ T-040 topology:
 T-033 persistence wrappers (sequential nodes only):
     planner_node, research_join_node, error_handler_node,
     sentiment_escalation_node, contrarian_node, debate_loop_node,
-    risk_node, valuation_node, portfolio_manager_node
+    risk_node, valuation_node, portfolio_manager_node, report_generator_node
 
 T-036 performance profiling (all nodes including parallel research):
     profile_node() wraps every impl function as the INNER layer so it
@@ -153,6 +152,7 @@ from backend.agents.technical_analyst import run_technical_analysis
 from backend.agents.valuation_agent import run_valuation_analysis
 from backend.graph.node_profiler import NodeTimeoutError, profile_node
 from backend.graph.state import InvestmentState
+from backend.services.memo_generator import generate_investment_memo
 
 logger = logging.getLogger(__name__)
 
@@ -173,6 +173,7 @@ NODE_CONTRARIAN = "contrarian_investor"
 NODE_DEBATE_LOOP = "debate_loop"
 NODE_VALUATION = "valuation_agent"
 NODE_PORTFOLIO_MANAGER = "portfolio_manager"
+NODE_REPORT_GENERATOR = "report_generator"
 
 # ---------------------------------------------------------------------------
 # T-033 persistence helper
@@ -750,17 +751,6 @@ valuation_node: _NodeFn = _persist_after(
 
 
 def _portfolio_manager_impl(state: InvestmentState) -> dict[str, Any]:
-    """
-    Delegate to the real Portfolio Manager agent (T-041).
-
-    run_portfolio_manager_decision reads fundamental, technical, sentiment,
-    macro, risk, contrarian, valuation, debate_rounds, debate_round_count,
-    and critical_flags from state, returning 'decision', 'final_verdict',
-    'conviction_score', and 'price_target'.  We merge current_node and the
-    completion timestamp/status into the returned dict so LangGraph
-    tracking and the WebSocket progress dashboard see the pipeline as
-    finished once this node runs.
-    """
     partial: dict[str, Any] = run_portfolio_manager_decision(state)
     partial["status"] = "completed"
     partial["completed_at"] = datetime.utcnow().isoformat() + "Z"
@@ -771,6 +761,20 @@ def _portfolio_manager_impl(state: InvestmentState) -> dict[str, Any]:
 portfolio_manager_node: _NodeFn = _persist_after(
     profile_node(_portfolio_manager_impl, NODE_PORTFOLIO_MANAGER),
     NODE_PORTFOLIO_MANAGER,
+)
+
+
+def _report_generator_impl(state: InvestmentState) -> dict[str, Any]:
+    partial: dict[str, Any] = generate_investment_memo(state)
+    partial["status"] = "completed"
+    partial["completed_at"] = datetime.utcnow().isoformat() + "Z"
+    partial["current_node"] = NODE_REPORT_GENERATOR
+    return partial
+
+
+report_generator_node: _NodeFn = _persist_after(
+    profile_node(_report_generator_impl, NODE_REPORT_GENERATOR),
+    NODE_REPORT_GENERATOR,
 )
 
 # ---------------------------------------------------------------------------
@@ -792,7 +796,7 @@ __all__ = [
     "NODE_DEBATE_LOOP",
     "NODE_VALUATION",
     "NODE_PORTFOLIO_MANAGER",
-    # T-036 profiler exports
+    "NODE_REPORT_GENERATOR",
     "NodeTimeoutError",
     # Node functions
     "planner_node",
@@ -808,4 +812,5 @@ __all__ = [
     "debate_loop_node",
     "valuation_node",
     "portfolio_manager_node",
+    "report_generator_node",
 ]
