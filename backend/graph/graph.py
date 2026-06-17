@@ -45,7 +45,7 @@ Pipeline topology (T-040)
                   |
          [valuation_agent]          T-039
                   |
-         [portfolio_manager]        Phase 4 stub (T-042)
+         [portfolio_manager]        T-041: full deterministic + LLM synthesis
                   |
                  END
 
@@ -217,7 +217,7 @@ def build_graph() -> Any:
     workflow.add_node(NODE_RESEARCH_JOIN, research_join_node)
     workflow.add_node(NODE_ERROR_HANDLER, error_handler_node)
     workflow.add_node(NODE_SENTIMENT_ESCALATION, sentiment_escalation_node)
-    # Phase 4 stubs
+    # T-037/T-038/T-039/T-041 fully-implemented committee agents
     workflow.add_node(NODE_CONTRARIAN, contrarian_node)
     workflow.add_node(NODE_DEBATE_LOOP, debate_loop_node)
     workflow.add_node(NODE_RISK, risk_node)

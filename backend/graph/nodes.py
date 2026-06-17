@@ -1,10 +1,24 @@
 # backend/graph/nodes.py
 """
-AIRP -- LangGraph Node Functions (T-030 / T-031 / T-032 / T-033 / T-036 / T-040)
+AIRP -- LangGraph Node Functions (T-030 / T-031 / T-032 / T-033 / T-036 / T-040 / T-041)
 
 Thin wrapper functions that adapt each agent's public API to the
 LangGraph node contract: receive InvestmentState, return a partial
 dict that LangGraph merges back into state.
+
+T-041 addition (Portfolio Manager)
+-------------------------------------------
+``_portfolio_manager_impl`` now delegates to the real Portfolio Manager
+agent (``run_portfolio_manager_decision`` in
+``backend.agents.portfolio_manager``) instead of the T-032-era stub.
+It reads every prior committee output -- the 4 research agents, Risk
+Officer, Contrarian Investor, and Valuation Agent -- plus the full
+``debate_rounds`` transcript, and writes the final ``decision``,
+``final_verdict``, ``conviction_score``, and ``price_target`` into
+state.  The wrapper here only adds pipeline bookkeeping (``status``,
+``completed_at``, ``current_node``) on top of the agent's own return
+dict, following the same thin-wrapper pattern as ``_risk_impl`` and
+``_valuation_impl``.
 
 T-040 additions (multi-round debate loop)
 -------------------------------------------
@@ -132,6 +146,7 @@ from typing import Any, Callable
 from backend.agents.contrarian_investor import run_contrarian_analysis
 from backend.agents.fundamental_analyst import run_fundamental_analysis
 from backend.agents.macro_economist import run_macro_analysis
+from backend.agents.portfolio_manager import run_portfolio_manager_decision
 from backend.agents.risk_officer import run_risk_analysis
 from backend.agents.sentiment_analyst import run_sentiment_analysis
 from backend.agents.technical_analyst import run_technical_analysis
@@ -735,29 +750,22 @@ valuation_node: _NodeFn = _persist_after(
 
 
 def _portfolio_manager_impl(state: InvestmentState) -> dict[str, Any]:
-    logger.info(
-        "portfolio_manager_node: STUB -- Portfolio Manager not yet "
-        "implemented (T-042)"
-    )
-    return {
-        "decision": {
-            "agent_name": "portfolio_manager",
-            "analysis_id": state.get("job_id", "unknown"),
-            "company_name": state.get("company_name", "unknown"),
-            "ticker": state.get("ticker", "unknown"),
-            "error": "not_implemented: portfolio_manager stub (T-042)",
-            "verdict": "HOLD",
-            "conviction_score": 5,
-            "debate_rounds_used": state.get("debate_round_count", 0),
-            "agent_weights": {},
-            "summary": "Portfolio Manager stub -- full analysis in T-042.",
-        },
-        "final_verdict": "HOLD",
-        "conviction_score": 5,
-        "status": "completed",
-        "completed_at": datetime.utcnow().isoformat() + "Z",
-        "current_node": NODE_PORTFOLIO_MANAGER,
-    }
+    """
+    Delegate to the real Portfolio Manager agent (T-041).
+
+    run_portfolio_manager_decision reads fundamental, technical, sentiment,
+    macro, risk, contrarian, valuation, debate_rounds, debate_round_count,
+    and critical_flags from state, returning 'decision', 'final_verdict',
+    'conviction_score', and 'price_target'.  We merge current_node and the
+    completion timestamp/status into the returned dict so LangGraph
+    tracking and the WebSocket progress dashboard see the pipeline as
+    finished once this node runs.
+    """
+    partial: dict[str, Any] = run_portfolio_manager_decision(state)
+    partial["status"] = "completed"
+    partial["completed_at"] = datetime.utcnow().isoformat() + "Z"
+    partial["current_node"] = NODE_PORTFOLIO_MANAGER
+    return partial
 
 
 portfolio_manager_node: _NodeFn = _persist_after(
