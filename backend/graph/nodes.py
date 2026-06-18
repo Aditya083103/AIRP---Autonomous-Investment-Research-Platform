@@ -1,11 +1,25 @@
 # backend/graph/nodes.py
 """
 AIRP -- LangGraph Node Functions
-(T-030 / T-031 / T-032 / T-033 / T-036 / T-040 / T-041 / T-042)
+(T-030 / T-031 / T-032 / T-033 / T-036 / T-040 / T-041 / T-042 / T-043)
 
 Thin wrapper functions that adapt each agent's public API to the
 LangGraph node contract: receive InvestmentState, return a partial
 dict that LangGraph merges back into state.
+
+T-043 addition (Investment Memo PDF export)
+-------------------------------------------
+``pdf_export_node`` runs immediately after ``report_generator_node``,
+the new final node before END. It reads ``state["memo_markdown"]``
+(written by T-042) and renders a branded, paginated PDF via
+WeasyPrint, writing it to disk and storing the resulting path in
+``state["memo_pdf_path"]``. Like ``report_generator_node``, this makes
+NO LLM calls -- it is a pure presentation-layer transformation. On any
+failure (WeasyPrint not installed, a disabled feature flag, a
+rendering or disk-write error) it degrades to
+``memo_pdf_path=None`` rather than failing the pipeline -- the
+Markdown memo from T-042 remains fully available regardless. See
+``backend.services.pdf_export`` for the full implementation.
 
 T-042 addition (Investment Memo generator)
 -------------------------------------------
@@ -100,7 +114,8 @@ T-040 topology:
 T-033 persistence wrappers (sequential nodes only):
     planner_node, research_join_node, error_handler_node,
     sentiment_escalation_node, contrarian_node, debate_loop_node,
-    risk_node, valuation_node, portfolio_manager_node, report_generator_node
+    risk_node, valuation_node, portfolio_manager_node, report_generator_node,
+    pdf_export_node
 
 T-036 performance profiling (all nodes including parallel research):
     profile_node() wraps every impl function as the INNER layer so it
@@ -153,6 +168,7 @@ from backend.agents.valuation_agent import run_valuation_analysis
 from backend.graph.node_profiler import NodeTimeoutError, profile_node
 from backend.graph.state import InvestmentState
 from backend.services.memo_generator import generate_investment_memo
+from backend.services.pdf_export import pdf_export_node as _pdf_export_node
 
 logger = logging.getLogger(__name__)
 
@@ -174,6 +190,7 @@ NODE_DEBATE_LOOP = "debate_loop"
 NODE_VALUATION = "valuation_agent"
 NODE_PORTFOLIO_MANAGER = "portfolio_manager"
 NODE_REPORT_GENERATOR = "report_generator"
+NODE_PDF_EXPORT = "pdf_export"
 
 # ---------------------------------------------------------------------------
 # T-033 persistence helper
@@ -777,6 +794,20 @@ report_generator_node: _NodeFn = _persist_after(
     NODE_REPORT_GENERATOR,
 )
 
+
+def _pdf_export_impl(state: InvestmentState) -> dict[str, Any]:
+    partial: dict[str, Any] = _pdf_export_node(state)
+    partial["status"] = "completed"
+    partial["completed_at"] = datetime.utcnow().isoformat() + "Z"
+    partial["current_node"] = NODE_PDF_EXPORT
+    return partial
+
+
+pdf_export_node: _NodeFn = _persist_after(
+    profile_node(_pdf_export_impl, NODE_PDF_EXPORT),
+    NODE_PDF_EXPORT,
+)
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -797,6 +828,7 @@ __all__ = [
     "NODE_VALUATION",
     "NODE_PORTFOLIO_MANAGER",
     "NODE_REPORT_GENERATOR",
+    "NODE_PDF_EXPORT",
     "NodeTimeoutError",
     # Node functions
     "planner_node",
@@ -813,4 +845,5 @@ __all__ = [
     "valuation_node",
     "portfolio_manager_node",
     "report_generator_node",
+    "pdf_export_node",
 ]

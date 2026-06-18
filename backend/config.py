@@ -135,6 +135,15 @@ class Settings(BaseSettings):
     feature_debate_enabled: bool = True
     debate_rounds: int = 2
     feature_pdf_enabled: bool = True
+    memo_output_dir: str = Field(
+        default="data/memos",
+        description=(
+            "Directory (relative to repo root, or absolute) where "
+            "generated Investment Memo PDFs are written. Created "
+            "automatically if it does not exist. Ignored when "
+            "ENVIRONMENT=test."
+        ),
+    )
     feature_rate_limiting: bool = True
     max_concurrent_analyses: int = 3
 

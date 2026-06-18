@@ -14,7 +14,7 @@ Acceptance criteria (from project plan):
 Why integration tests (not unit tests)?
 ----------------------------------------
 These tests call build_graph().invoke() which runs the REAL compiled
-LangGraph graph -- all 14 nodes (T-042 adds report_generator), real
+LangGraph graph -- all 15 nodes (T-043 adds pdf_export), real
 routing functions, real state merging.  The only mocking is at the
 agent layer (the four research agents and the state persistence
 layer).  This gives us:

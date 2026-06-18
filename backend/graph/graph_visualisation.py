@@ -127,7 +127,9 @@ Node categories:
 - **contrarian_investor** -- Challenges every bullish thesis; drives the debate loop
 - **risk_officer, valuation_agent, portfolio_manager** -- Final analysis sequence
 - **report_generator** -- Renders the Investment Memo (Markdown) from the
-  Portfolio Manager's decision; final node before END
+  Portfolio Manager's decision
+- **pdf_export** -- Converts the Markdown memo to a branded PDF via
+  WeasyPrint; final node before END
 
 ## Graph
 

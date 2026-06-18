@@ -59,6 +59,7 @@ from backend.graph.nodes import (  # noqa: E402
     NODE_ERROR_HANDLER,
     NODE_FUNDAMENTAL,
     NODE_MACRO,
+    NODE_PDF_EXPORT,
     NODE_PLANNER,
     NODE_PORTFOLIO_MANAGER,
     NODE_REPORT_GENERATOR,
@@ -71,6 +72,7 @@ from backend.graph.nodes import (  # noqa: E402
     contrarian_node,
     fundamental_node,
     macro_node,
+    pdf_export_node,
     planner_node,
     portfolio_manager_node,
     report_generator_node,
@@ -113,6 +115,7 @@ _ALL_NODE_NAMES: list[str] = [
     NODE_VALUATION,
     NODE_PORTFOLIO_MANAGER,
     NODE_REPORT_GENERATOR,
+    NODE_PDF_EXPORT,
 ]
 
 
@@ -258,6 +261,10 @@ class TestMermaidDiagram:
         mermaid = self._get_mermaid()
         assert NODE_REPORT_GENERATOR in mermaid
 
+    def test_mermaid_contains_pdf_export(self) -> None:
+        mermaid = self._get_mermaid()
+        assert NODE_PDF_EXPORT in mermaid
+
     def test_mermaid_has_start_marker(self) -> None:
         """LangGraph Mermaid diagrams always start with 'stateDiagram'
         or '%%' or 'flowchart' depending on the version."""
@@ -339,14 +346,18 @@ class TestNodeRegistration:
         nodes = self._get_nodes()
         assert NODE_REPORT_GENERATOR in nodes
 
+    def test_pdf_export_registered(self) -> None:
+        nodes = self._get_nodes()
+        assert NODE_PDF_EXPORT in nodes
+
     def test_exactly_nine_content_nodes(self) -> None:
-        """Exactly 14 content nodes (9 original + 3 T-032 nodes + 1 T-040
-        debate_loop node + 1 T-042 report_generator node; excludes
-        __start__ and __end__)."""
+        """Exactly 15 content nodes (9 original + 3 T-032 nodes + 1 T-040
+        debate_loop node + 1 T-042 report_generator node + 1 T-043
+        pdf_export node; excludes __start__ and __end__)."""
         nodes = self._get_nodes()
         content_nodes = [n for n in nodes if not n.startswith("__")]
-        assert len(content_nodes) == 14, (
-            f"Expected 14 content nodes, got {len(content_nodes)}: " f"{content_nodes}"
+        assert len(content_nodes) == 15, (
+            f"Expected 15 content nodes, got {len(content_nodes)}: " f"{content_nodes}"
         )
 
 
@@ -539,9 +550,42 @@ class TestStubNodes:
         assert "memo_markdown" in result
         assert "could not be completed" in result["memo_markdown"].lower()
 
+    def test_pdf_export_returns_memo_pdf_path_key(self) -> None:
+        result = pdf_export_node(_make_state())
+        assert "memo_pdf_path" in result
+
+    def test_pdf_export_sets_status_completed(self) -> None:
+        result = pdf_export_node(_make_state())
+        assert result.get("status") == "completed"
+
+    def test_pdf_export_sets_current_node(self) -> None:
+        result = pdf_export_node(_make_state())
+        assert result.get("current_node") == NODE_PDF_EXPORT
+
+    def test_pdf_export_handles_missing_memo_markdown(self) -> None:
+        """state["memo_markdown"] absent (e.g. report_generator has not
+        run yet in this isolated node test) must degrade to
+        memo_pdf_path=None rather than raising."""
+        state = _make_state()
+        state.pop("memo_markdown", None)
+        result = pdf_export_node(state)
+        assert result.get("memo_pdf_path") is None
+
+    def test_pdf_export_never_raises_without_weasyprint(self) -> None:
+        """In this test environment WeasyPrint (and its system deps:
+        Pango, Cairo, GDK-Pixbuf) may not be installed. The node must
+        degrade gracefully to memo_pdf_path=None, never raise."""
+        state = _make_state(memo_markdown="# Test Memo\n\nSome content.")
+        result = pdf_export_node(state)
+        assert "memo_pdf_path" in result
+        assert result["memo_pdf_path"] is None or isinstance(
+            result["memo_pdf_path"], str
+        )
+
     def test_all_stub_nodes_never_raise(self) -> None:
-        """All Phase 4 nodes (and the T-042 report_generator node) must
-        be robust to any state content, even completely empty state."""
+        """All Phase 4 nodes (and the T-042/T-043 report_generator and
+        pdf_export nodes) must be robust to any state content, even
+        completely empty state."""
         empty: InvestmentState = cast(InvestmentState, {})
         for fn in (
             risk_node,
@@ -549,6 +593,7 @@ class TestStubNodes:
             valuation_node,
             portfolio_manager_node,
             report_generator_node,
+            pdf_export_node,
         ):
             result = fn(empty)
             assert isinstance(result, dict)
@@ -852,6 +897,9 @@ class TestNodeNameConstants:
     def test_node_report_generator_is_string(self) -> None:
         assert isinstance(NODE_REPORT_GENERATOR, str) and NODE_REPORT_GENERATOR
 
+    def test_node_pdf_export_is_string(self) -> None:
+        assert isinstance(NODE_PDF_EXPORT, str) and NODE_PDF_EXPORT
+
     def test_all_node_names_unique(self) -> None:
         assert len(set(_ALL_NODE_NAMES)) == len(_ALL_NODE_NAMES)
 
@@ -866,6 +914,7 @@ class TestNodeNameConstants:
         assert NODE_VALUATION == "valuation_agent"
         assert NODE_PORTFOLIO_MANAGER == "portfolio_manager"
         assert NODE_REPORT_GENERATOR == "report_generator"
+        assert NODE_PDF_EXPORT == "pdf_export"
 
 
 # ---------------------------------------------------------------------------
@@ -969,6 +1018,10 @@ class TestEdgeStructure:
     def test_portfolio_manager_to_report_generator_edge(self) -> None:
         mermaid = self._mermaid()
         assert NODE_PORTFOLIO_MANAGER in mermaid and NODE_REPORT_GENERATOR in mermaid
+
+    def test_report_generator_to_pdf_export_edge(self) -> None:
+        mermaid = self._mermaid()
+        assert NODE_REPORT_GENERATOR in mermaid and NODE_PDF_EXPORT in mermaid
 
     def test_graph_has_edges_attribute(self) -> None:
         from backend.graph.graph import build_graph

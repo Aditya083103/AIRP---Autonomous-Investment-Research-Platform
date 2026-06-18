@@ -13,7 +13,7 @@ Test strategy
   2. _build_agent_responses     -- full agent_responses dict for one round
   3. _debate_loop_impl          -- core node logic, debate_rounds[] shape
   4. debate_loop_node           -- persistence-wrapped public node
-  5. Graph wiring               -- debate_loop registered, 14 total nodes,
+  5. Graph wiring               -- debate_loop registered, 15 total nodes,
                                    contrarian -> debate_loop -> route edge
   6. route_after_contrarian     -- unchanged T-038 behaviour still holds
                                    after the topology change (regression)
@@ -544,7 +544,7 @@ class TestDebateLoopNode:
 
 
 # ---------------------------------------------------------------------------
-# 5. Graph wiring -- debate_loop registered, 14 total nodes
+# 5. Graph wiring -- debate_loop registered, 15 total nodes
 # ---------------------------------------------------------------------------
 
 
@@ -559,8 +559,8 @@ class TestGraphWiring:
 
     def test_total_node_count_is_thirteen(self) -> None:
         content_nodes = [n for n in self._nodes() if not n.startswith("__")]
-        assert len(content_nodes) == 14, (
-            f"Expected 14 content nodes after T-042, got "
+        assert len(content_nodes) == 15, (
+            f"Expected 15 content nodes after T-043, got "
             f"{len(content_nodes)}: {content_nodes}"
         )
 
