@@ -49,6 +49,8 @@ Pipeline topology (T-040)
                   |
          [report_generator]        T-042: structured Investment Memo (Markdown)
                   |
+         [pdf_export]              T-043: branded PDF via WeasyPrint
+                  |
                  END
 
 Why research_join_node? (T-032 topology fix)
@@ -80,11 +82,11 @@ in isolation) and keeps contrarian_node's existing T-038 test suite
 completely unaffected, since contrarian_node's return contract did not
 change.
 
-This is 14 nodes total:
+This is 15 nodes total:
   planner, fundamental, technical, sentiment, macro,
   research_join, error_handler, sentiment_escalation,
   contrarian, debate_loop, risk, valuation, portfolio_manager,
-  report_generator
+  report_generator, pdf_export
 
 Design decisions
 ----------------
@@ -122,6 +124,7 @@ from backend.graph.nodes import (
     NODE_ERROR_HANDLER,
     NODE_FUNDAMENTAL,
     NODE_MACRO,
+    NODE_PDF_EXPORT,
     NODE_PLANNER,
     NODE_PORTFOLIO_MANAGER,
     NODE_REPORT_GENERATOR,
@@ -136,6 +139,7 @@ from backend.graph.nodes import (
     error_handler_node,
     fundamental_node,
     macro_node,
+    pdf_export_node,
     planner_node,
     portfolio_manager_node,
     report_generator_node,
@@ -191,7 +195,7 @@ def build_graph() -> Any:
     """
     Build and compile the AIRP LangGraph StateGraph.
 
-    Creates a fresh StateGraph, registers all 14 nodes, and wires:
+    Creates a fresh StateGraph, registers all 15 nodes, and wires:
     - T-031 Send API parallel fan-out: planner -> 4 research agents
     - T-032 explicit join: 4 research agents -> research_join_node
     - T-032 conditional routing: research_join -> error_handler OR
@@ -202,7 +206,7 @@ def build_graph() -> Any:
       -> debate_loop OR risk (debate_loop records the round, then contrarian
       decides whether to run another one)
     - Sequential tail: risk -> valuation -> portfolio_manager ->
-      report_generator -> END
+      report_generator -> pdf_export -> END
 
     Returns:
         A compiled LangGraph CompiledGraph object.
@@ -213,7 +217,7 @@ def build_graph() -> Any:
     # -- 1. Initialise the StateGraph -------------------------------------
     workflow: StateGraph = StateGraph(InvestmentState)
 
-    # -- 2. Register all 14 nodes -----------------------------------------
+    # -- 2. Register all 15 nodes -----------------------------------------
     workflow.add_node(NODE_PLANNER, planner_node)
     workflow.add_node(NODE_FUNDAMENTAL, fundamental_node)
     workflow.add_node(NODE_TECHNICAL, technical_node)
@@ -223,13 +227,14 @@ def build_graph() -> Any:
     workflow.add_node(NODE_RESEARCH_JOIN, research_join_node)
     workflow.add_node(NODE_ERROR_HANDLER, error_handler_node)
     workflow.add_node(NODE_SENTIMENT_ESCALATION, sentiment_escalation_node)
-    # T-037/T-038/T-039/T-040/T-041 fully-implemented committee agents
+    # T-037/T-038/T-039/T-040/T-041/T-042/T-043 fully-implemented agents
     workflow.add_node(NODE_CONTRARIAN, contrarian_node)
     workflow.add_node(NODE_DEBATE_LOOP, debate_loop_node)
     workflow.add_node(NODE_RISK, risk_node)
     workflow.add_node(NODE_VALUATION, valuation_node)
     workflow.add_node(NODE_PORTFOLIO_MANAGER, portfolio_manager_node)
     workflow.add_node(NODE_REPORT_GENERATOR, report_generator_node)
+    workflow.add_node(NODE_PDF_EXPORT, pdf_export_node)
 
     # -- 3. Entry: START -> planner ---------------------------------------
     workflow.add_edge(START, NODE_PLANNER)
@@ -290,17 +295,18 @@ def build_graph() -> Any:
         },
     )
 
-    # -- 9. Sequential tail: risk -> valuation -> portfolio -> memo -> END -
+    # -- 9. Sequential tail: risk -> valuation -> portfolio -> memo -> pdf -
     workflow.add_edge(NODE_RISK, NODE_VALUATION)
     workflow.add_edge(NODE_VALUATION, NODE_PORTFOLIO_MANAGER)
     workflow.add_edge(NODE_PORTFOLIO_MANAGER, NODE_REPORT_GENERATOR)
-    workflow.add_edge(NODE_REPORT_GENERATOR, END)
+    workflow.add_edge(NODE_REPORT_GENERATOR, NODE_PDF_EXPORT)
+    workflow.add_edge(NODE_PDF_EXPORT, END)
 
     # -- 10. Compile -------------------------------------------------------
     compiled: Any = workflow.compile()
     logger.info(
         "build_graph: AIRP StateGraph compiled -- %d research agents, "
-        "%d routing nodes, 14 total nodes",
+        "%d routing nodes, 15 total nodes",
         len(RESEARCH_NODE_NAMES),
         len(ROUTING_NODE_NAMES),
     )
