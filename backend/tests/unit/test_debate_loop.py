@@ -285,7 +285,7 @@ class TestAgentResponseText:
             text = _agent_response_text(
                 agent_field_name="fundamental",
                 agent_label="Fundamental Analyst",
-                agent_out=cast(dict[str, Any], agent_out),
+                agent_out=agent_out,
                 challenged_agents=[],
                 bear_conviction=1,
             )

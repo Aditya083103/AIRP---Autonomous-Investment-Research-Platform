@@ -155,7 +155,7 @@ Public API
 import asyncio
 from datetime import datetime
 import logging
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 from backend.agents.contrarian_investor import run_contrarian_analysis
 from backend.agents.fundamental_analyst import run_fundamental_analysis
@@ -197,6 +197,58 @@ NODE_PDF_EXPORT = "pdf_export"
 # ---------------------------------------------------------------------------
 
 _NodeFn = Callable[[InvestmentState], dict[str, Any]]
+
+
+def _state_as_plain_dict(state: InvestmentState) -> dict[str, Any]:
+    """
+    View an InvestmentState as a plain ``dict[str, Any]``.
+
+    InvestmentState is a ``TypedDict`` (see backend.graph.state), which at
+    runtime *is* an ordinary dict -- ``TypedDict`` exists purely for static
+    type-checking and carries no runtime wrapper class. mypy, however,
+    treats it as a distinct structural type, so passing an InvestmentState
+    directly to a function annotated ``state: dict[str, Any]`` (e.g.
+    ``generate_investment_memo``, ``pdf_export_node`` in
+    ``backend.services``) fails under ``--strict`` with an ``arg-type``
+    error even though the value is perfectly valid at runtime.
+
+    ``dict(state)`` is a safe, zero-cost view (TypedDict supports the
+    Mapping protocol), so the only thing needed is to tell mypy the
+    resulting type explicitly via ``cast`` -- this is the AIRP-approved
+    alternative to a bare ``# type: ignore``.
+
+    Args:
+        state: The InvestmentState to view as a plain dict.
+
+    Returns:
+        The same underlying mapping, typed as ``dict[str, Any]``.
+    """
+    return cast("dict[str, Any]", dict(state))
+
+
+def _typed_dict_get(state: InvestmentState, field_name: str) -> Any:
+    """
+    Look up a dynamic (non-literal) key on an InvestmentState.
+
+    ``InvestmentState.get(field_name)`` cannot be resolved to a specific
+    value type by mypy when ``field_name`` is a plain ``str`` rather than
+    one of the TypedDict's literal keys, so the expression's static type
+    widens to ``object`` -- which then fails when passed to ``dict()``
+    (no overload of ``dict`` accepts a bare ``object``). This helper
+    centralises the one explicit, documented ``cast`` needed to look up a
+    field by a name computed at runtime (e.g. iterating over a list of
+    agent field names), instead of scattering ``# type: ignore`` comments.
+
+    Args:
+        state:      Current InvestmentState.
+        field_name: The state key to read, known only at runtime.
+
+    Returns:
+        The value stored under ``field_name``, or ``None`` if absent.
+        Typed as ``Any`` because the caller is expected to validate/
+        narrow the result (e.g. ``isinstance(..., dict)``) before use.
+    """
+    return cast(Any, state.get(field_name))
 
 
 def _run_persist(job_id: str, node_name: str, merged: InvestmentState) -> None:
@@ -668,7 +720,7 @@ def _build_agent_responses(
 
     responses: dict[str, str] = {}
     for field_name, label in agents:
-        agent_out: dict[str, Any] = dict(state.get(field_name) or {})
+        agent_out: dict[str, Any] = dict(_typed_dict_get(state, field_name) or {})
         responses[field_name] = _agent_response_text(
             agent_field_name=field_name,
             agent_label=label,
@@ -782,7 +834,7 @@ portfolio_manager_node: _NodeFn = _persist_after(
 
 
 def _report_generator_impl(state: InvestmentState) -> dict[str, Any]:
-    partial: dict[str, Any] = generate_investment_memo(state)
+    partial: dict[str, Any] = generate_investment_memo(_state_as_plain_dict(state))
     partial["status"] = "completed"
     partial["completed_at"] = datetime.utcnow().isoformat() + "Z"
     partial["current_node"] = NODE_REPORT_GENERATOR
@@ -796,7 +848,7 @@ report_generator_node: _NodeFn = _persist_after(
 
 
 def _pdf_export_impl(state: InvestmentState) -> dict[str, Any]:
-    partial: dict[str, Any] = _pdf_export_node(state)
+    partial: dict[str, Any] = _pdf_export_node(_state_as_plain_dict(state))
     partial["status"] = "completed"
     partial["completed_at"] = datetime.utcnow().isoformat() + "Z"
     partial["current_node"] = NODE_PDF_EXPORT
