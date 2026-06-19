@@ -368,6 +368,42 @@ class TestParallelTiming:
                 "error": None,
             }
         }
+        # T-044 fix: run_portfolio_manager_decision was the one Phase 4
+        # agent function NOT mocked here, despite the other three
+        # (contrarian/risk/valuation) already being mocked above for
+        # exactly this reason. portfolio_manager_node otherwise calls
+        # the real run_portfolio_manager_decision, which calls get_llm()
+        # and attempts a real Groq API call using conftest.py's fake
+        # test key -- adding multi-second real network latency to a
+        # test whose entire purpose is measuring LangGraph orchestration
+        # overhead in milliseconds. This is what caused
+        # test_parallel_faster_than_sequential_sum to intermittently
+        # exceed its timing guard.
+        _decision_out: dict[str, Any] = {
+            "decision": {
+                "agent_name": "portfolio_manager",
+                "verdict": "HOLD",
+                "conviction_score": 5,
+                "price_target": None,
+                "time_horizon": "12 months",
+                "executive_summary": "Mock executive summary.",
+                "investment_thesis": "Mock investment thesis.",
+                "bull_case": "Mock bull case.",
+                "bear_case": "Mock bear case.",
+                "risk_summary": "Mock risk summary.",
+                "valuation_summary": "Mock valuation summary.",
+                "key_risks": [],
+                "key_catalysts": [],
+                "contrarian_response": "Mock contrarian response.",
+                "debate_rounds_used": 1,
+                "agent_weights": {},
+                "summary": "Mock decision summary.",
+                "error": None,
+            },
+            "final_verdict": "HOLD",
+            "conviction_score": 5,
+            "price_target": None,
+        }
 
         with (
             patch("backend.graph.nodes.run_fundamental_analysis", fa_mock),
@@ -385,6 +421,10 @@ class TestParallelTiming:
             patch(
                 "backend.graph.nodes.run_valuation_analysis",
                 return_value=_valuation_out,
+            ),
+            patch(
+                "backend.graph.nodes.run_portfolio_manager_decision",
+                return_value=_decision_out,
             ),
             patch.dict(
                 os.environ,
@@ -462,6 +502,35 @@ class TestParallelTiming:
                 "error": None,
             }
         }
+        # T-044 fix: see test_parallel_faster_than_sequential_sum above
+        # for the full explanation -- run_portfolio_manager_decision was
+        # the one Phase 4 agent function not mocked here either, exposing
+        # this timing test to the same real-LLM-latency risk.
+        _decision_out2: dict[str, Any] = {
+            "decision": {
+                "agent_name": "portfolio_manager",
+                "verdict": "HOLD",
+                "conviction_score": 5,
+                "price_target": None,
+                "time_horizon": "12 months",
+                "executive_summary": "Mock executive summary.",
+                "investment_thesis": "Mock investment thesis.",
+                "bull_case": "Mock bull case.",
+                "bear_case": "Mock bear case.",
+                "risk_summary": "Mock risk summary.",
+                "valuation_summary": "Mock valuation summary.",
+                "key_risks": [],
+                "key_catalysts": [],
+                "contrarian_response": "Mock contrarian response.",
+                "debate_rounds_used": 1,
+                "agent_weights": {},
+                "summary": "Mock decision summary.",
+                "error": None,
+            },
+            "final_verdict": "HOLD",
+            "conviction_score": 5,
+            "price_target": None,
+        }
 
         with (
             patch("backend.graph.nodes.run_fundamental_analysis", fa_mock),
@@ -479,6 +548,10 @@ class TestParallelTiming:
             patch(
                 "backend.graph.nodes.run_valuation_analysis",
                 return_value=_valuation_out2,
+            ),
+            patch(
+                "backend.graph.nodes.run_portfolio_manager_decision",
+                return_value=_decision_out2,
             ),
             patch.dict(
                 os.environ,
@@ -531,7 +604,19 @@ class TestStateMerge:
     """After parallel execution, all 4 agent outputs are in state."""
 
     def _run_with_mocks(self) -> dict[str, Any]:
-        """Run the compiled graph with minimal mocks, return final state."""
+        """Run the compiled graph with minimal mocks, return final state.
+
+        T-044 fix: this helper previously mocked only the four research
+        agents, leaving risk_node/contrarian_node/valuation_node/
+        portfolio_manager_node to run for real -- each calling get_llm()
+        and attempting a real Groq API call with conftest.py's fake test
+        key. test_pipeline_reaches_completed_status and
+        test_final_state_has_decision both depend on this helper
+        producing a real "completed" status and a real "decision" dict,
+        which should not be left dependent on an unmocked external
+        network call succeeding. All four Phase 4 agents are now mocked
+        here too, consistent with TestParallelTiming's tests above.
+        """
         fa_out = {
             "fundamental": {
                 "agent_name": "fundamental_analyst",
@@ -560,6 +645,70 @@ class TestStateMerge:
                 "error": None,
             }
         }
+        contrarian_out = {
+            "contrarian": {
+                "agent_name": "contrarian_investor",
+                "bear_conviction": 3,
+                "counter_arguments": [],
+                "overlooked_risks": [],
+                "challenged_agents": [],
+                "strongest_argument": "Mock argument",
+                "summary": "Mock summary",
+                "error": None,
+            },
+            "debate_round_count": 1,
+        }
+        risk_out = {
+            "risk": {
+                "agent_name": "risk_officer",
+                "risk_score": 4,
+                "governance_risk": 4,
+                "regulatory_risk": 4,
+                "financial_risk": 4,
+                "concentration_risk": 4,
+                "risk_flags": [],
+                "critical_flags": [],
+                "risk_recommendation": "proceed_with_caution",
+                "summary": "Mock risk summary",
+                "error": None,
+            },
+            "risk_flags": [],
+            "critical_flags": [],
+        }
+        valuation_out = {
+            "valuation": {
+                "agent_name": "valuation_agent",
+                "valuation_verdict": "fairly_valued",
+                "peer_tickers": [],
+                "summary": "Mock valuation summary",
+                "error": None,
+            }
+        }
+        decision_out = {
+            "decision": {
+                "agent_name": "portfolio_manager",
+                "verdict": "HOLD",
+                "conviction_score": 5,
+                "price_target": None,
+                "time_horizon": "12 months",
+                "executive_summary": "Mock executive summary.",
+                "investment_thesis": "Mock investment thesis.",
+                "bull_case": "Mock bull case.",
+                "bear_case": "Mock bear case.",
+                "risk_summary": "Mock risk summary.",
+                "valuation_summary": "Mock valuation summary.",
+                "key_risks": [],
+                "key_catalysts": [],
+                "contrarian_response": "Mock contrarian response.",
+                "debate_rounds_used": 1,
+                "agent_weights": {},
+                "summary": "Mock decision summary.",
+                "error": None,
+            },
+            "final_verdict": "HOLD",
+            "conviction_score": 5,
+            "price_target": None,
+        }
 
         with (
             patch(
@@ -577,6 +726,22 @@ class TestStateMerge:
             patch(
                 "backend.graph.nodes.run_macro_analysis",
                 return_value=ma_out,
+            ),
+            patch(
+                "backend.graph.nodes.run_contrarian_analysis",
+                return_value=contrarian_out,
+            ),
+            patch(
+                "backend.graph.nodes.run_risk_analysis",
+                return_value=risk_out,
+            ),
+            patch(
+                "backend.graph.nodes.run_valuation_analysis",
+                return_value=valuation_out,
+            ),
+            patch(
+                "backend.graph.nodes.run_portfolio_manager_decision",
+                return_value=decision_out,
             ),
         ):
             compiled = build_graph()

@@ -1,33 +1,72 @@
 # backend/tests/integration/test_graph_integration.py
 """
-AIRP -- LangGraph End-to-End Integration Tests (T-035)
+AIRP -- LangGraph End-to-End Integration Tests (T-035, extended T-044)
 
 Tests the complete investment analysis pipeline from a raw InvestmentState
 through the full LangGraph StateGraph to a populated final state.
 
 Acceptance criteria (from project plan):
-  - Full pipeline runs in <2 minutes on mock data
-  - All state fields populated after the pipeline completes
+  - Full pipeline runs in <2 minutes on mock data (T-035)
+  - All state fields populated after the pipeline completes (T-035)
   - Error routing verified (fetch_financials empty -> error_handler path;
-    negative sentiment -> sentiment_escalation path)
+    negative sentiment -> sentiment_escalation path) (T-035)
+  - All Phase 4 agents unit tested (T-044 -- see test_risk_officer.py,
+    test_contrarian_investor.py, test_valuation_agent.py,
+    test_portfolio_manager.py, test_memo_generator.py, test_pdf_export.py;
+    this file covers the INTEGRATION level only)
+  - Debate loop integration test runs in <5min on mocks (T-044)
+  - debate_rounds[] populated; Portfolio Manager verdict present (T-044)
 
 Why integration tests (not unit tests)?
 ----------------------------------------
 These tests call build_graph().invoke() which runs the REAL compiled
 LangGraph graph -- all 15 nodes (T-043 adds pdf_export), real
-routing functions, real state merging.  The only mocking is at the
-agent layer (the four research agents and the state persistence
-layer).  This gives us:
+routing functions, real state merging.  Every agent FUNCTION CALL is
+mocked at the nodes.py layer (see "What IS mocked" below); every node
+WRAPPER, every routing decision, and every state-merge operation
+around those calls is real LangGraph machinery.  This gives us:
 
   - Proof that the graph compiles and runs end-to-end
   - Proof that LangGraph's parallel fan-out, join barrier, and conditional
     routing all work together correctly on real state
-  - Proof that the full pipeline completes in <2 minutes
+  - Proof that the debate loop (contrarian -> debate_loop ->
+    route_after_contrarian) genuinely populates debate_rounds[]
+  - Proof that the full pipeline completes well within budget
+
+T-044 fix -- why the four Phase 4 agents are now mocked too
+-------------------------------------------------------------
+Prior to T-044, only the four research agents were mocked here.
+risk_node, contrarian_node, valuation_node, and portfolio_manager_node
+all ran with their REAL implementations, every one of which calls
+get_llm() (see backend.agents.llm_factory) and constructs a real
+ChatGroq client using the fake key from conftest.py's test_settings
+fixture ("gsk_test-groq-key-for-unit-tests"). Because addopts = "-m
+'not integration'" excludes this file from the default pytest run,
+this had never actually been exercised: running `pytest -m
+integration` against this file would have attempted a real,
+authenticated Groq API call with an invalid key for every test class
+that reaches contrarian_node onward, and failed with an auth error
+rather than a useful assertion failure. T-044 closes this gap by
+mocking run_risk_analysis, run_contrarian_analysis,
+run_valuation_analysis, and run_portfolio_manager_decision at the same
+nodes.py level the four research agents were already mocked at (see
+_run_graph's risk_mock/contrarian_mock/valuation_mock/pm_mock
+parameters, all defaulting to realistic "success" mocks so every
+pre-existing call site keeps exercising exactly the same
+research-agent paths it always did).
+
+report_generator_node (T-042) and pdf_export_node (T-043) are
+deliberately NEVER mocked -- both are zero-LLM, zero-network pure
+functions by design, so they always run for real here, genuinely
+exercising Markdown memo assembly and (best-effort) PDF rendering.
 
 What IS mocked:
   - All four research agent functions (run_fundamental_analysis,
     run_technical_analysis, run_sentiment_analysis, run_macro_analysis)
     -- replaced with fast synchronous functions that return controlled dicts
+  - All four Phase 4 agent functions (run_risk_analysis,
+    run_contrarian_analysis, run_valuation_analysis,
+    run_portfolio_manager_decision) -- T-044, same reasoning as above
   - _run_persist in nodes.py -- prevents any DB connection
   - export_mermaid_diagram in graph.py -- prevents filesystem writes
 
@@ -38,8 +77,10 @@ What is NOT mocked:
   - research_join_node -- real join barrier
   - error_handler_node -- real flag writing
   - sentiment_escalation_node -- real flag writing
-  - contrarian_node, risk_node, valuation_node, portfolio_manager_node
-    (stubs but real functions -- Phase 4 logic added in T-037 to T-044)
+  - debate_loop_node -- real transcript-building logic (T-040); this is
+    the node whose output debate_rounds[] populated checks are testing
+  - report_generator_node -- real Markdown memo assembly (T-042)
+  - pdf_export_node -- real (best-effort) PDF rendering (T-043)
   - route_after_planner, route_after_research, route_after_contrarian
     -- real routing functions with real threshold logic
 
@@ -66,6 +107,15 @@ TestStateFieldPopulation
     Every expected state field is present and has the correct type
     after a full pipeline run.
 
+TestPhase4DebateEngine (T-044)
+    Full pipeline through the real debate engine (contrarian_node ->
+    debate_loop_node -> route_after_contrarian) with all eight agent
+    functions mocked. Verifies debate_rounds[] is genuinely populated
+    (not merely typed as a list), the Portfolio Manager's verdict is
+    present and well-formed, the T-042 Markdown memo and T-043 PDF
+    export fields are present in the final state, and the whole
+    debate-engine path completes in <5 minutes on mocks.
+
 TestMultipleRuns
     Two independent invocations produce independent results (no shared
     state between runs).
@@ -87,6 +137,11 @@ Design decisions
   lru_cache pollution from get_compiled_graph().
 * Mocks are applied at the function level, not the module level, so
   tests remain independent.
+* The Contrarian mock's bear_conviction is fixed at 4 (below the
+  route-again threshold of 7) so every test in this file takes exactly
+  one pass through the debate loop -- enough to prove debate_rounds[]
+  gets populated without spending two full LLM-shaped round-trips of
+  (mocked, but still real-LangGraph-scheduled) work per test.
 """
 import os
 import time
@@ -118,6 +173,14 @@ _EXCHANGE = "NSE"
 
 # Maximum acceptable pipeline duration in seconds (acceptance criterion).
 PIPELINE_TIMEOUT_S: float = 120.0
+
+# T-044 acceptance criterion: "debate loop integration test runs in
+# <5min on mocks". Distinct from PIPELINE_TIMEOUT_S above (the stricter
+# pre-existing T-035 budget of 2 minutes, which the debate-engine test
+# also comfortably satisfies) -- this constant exists so the T-044
+# criterion is checked explicitly under its own name, not only as an
+# inferred side effect of a different, stricter pre-existing test.
+DEBATE_ENGINE_TIMEOUT_S: float = 300.0
 
 # ---------------------------------------------------------------------------
 # Mock agent output factories
@@ -252,6 +315,174 @@ def _mock_macro_success(state: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _mock_risk_success(state: dict[str, Any]) -> dict[str, Any]:
+    """
+    Clean Risk Officer output -- low risk, no NEW critical flags.
+
+    T-044: the real run_risk_analysis (backend.agents.risk_officer)
+    calls get_llm() and would otherwise attempt a real Groq API call
+    using the fake key from conftest.py's test_settings fixture. This
+    mock replaces that entire function call, exactly mirroring how the
+    four research agents above are mocked.
+
+    IMPORTANT: state["risk_flags"] and state["critical_flags"] have no
+    custom LangGraph reducer (plain list[str] fields in state.py), so
+    LangGraph's default merge behaviour is last-write-wins, not
+    concatenation. The real run_risk_analysis reads whatever flags
+    upstream nodes (error_handler_node, sentiment_escalation_node)
+    already wrote and merges its own findings on top (see
+    backend.agents.risk_officer's _merge_flags helper) rather than
+    unconditionally returning a fresh list. This mock must do the same
+    merge, or it silently wipes out FUNDAMENTAL_DATA_UNAVAILABLE /
+    NEGATIVE_SENTIMENT_REQUIRES_ADDITIONAL_RESEARCH flags that ran
+    earlier in the same pipeline invocation -- exactly the regression
+    this comment exists to prevent from recurring.
+    """
+    upstream_risk_flags = list(state.get("risk_flags") or [])
+    upstream_critical_flags = list(state.get("critical_flags") or [])
+    return {
+        "risk": {
+            "agent_name": "risk_officer",
+            "analysis_id": state.get("job_id", "unknown"),
+            "company_name": state.get("company_name", "unknown"),
+            "ticker": state.get("ticker", "unknown"),
+            "error": None,
+            "risk_score": 3,
+            "governance_risk": 2,
+            "regulatory_risk": 2,
+            "financial_risk": 3,
+            "concentration_risk": 4,
+            "risk_flags": list(upstream_risk_flags),
+            "critical_flags": list(upstream_critical_flags),
+            "risk_recommendation": "proceed",
+            "summary": "Risk score of 3/10; no critical flags identified.",
+        },
+        "risk_flags": list(upstream_risk_flags),
+        "critical_flags": list(upstream_critical_flags),
+    }
+
+
+def _mock_contrarian_success(state: dict[str, Any]) -> dict[str, Any]:
+    """
+    Clean Contrarian Investor output -- bear_conviction below the
+    debate-loop-again threshold (7) so the pipeline proceeds after
+    exactly one debate round. This keeps the integration test fast
+    (one round, not two) while still genuinely exercising
+    debate_loop_node and proving debate_rounds[] gets populated --
+    the T-044 acceptance criterion.
+    """
+    return {
+        "contrarian": {
+            "agent_name": "contrarian_investor",
+            "analysis_id": state.get("job_id", "unknown"),
+            "company_name": state.get("company_name", "unknown"),
+            "ticker": state.get("ticker", "unknown"),
+            "error": None,
+            "counter_arguments": [
+                "Customer concentration in top 5 clients exceeds 40%."
+            ],
+            "challenged_agents": ["fundamental_analyst"],
+            "overlooked_risks": ["Currency exposure on USD-denominated contracts"],
+            "bear_conviction": 4,
+            "strongest_argument": (
+                "Customer concentration exceeds 40% in the top 5 clients, "
+                "a structural risk the bull case understates."
+            ),
+            "summary": "Moderate bear case; concentration risk is the key concern.",
+        },
+        "debate_round_count": int(state.get("debate_round_count") or 0) + 1,
+    }
+
+
+def _mock_valuation_success(state: dict[str, Any]) -> dict[str, Any]:
+    """
+    Clean Valuation Agent output -- undervalued, positive margin of
+    safety. Replaces the entire run_valuation_analysis call, so the
+    real function's own internal fetch_financials/fetch_ratios/
+    fetch_stock_price/_fetch_peer_multiples/get_llm calls never fire.
+    """
+    return {
+        "valuation": {
+            "agent_name": "valuation_agent",
+            "analysis_id": state.get("job_id", "unknown"),
+            "company_name": state.get("company_name", "unknown"),
+            "ticker": state.get("ticker", "unknown"),
+            "error": None,
+            "intrinsic_value_per_share": 4500.0,
+            "current_price": 3800.0,
+            "upside_downside_pct": 18.4,
+            "valuation_verdict": "undervalued",
+            "dcf_wacc_pct": 11.5,
+            "dcf_terminal_growth_pct": 4.0,
+            "dcf_projection_years": 5,
+            "pe_ratio": 28.5,
+            "sector_avg_pe": 26.0,
+            "pb_ratio": 12.1,
+            "sector_avg_pb": 11.0,
+            "ev_ebitda": 19.8,
+            "sector_avg_ev_ebitda": 18.5,
+            "peer_tickers": ["INFY.NS", "WIPRO.NS", "HCLTECH.NS"],
+            "premium_discount_to_peers_pct": 5.2,
+            "margin_of_safety": "moderate",
+            "summary": "DCF implies 18.4% upside to intrinsic value.",
+        }
+    }
+
+
+def _mock_portfolio_manager_success(state: dict[str, Any]) -> dict[str, Any]:
+    """
+    Clean Portfolio Manager decision -- BUY with high conviction.
+    Replaces the entire run_portfolio_manager_decision call so the
+    real function's get_llm() call never fires.
+    """
+    decision = {
+        "agent_name": "portfolio_manager",
+        "analysis_id": state.get("job_id", "unknown"),
+        "company_name": state.get("company_name", "unknown"),
+        "ticker": state.get("ticker", "unknown"),
+        "error": None,
+        "verdict": "BUY",
+        "conviction_score": 8,
+        "price_target": "Rs. 4,500 (12 months)",
+        "time_horizon": "12 months",
+        "executive_summary": (
+            "TCS demonstrates exceptional fundamental quality with a "
+            "46.2% ROE and a favourable macro backdrop."
+        ),
+        "investment_thesis": (
+            "The bull case rests on strong ROE, though Round 1 of the "
+            "debate raised customer concentration as a tempering factor."
+        ),
+        "bull_case": "Fundamental score of 9/10 driven by 46.2% ROE.",
+        "bear_case": "Customer concentration exceeds 40% per the Contrarian.",
+        "risk_summary": "Risk score of 3/10; no critical flags identified.",
+        "valuation_summary": "DCF implies 18.4% upside to intrinsic value.",
+        "key_risks": ["Customer concentration in top 5 clients exceeds 40%"],
+        "key_catalysts": ["Strong deal pipeline reported in latest earnings"],
+        "contrarian_response": (
+            "Addressing the Contrarian's strongest argument on customer "
+            "concentration directly in the final verdict."
+        ),
+        "debate_rounds_used": 1,
+        "agent_weights": {
+            "fundamental_analyst": 0.2,
+            "valuation_agent": 0.2,
+            "risk_officer": 0.15,
+            "contrarian_investor": 0.15,
+            "technical_analyst": 0.12,
+            "macro_economist": 0.1,
+            "news_sentiment": 0.08,
+        },
+        "summary": "TCS: BUY with conviction 8/10.",
+    }
+    return {
+        "decision": decision,
+        "final_verdict": decision["verdict"],
+        "conviction_score": decision["conviction_score"],
+        "price_target": decision["price_target"],
+    }
+
+
 # ---------------------------------------------------------------------------
 # Shared graph invocation helper
 # ---------------------------------------------------------------------------
@@ -264,17 +495,37 @@ def _run_graph(
     ma_mock: Any,
     job_id: str = _JOB_ID,
     ticker: str = _TICKER,
+    risk_mock: Any = _mock_risk_success,
+    contrarian_mock: Any = _mock_contrarian_success,
+    valuation_mock: Any = _mock_valuation_success,
+    pm_mock: Any = _mock_portfolio_manager_success,
 ) -> dict[str, Any]:
     """
     Run the full LangGraph pipeline with mocked research agents.
 
     Patches:
-    - run_fundamental_analysis -> fa_mock
-    - run_technical_analysis   -> ta_mock
-    - run_sentiment_analysis   -> sa_mock
-    - run_macro_analysis       -> ma_mock
-    - _run_persist             -> no-op (no DB)
-    - export_mermaid_diagram   -> no-op (no filesystem)
+    - run_fundamental_analysis        -> fa_mock
+    - run_technical_analysis          -> ta_mock
+    - run_sentiment_analysis          -> sa_mock
+    - run_macro_analysis              -> ma_mock
+    - run_risk_analysis               -> risk_mock        (T-044)
+    - run_contrarian_analysis         -> contrarian_mock   (T-044)
+    - run_valuation_analysis          -> valuation_mock    (T-044)
+    - run_portfolio_manager_decision  -> pm_mock           (T-044)
+    - _run_persist                    -> no-op (no DB)
+    - export_mermaid_diagram          -> no-op (no filesystem)
+
+    T-044 note: risk_mock/contrarian_mock/valuation_mock/pm_mock all
+    default to realistic "success" mocks so every pre-existing call
+    site (T-035 through T-043) continues to exercise exactly the same
+    research-agent error/escalation paths it always did, while now
+    also safely avoiding the real Phase 4 agents' get_llm() calls --
+    previously unmocked, which would have attempted a real Groq API
+    call using conftest.py's fake test key the first time any test in
+    this file actually ran with `-m integration`. report_generator_node
+    and pdf_export_node (T-042/T-043) are never mocked -- both are
+    zero-LLM, zero-network functions by design, so they always run for
+    real here, exercising the genuine Markdown/PDF generation logic.
 
     Args:
         fa_mock: Mock for fundamental analysis function.
@@ -283,6 +534,10 @@ def _run_graph(
         ma_mock: Mock for macro analysis function.
         job_id:  Job ID for the initial state.
         ticker:  Ticker symbol to analyse.
+        risk_mock: Mock for the Risk Officer agent function.
+        contrarian_mock: Mock for the Contrarian Investor agent function.
+        valuation_mock: Mock for the Valuation Agent function.
+        pm_mock: Mock for the Portfolio Manager decision function.
 
     Returns:
         The final state dict after pipeline completion.
@@ -311,6 +566,22 @@ def _run_graph(
         patch(
             "backend.graph.nodes.run_macro_analysis",
             side_effect=ma_mock,
+        ),
+        patch(
+            "backend.graph.nodes.run_risk_analysis",
+            side_effect=risk_mock,
+        ),
+        patch(
+            "backend.graph.nodes.run_contrarian_analysis",
+            side_effect=contrarian_mock,
+        ),
+        patch(
+            "backend.graph.nodes.run_valuation_analysis",
+            side_effect=valuation_mock,
+        ),
+        patch(
+            "backend.graph.nodes.run_portfolio_manager_decision",
+            side_effect=pm_mock,
         ),
         patch(
             "backend.graph.nodes._run_persist",
@@ -883,6 +1154,197 @@ class TestStateFieldPopulation:
     def test_decision_has_conviction_score(self) -> None:
         dec = cast(dict[str, Any], self.result.get("decision", {}))
         assert "conviction_score" in dec
+
+
+# ---------------------------------------------------------------------------
+# TestPhase4DebateEngine -- T-044 acceptance criteria
+# ---------------------------------------------------------------------------
+#
+# T-044's task description names three specific things to verify at the
+# integration level, distinct from what TestHappyPath / TestStateFieldPopulation
+# already cover:
+#   1. "integration test full debate loop" -- exercised here via the real
+#      contrarian_node -> debate_loop_node -> route_after_contrarian edge,
+#      with the four Phase 4 agents mocked (see _run_graph's T-044 addition)
+#      instead of left to call a real, unmocked LLM.
+#   2. "assert debate_rounds populated" -- the existing
+#      TestStateFieldPopulation.test_debate_rounds_is_list only asserts
+#      *type* (a list, possibly empty). This class asserts the list is
+#      non-empty AND that each entry has the real DebateRound shape
+#      (round_number, agent_responses, contrarian, completed_at) written
+#      by debate_loop_node's _debate_loop_impl.
+#   3. "Portfolio Manager verdict present" -- strengthens the existing
+#      verdict check with the full decision-shape assertions a memo
+#      consumer would actually rely on.
+#
+# This class also closes a real gap: prior to T-044, nothing in this file
+# asserted memo_markdown (T-042) or memo_pdf_path (T-043) at all, despite
+# the module docstring's claim of exercising "all 15 nodes".
+
+
+class TestPhase4DebateEngine:
+    """Full pipeline run verifying the Phase 4 debate engine and its
+    Investment Memo / PDF export outputs (T-037 through T-043)."""
+
+    @pytest.fixture(autouse=True)
+    def _run(self) -> None:
+        self.result = _run_graph(
+            fa_mock=_mock_fundamental_success,
+            ta_mock=_mock_technical_success,
+            sa_mock=_mock_sentiment_success,
+            ma_mock=_mock_macro_success,
+        )
+
+    # -- debate_rounds[] populated (T-044 acceptance criterion) -----------
+
+    def test_debate_rounds_is_non_empty(self) -> None:
+        """The mocked Contrarian has bear_conviction=4 (below the
+        route-again threshold of 7), so the pipeline takes exactly one
+        pass through contrarian_node -> debate_loop_node before
+        proceeding -- debate_loop_node always appends one entry per
+        pass, so the list must contain at least one round."""
+        rounds = cast(list[Any], self.result.get("debate_rounds"))
+        assert isinstance(rounds, list)
+        assert len(rounds) >= 1, (
+            "debate_rounds is empty -- the debate loop did not run, or "
+            "its output was not persisted to state"
+        )
+
+    def test_debate_round_entry_has_round_number(self) -> None:
+        rounds = cast(list[dict[str, Any]], self.result.get("debate_rounds", []))
+        assert "round_number" in rounds[0]
+        assert isinstance(rounds[0]["round_number"], int)
+
+    def test_debate_round_entry_has_agent_responses(self) -> None:
+        rounds = cast(list[dict[str, Any]], self.result.get("debate_rounds", []))
+        assert "agent_responses" in rounds[0]
+        assert isinstance(rounds[0]["agent_responses"], dict)
+        assert len(rounds[0]["agent_responses"]) > 0
+
+    def test_debate_round_entry_has_contrarian_text(self) -> None:
+        rounds = cast(list[dict[str, Any]], self.result.get("debate_rounds", []))
+        assert "contrarian" in rounds[0]
+        assert isinstance(rounds[0]["contrarian"], str)
+        assert len(rounds[0]["contrarian"]) > 0
+
+    def test_debate_round_entry_has_completed_at(self) -> None:
+        rounds = cast(list[dict[str, Any]], self.result.get("debate_rounds", []))
+        assert "completed_at" in rounds[0]
+
+    def test_debate_round_count_matches_rounds_length(self) -> None:
+        """debate_round_count is the scalar counter route_after_contrarian
+        reads; debate_rounds is the transcript list. For a single-round
+        run (this fixture) they must agree."""
+        rounds = cast(list[Any], self.result.get("debate_rounds", []))
+        count = self.result.get("debate_round_count")
+        assert count == len(rounds)
+
+    # -- Portfolio Manager verdict present (T-044 acceptance criterion) ---
+
+    def test_portfolio_manager_decision_present(self) -> None:
+        assert self.result.get("decision") is not None
+
+    def test_portfolio_manager_verdict_is_valid(self) -> None:
+        decision = cast(dict[str, Any], self.result.get("decision", {}))
+        assert decision.get("verdict") in ("BUY", "HOLD", "SELL")
+
+    def test_portfolio_manager_conviction_score_in_range(self) -> None:
+        decision = cast(dict[str, Any], self.result.get("decision", {}))
+        score = decision.get("conviction_score")
+        assert isinstance(score, int)
+        assert 1 <= score <= 10
+
+    def test_portfolio_manager_key_risks_present(self) -> None:
+        decision = cast(dict[str, Any], self.result.get("decision", {}))
+        assert isinstance(decision.get("key_risks"), list)
+
+    def test_portfolio_manager_agent_weights_present(self) -> None:
+        decision = cast(dict[str, Any], self.result.get("decision", {}))
+        assert isinstance(decision.get("agent_weights"), dict)
+
+    def test_final_verdict_mirrors_decision_verdict(self) -> None:
+        """state['final_verdict'] is the flat convenience field written
+        alongside the full decision dict -- both must agree."""
+        decision = cast(dict[str, Any], self.result.get("decision", {}))
+        assert self.result.get("final_verdict") == decision.get("verdict")
+
+    # -- Investment Memo (T-042) and PDF export (T-043) --------------------
+    # report_generator_node and pdf_export_node are NEVER mocked in
+    # _run_graph -- both are zero-LLM, zero-network functions, so they
+    # run for real here, exercising the genuine end-to-end Markdown
+    # generation and (best-effort) PDF rendering pipeline.
+
+    def test_memo_markdown_present(self) -> None:
+        memo = self.result.get("memo_markdown")
+        assert isinstance(memo, str)
+        assert len(memo) > 0
+
+    def test_memo_markdown_contains_company_name(self) -> None:
+        memo = cast(str, self.result.get("memo_markdown", ""))
+        assert _COMPANY in memo
+
+    def test_memo_markdown_contains_verdict(self) -> None:
+        decision = cast(dict[str, Any], self.result.get("decision", {}))
+        memo = cast(str, self.result.get("memo_markdown", ""))
+        assert decision.get("verdict", "") in memo
+
+    def test_memo_pdf_path_key_present(self) -> None:
+        """memo_pdf_path must be present in state regardless of whether
+        WeasyPrint's system libraries (Pango/Cairo/GDK-Pixbuf) are
+        actually installed in the environment running this test --
+        pdf_export_node degrades to None rather than failing when they
+        are not, by design (see backend.services.pdf_export)."""
+        assert "memo_pdf_path" in self.result
+
+    def test_memo_pdf_path_is_none_or_string(self) -> None:
+        path_value = self.result.get("memo_pdf_path")
+        assert path_value is None or isinstance(path_value, str)
+
+    # -- Pipeline completion despite the additional Phase 4 nodes ----------
+
+    def test_pipeline_still_completes(self) -> None:
+        assert self.result.get("status") == "completed"
+
+    def test_pipeline_reaches_pdf_export_as_current_node(self) -> None:
+        """pdf_export is the final node before END (T-043) -- current_node
+        should reflect that it was the last node to run."""
+        assert self.result.get("current_node") == "pdf_export"
+
+    # -- T-044 acceptance criterion: debate loop runs in <5min on mocks ---
+
+    def test_debate_engine_pipeline_under_five_minutes(self) -> None:
+        """
+        Explicit T-044 acceptance criterion check, measured independently
+        of the autouse fixture's invocation above (a fresh _run_graph
+        call here so this test's timing is not affected by whatever the
+        test collection/fixture-setup overhead for other tests in this
+        class happened to be).
+
+        All four research agents AND all four Phase 4 agents are mocked
+        to return instantly -- the measured time reflects only LangGraph
+        orchestration overhead across all 15 nodes, not any agent or
+        LLM latency.
+        """
+        start: float = time.perf_counter()
+
+        result = _run_graph(
+            fa_mock=_mock_fundamental_success,
+            ta_mock=_mock_technical_success,
+            sa_mock=_mock_sentiment_success,
+            ma_mock=_mock_macro_success,
+            job_id="t044-debate-engine-timing-001",
+        )
+
+        elapsed: float = time.perf_counter() - start
+
+        assert result.get("status") == "completed", (
+            f"Debate engine pipeline did not complete "
+            f"(status={result.get('status')})"
+        )
+        assert elapsed < DEBATE_ENGINE_TIMEOUT_S, (
+            f"Debate engine pipeline took {elapsed:.1f}s -- "
+            f"must be <{DEBATE_ENGINE_TIMEOUT_S}s (T-044 acceptance criterion)"
+        )
 
 
 # ---------------------------------------------------------------------------
