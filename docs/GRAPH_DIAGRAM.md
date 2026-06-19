@@ -4,7 +4,7 @@
 > on every `build_graph()` call.  **Do not edit manually** -- your
 > changes will be overwritten on the next graph compile.
 >
-> Generated: 2026-06-14 03:21:49 UTC
+> Generated: 2026-06-19 15:54:28 UTC
 
 ## Overview
 
@@ -23,6 +23,10 @@ Node categories:
 - **sentiment_escalation** -- Flags severely negative news environment (T-032)
 - **contrarian_investor** -- Challenges every bullish thesis; drives the debate loop
 - **risk_officer, valuation_agent, portfolio_manager** -- Final analysis sequence
+- **report_generator** -- Renders the Investment Memo (Markdown) from the
+  Portfolio Manager's decision
+- **pdf_export** -- Converts the Markdown memo to a branded PDF via
+  WeasyPrint; final node before END
 
 ## Graph
 
@@ -43,15 +47,21 @@ graph TD;
 	error_handler(error_handler)
 	sentiment_escalation(sentiment_escalation)
 	contrarian_investor(contrarian_investor)
+	debate_loop(debate_loop)
 	risk_officer(risk_officer)
 	valuation_agent(valuation_agent)
 	portfolio_manager(portfolio_manager)
+	report_generator(report_generator)
+	pdf_export(pdf_export)
 	__end__([<p>__end__</p>]):::last
 	__start__ --> planner;
+	contrarian_investor --> debate_loop;
 	error_handler --> contrarian_investor;
 	fundamental_analyst --> research_join;
 	macro_economist --> research_join;
-	portfolio_manager --> __end__;
+	pdf_export --> __end__;
+	portfolio_manager --> report_generator;
+	report_generator --> pdf_export;
 	risk_officer --> valuation_agent;
 	sentiment_analyst --> research_join;
 	sentiment_escalation --> contrarian_investor;
@@ -65,8 +75,8 @@ graph TD;
 	research_join -. &nbsp;error&nbsp; .-> error_handler;
 	research_join -. &nbsp;escalate_sentiment&nbsp; .-> sentiment_escalation;
 	research_join -. &nbsp;proceed&nbsp; .-> contrarian_investor;
-	contrarian_investor -. &nbsp;proceed&nbsp; .-> risk_officer;
-	contrarian_investor -. &nbsp;debate_again&nbsp; .-> contrarian_investor;
+	debate_loop -. &nbsp;debate_again&nbsp; .-> contrarian_investor;
+	debate_loop -. &nbsp;proceed&nbsp; .-> risk_officer;
 	classDef default fill:#f2f0ff,line-height:1.2
 	classDef first fill-opacity:0
 	classDef last fill:#bfb6fc
@@ -74,7 +84,7 @@ graph TD;
 
 ## Node Count
 
-Total nodes: 12
+Total nodes: 15
 
 ## Edge Notes
 

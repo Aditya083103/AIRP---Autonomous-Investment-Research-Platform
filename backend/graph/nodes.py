@@ -160,6 +160,12 @@ from typing import Any, Callable, cast
 from backend.agents.contrarian_investor import run_contrarian_analysis
 from backend.agents.fundamental_analyst import run_fundamental_analysis
 from backend.agents.macro_economist import run_macro_analysis
+from backend.agents.output_models import (
+    FundamentalAnalysis,
+    MacroAnalysis,
+    SentimentAnalysis,
+    TechnicalAnalysis,
+)
 from backend.agents.portfolio_manager import run_portfolio_manager_decision
 from backend.agents.risk_officer import run_risk_analysis
 from backend.agents.sentiment_analyst import run_sentiment_analysis
@@ -389,6 +395,135 @@ planner_node: _NodeFn = _persist_after(
 # Phase 2 research agent nodes -- NOT wrapped (parallel super-step)
 # ---------------------------------------------------------------------------
 
+#: Every agent function already documents "Never raises -- on failure
+#: result.error is non-null" for errors *inside* its own try/except.
+#: A NodeTimeoutError (or any other exception) raised by profile_node's
+#: watchdog happens OUTSIDE that try/except -- at the node-wrapper layer
+#: -- so it must be caught here to honour the same contract. Without
+#: this, a single slow/rate-limited research agent crashes the entire
+#: pipeline even though the other 3 research agents (and everything
+#: downstream) would otherwise succeed. One small ``_degraded_*``
+#: builder per agent below, each returning a minimal valid output model
+#: with ``error`` set, mirroring exactly what each agent module already
+#: builds internally on its own caught exceptions.
+
+
+def _degraded_fundamental(state: InvestmentState, reason: str) -> dict[str, Any]:
+    """Build a minimal, valid FundamentalAnalysis after a node failure."""
+    result = FundamentalAnalysis(
+        analysis_id=str(state.get("job_id", "unknown")),
+        company_name=str(state.get("company_name", "Unknown Company")),
+        ticker=str(state.get("ticker", "UNKNOWN")),
+        score=5,
+        error=reason,
+    )
+    return {"fundamental": result.model_dump()}
+
+
+def _degraded_technical(state: InvestmentState, reason: str) -> dict[str, Any]:
+    """Build a minimal, valid TechnicalAnalysis after a node failure."""
+    result = TechnicalAnalysis(
+        analysis_id=str(state.get("job_id", "unknown")),
+        company_name=str(state.get("company_name", "Unknown Company")),
+        ticker=str(state.get("ticker", "UNKNOWN")),
+        signal="HOLD",
+        signal_strength=1,
+        error=reason,
+    )
+    return {"technical": result.model_dump()}
+
+
+def _degraded_sentiment(state: InvestmentState, reason: str) -> dict[str, Any]:
+    """Build a minimal, valid SentimentAnalysis after a node failure."""
+    result = SentimentAnalysis(
+        analysis_id=str(state.get("job_id", "unknown")),
+        company_name=str(state.get("company_name", "Unknown Company")),
+        ticker=str(state.get("ticker", "UNKNOWN")),
+        sentiment_score=0.0,
+        sentiment_label="neutral",
+        articles_analysed=0,
+        positive_articles=0,
+        negative_articles=0,
+        neutral_articles=0,
+        error=reason,
+    )
+    return {"sentiment": result.model_dump()}
+
+
+def _degraded_macro(state: InvestmentState, reason: str) -> dict[str, Any]:
+    """Build a minimal, valid MacroAnalysis after a node failure."""
+    result = MacroAnalysis(
+        analysis_id=str(state.get("job_id", "unknown")),
+        company_name=str(state.get("company_name", "Unknown Company")),
+        ticker=str(state.get("ticker", "UNKNOWN")),
+        macro_environment="neutral",
+        sector_impact="neutral",
+        error=reason,
+    )
+    return {"macro": result.model_dump()}
+
+
+_DegradedFallbackFn = Callable[[InvestmentState, str], dict[str, Any]]
+
+
+def _run_research_node_safely(
+    state: InvestmentState,
+    agent_fn: Callable[[InvestmentState], dict[str, Any]],
+    node_name: str,
+    degraded_fallback: _DegradedFallbackFn,
+) -> dict[str, Any]:
+    """
+    Run one parallel research agent, never letting it crash the pipeline.
+
+    profile_node's watchdog enforces NODE_TIMEOUT_S and re-raises
+    NodeTimeoutError when an agent (most often the LLM call inside it)
+    runs long -- by design, so the timeout is visible in logs and
+    LangSmith. That re-raise is correct at the profiler layer, but
+    without a catch *here* it propagates straight through LangGraph's
+    Send super-step and aborts the whole graph.invoke() call, discarding
+    every other agent's already-completed work.
+
+    This wrapper restores the same "agents never raise" contract every
+    agent module already documents for its own internal errors, but at
+    the node-wrapper layer: any exception from the profiled call --
+    NodeTimeoutError or otherwise (e.g. a future unhandled error from a
+    new tool) -- degrades to a minimal valid output with ``error`` set,
+    exactly like an in-agent failure would. Downstream nodes (risk_node,
+    contrarian_node, _build_agent_responses) already check ``error`` and
+    handle it gracefully, so no other code needs to change.
+
+    Args:
+        state:             Current InvestmentState.
+        agent_fn:           The agent's run_*_analysis function.
+        node_name:          Node name for profiling/logging.
+        degraded_fallback:  Builds a minimal valid partial-state dict
+                            for this agent when it fails outside its
+                            own internal try/except.
+
+    Returns:
+        The agent's normal partial dict, or a degraded fallback dict
+        with ``error`` set -- never raises.
+    """
+    try:
+        return profile_node(agent_fn, node_name)(state)
+    except NodeTimeoutError as exc:
+        logger.error(
+            "%s: timed out and was caught at the node layer -- "
+            "degrading to a neutral result so the pipeline can "
+            "continue with the other 3 research agents: %s",
+            node_name,
+            exc,
+        )
+        return degraded_fallback(state, f"Node timed out: {exc}")
+    except Exception as exc:  # noqa: BLE001 -- last-resort safety net
+        logger.exception(
+            "%s: unhandled exception caught at the node layer -- "
+            "degrading to a neutral result so the pipeline can "
+            "continue with the other 3 research agents",
+            node_name,
+        )
+        return degraded_fallback(state, f"Unhandled node error: {exc}")
+
 
 def fundamental_node(state: InvestmentState) -> dict[str, Any]:
     """
@@ -397,6 +532,9 @@ def fundamental_node(state: InvestmentState) -> dict[str, Any]:
     NOT persistence-wrapped: runs in the Send super-step alongside
     3 other research nodes.  Persistence happens in research_join_node.
 
+    Never raises -- a timeout or unhandled error degrades to a neutral
+    FundamentalAnalysis with ``error`` set (see _run_research_node_safely).
+
     Returns:
         Partial state dict: ``{"fundamental": <model_dump dict>}``.
     """
@@ -404,7 +542,9 @@ def fundamental_node(state: InvestmentState) -> dict[str, Any]:
         "fundamental_node: running for ticker=%s",
         state.get("ticker", "unknown"),
     )
-    return profile_node(run_fundamental_analysis, NODE_FUNDAMENTAL)(state)
+    return _run_research_node_safely(
+        state, run_fundamental_analysis, NODE_FUNDAMENTAL, _degraded_fundamental
+    )
 
 
 def technical_node(state: InvestmentState) -> dict[str, Any]:
@@ -413,6 +553,9 @@ def technical_node(state: InvestmentState) -> dict[str, Any]:
 
     NOT persistence-wrapped: parallel super-step constraint.
 
+    Never raises -- a timeout or unhandled error degrades to a neutral
+    TechnicalAnalysis with ``error`` set (see _run_research_node_safely).
+
     Returns:
         Partial state dict: ``{"technical": <model_dump dict>}``.
     """
@@ -420,7 +563,9 @@ def technical_node(state: InvestmentState) -> dict[str, Any]:
         "technical_node: running for ticker=%s",
         state.get("ticker", "unknown"),
     )
-    return profile_node(run_technical_analysis, NODE_TECHNICAL)(state)
+    return _run_research_node_safely(
+        state, run_technical_analysis, NODE_TECHNICAL, _degraded_technical
+    )
 
 
 def sentiment_node(state: InvestmentState) -> dict[str, Any]:
@@ -429,6 +574,12 @@ def sentiment_node(state: InvestmentState) -> dict[str, Any]:
 
     NOT persistence-wrapped: parallel super-step constraint.
 
+    Never raises -- a timeout or unhandled error degrades to a neutral
+    SentimentAnalysis with ``error`` set (see _run_research_node_safely).
+    This is the node that triggered NodeTimeoutError in production when
+    Groq's daily token quota was exhausted mid-run -- previously this
+    crashed the whole pipeline; now it degrades gracefully instead.
+
     Returns:
         Partial state dict: ``{"sentiment": <model_dump dict>}``.
     """
@@ -436,7 +587,9 @@ def sentiment_node(state: InvestmentState) -> dict[str, Any]:
         "sentiment_node: running for ticker=%s",
         state.get("ticker", "unknown"),
     )
-    return profile_node(run_sentiment_analysis, NODE_SENTIMENT)(state)
+    return _run_research_node_safely(
+        state, run_sentiment_analysis, NODE_SENTIMENT, _degraded_sentiment
+    )
 
 
 def macro_node(state: InvestmentState) -> dict[str, Any]:
@@ -445,6 +598,9 @@ def macro_node(state: InvestmentState) -> dict[str, Any]:
 
     NOT persistence-wrapped: parallel super-step constraint.
 
+    Never raises -- a timeout or unhandled error degrades to a neutral
+    MacroAnalysis with ``error`` set (see _run_research_node_safely).
+
     Returns:
         Partial state dict: ``{"macro": <model_dump dict>}``.
     """
@@ -452,7 +608,9 @@ def macro_node(state: InvestmentState) -> dict[str, Any]:
         "macro_node: running for ticker=%s",
         state.get("ticker", "unknown"),
     )
-    return profile_node(run_macro_analysis, NODE_MACRO)(state)
+    return _run_research_node_safely(
+        state, run_macro_analysis, NODE_MACRO, _degraded_macro
+    )
 
 
 # ---------------------------------------------------------------------------
