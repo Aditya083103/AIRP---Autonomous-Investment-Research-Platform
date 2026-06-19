@@ -139,6 +139,15 @@ python-jose[cryptography]==3.3.0
 # Used in Phase 4 (T-044) when the Portfolio Manager produces the memo
 weasyprint==62.3
 
+# weasyprint==62.3 does not upper-bound its own pydyf dependency, so a bare
+# "pip install weasyprint==62.3" can silently pull in a too-new pydyf and
+# break PDF rendering with "AttributeError: 'super' object has no attribute
+# 'transform'" inside weasyprint/pdf/stream.py (pydyf 0.11.0, released
+# 2024-07-12, made a breaking API change -- see
+# github.com/Kozea/WeasyPrint/issues/2620). Pin pydyf explicitly below that
+# breaking release so this can never silently regress on a fresh install.
+pydyf==0.10.0
+
 
 # ── 9. Utilities & HTTP ───────────────────────────────────────────────────────
 
