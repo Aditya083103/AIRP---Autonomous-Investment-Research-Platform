@@ -4,7 +4,7 @@ AIRP — SQLAlchemy ORM Models (T-016)
 
 Defines the five core tables that back the AIRP system:
 
-    users            — Clerk-managed auth; local row per registered user
+    users            — Self-hosted auth (T-046); local row per registered user
     companies        — Normalised company/ticker registry (avoid re-resolving)
     analyses         — One row per analysis job; tracks status & timing
     agent_outputs    — One row per agent per analysis; stores raw JSON output
@@ -117,12 +117,14 @@ class Base(DeclarativeBase):
 
 class User(Base):
     """
-    Local user record mirroring Clerk's auth identity.
+    Local user record for self-hosted email/password authentication (T-046).
 
-    Clerk manages authentication; AIRP stores only the fields needed to
-    associate analyses with a user and display basic profile information.
-    The ``clerk_user_id`` is the canonical identifier received from Clerk
-    JWTs and is the join key for all auth checks.
+    Originally designed around Clerk as the auth provider (clerk_user_id
+    as the canonical identity key); migrated to self-hosted auth in T-046
+    per the actual task requirements (POST /auth/register, POST
+    /auth/login with bcrypt-hashed passwords, self-issued JWTs). ``email``
+    is now the canonical, unique identity key; ``password_hash`` stores a
+    bcrypt hash (via passlib) and is never serialised in any API response.
     """
 
     __tablename__ = "users"
@@ -132,22 +134,28 @@ class User(Base):
         primary_key=True,
         server_default=func.gen_random_uuid(),
     )
-    clerk_user_id: Mapped[str] = mapped_column(
-        String(128),
-        nullable=False,
-        unique=True,
-        index=True,
-        comment="Opaque Clerk user ID received from JWT (e.g. user_2abc...)",
-    )
     email: Mapped[str] = mapped_column(
         String(320),
         nullable=False,
-        comment="User's primary email address from Clerk",
+        unique=True,
+        index=True,
+        comment="User's email address — canonical login identity",
+    )
+    password_hash: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+        comment="bcrypt hash of the user's password (passlib CryptContext)",
     )
     display_name: Mapped[Optional[str]] = mapped_column(
         String(200),
         nullable=True,
-        comment="Display name from Clerk profile (first + last name)",
+        comment="Optional display name shown in the dashboard",
+    )
+    is_active: Mapped[bool] = mapped_column(
+        nullable=False,
+        default=True,
+        server_default="true",
+        comment="False disables login without deleting the account/history",
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -170,10 +178,7 @@ class User(Base):
         cascade="all, delete-orphan",
     )
 
-    __table_args__ = (
-        Index("ix_users_email", "email"),
-        {"comment": "Local user registry — one row per Clerk-authenticated user"},
-    )
+    __table_args__ = ({"comment": "Local user registry — one row per registered user"},)
 
     def __repr__(self) -> str:
         return f"<User id={self.id} email={self.email!r}>"

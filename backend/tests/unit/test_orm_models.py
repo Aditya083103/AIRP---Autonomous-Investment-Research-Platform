@@ -142,17 +142,31 @@ class TestUserColumns:
         assert isinstance(col.type, UUID)
         assert col.primary_key is True
 
-    def test_clerk_user_id_not_nullable(self) -> None:
-        assert _col(User, "clerk_user_id").nullable is False
-
-    def test_clerk_user_id_max_length(self) -> None:
-        assert _col(User, "clerk_user_id").type.length == 128
-
     def test_email_not_nullable(self) -> None:
         assert _col(User, "email").nullable is False
 
+    def test_email_unique(self) -> None:
+        assert _col(User, "email").unique is True
+
+    def test_email_max_length(self) -> None:
+        assert _col(User, "email").type.length == 320
+
+    def test_password_hash_not_nullable(self) -> None:
+        assert _col(User, "password_hash").nullable is False
+
+    def test_password_hash_max_length(self) -> None:
+        # bcrypt hashes are a fixed 60 chars; 255 leaves headroom for a
+        # future hash scheme migration (e.g. argon2) without a column resize.
+        assert _col(User, "password_hash").type.length == 255
+
     def test_display_name_nullable(self) -> None:
         assert _col(User, "display_name").nullable is True
+
+    def test_is_active_not_nullable(self) -> None:
+        assert _col(User, "is_active").nullable is False
+
+    def test_is_active_has_server_default(self) -> None:
+        assert _col(User, "is_active").server_default is not None
 
     def test_created_at_has_server_default(self) -> None:
         col = _col(User, "created_at")
@@ -161,11 +175,6 @@ class TestUserColumns:
     def test_updated_at_has_server_default(self) -> None:
         col = _col(User, "updated_at")
         assert col.server_default is not None
-
-    def test_clerk_user_id_unique(self) -> None:
-        # clerk_user_id has unique=True on the column itself (not in
-        # __table_args__), so we inspect the column property directly.
-        assert _col(User, "clerk_user_id").unique is True
 
 
 # ---------------------------------------------------------------------------
