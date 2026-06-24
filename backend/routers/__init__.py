@@ -9,13 +9,13 @@ is registered exactly once, in ``backend/main.py``, via
 
 Current routers
 ----------------
-    health.py   -- GET /health liveness probe (T-045)
-    auth.py     -- POST /auth/register, /auth/login, GET /auth/me (T-046)
+    health.py     -- GET /health liveness probe (T-045)
+    auth.py       -- POST /auth/register, /auth/login, GET /auth/me (T-046)
+    analysis.py   -- POST /api/v1/analysis/start (T-047)
 
 Planned (later tasks -- not yet present)
 -----------------------------------------
-    analysis.py     -- POST /api/v1/analysis/start,
-                        GET /api/v1/analysis/{job_id}/status (T-047, T-048)
+    analysis.py (extended) -- GET /api/v1/analysis/{job_id}/status (T-048)
     websocket.py    -- WS /api/v1/analysis/{job_id}/stream (T-049/T-050)
     documents.py    -- document upload for RAG enrichment (T-051)
 """
