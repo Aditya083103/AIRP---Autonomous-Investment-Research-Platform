@@ -1,6 +1,6 @@
 # backend/main.py
 """
-AIRP -- FastAPI Application Entrypoint (T-045)
+AIRP -- FastAPI Application Entrypoint (T-045 / T-046 / T-047)
 
 Creates and configures the single FastAPI ``app`` instance used by both
 local development (``uvicorn backend.main:app --reload``) and production
@@ -12,17 +12,17 @@ Responsibilities of this module ONLY
   (drives the auto-generated Swagger UI at /docs and ReDoc at /redoc).
 * Wire CORS so the React frontend (a different origin in dev and prod)
   can call the API and open the WebSocket endpoint added in later tasks.
-* Register routers (currently: health, auth). Each new router added in
-  T-047 onward is included here and nowhere else.
+* Register routers (currently: health, auth, analysis). Each new router
+  added in T-048 onward is included here and nowhere else.
 * Provide a typed lifespan context manager as the single place startup
   and shutdown behaviour is added (e.g. warming the LangGraph singleton
   in a later task) -- avoids scattering @app.on_event hooks.
 
-Explicitly OUT of scope for T-045/T-046 (later tasks)
-------------------------------------------------------
-* /api/v1/analysis/* routers                      -> T-047, T-048
-* WebSocket streaming endpoint                    -> T-049/T-050
-* Document upload endpoint                        -> T-051
+Explicitly OUT of scope for T-045/T-046/T-047 (later tasks)
+-------------------------------------------------------------
+* GET /api/v1/analysis/{job_id}/status             -> T-048
+* WebSocket streaming endpoint                      -> T-049/T-050
+* Document upload endpoint                          -> T-051
 
 Usage
 -----
@@ -41,7 +41,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.config import settings
-from backend.routers import auth, health
+from backend.routers import analysis, auth, health
 
 logger = logging.getLogger(__name__)
 
@@ -70,11 +70,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logic after it stops accepting them.
 
     T-045 only logs the active environment so deployed logs immediately
-    show which configuration is live. Later tasks (e.g. warming the
-    LangGraph singleton via ``get_compiled_graph()``, or opening a Redis
-    connection pool eagerly) hook into this same function rather than
-    adding separate ``@app.on_event`` decorators, which are deprecated
-    in modern FastAPI in favour of lifespan context managers.
+    show which configuration is live. Later tasks (e.g. warming
+    the LangGraph singleton via ``get_compiled_graph()``, or opening a
+    Redis connection pool eagerly) hook into this same function rather
+    than adding separate ``@app.on_event`` decorators, which are
+    deprecated in modern FastAPI in favour of lifespan context managers.
     """
     logger.info(
         "AIRP backend starting -- environment=%s llm_provider=%s",
@@ -125,6 +125,7 @@ def create_app() -> FastAPI:
     # -- Routers -------------------------------------------------------------
     application.include_router(health.router)
     application.include_router(auth.router)
+    application.include_router(analysis.router)
 
     return application
 
