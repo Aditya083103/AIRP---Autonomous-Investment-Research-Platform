@@ -42,3 +42,38 @@ select = E,W,F,B,C4
 # B950 = line too long (bugbear's softer version; respects black's 88+margin)
 extend-select = B950
 max-doc-length = 120
+
+# B008 flags function calls in parameter defaults as a general antipattern
+# (mutable-default-argument footgun). FastAPI's Depends()/Query()/Body() etc.
+# are specifically DESIGNED to be used this way -- FastAPI's dependency
+# injection inspects route parameter defaults for these exact call objects.
+# Whitelisting them here avoids a permanent false positive on every FastAPI
+# route handler from T-046 (auth) onward.
+#
+# IMPORTANT: flake8-bugbear matches extend-immutable-calls against the
+# literal text of the call expression in the AST -- it does NOT resolve
+# imports. `import fastapi` + `fastapi.Depends(...)` matches the dotted
+# entry below; `from fastapi import Depends` + bare `Depends(...)` does
+# NOT match the dotted entry and needs the bare name listed separately.
+# Both import styles appear across this codebase, so both forms are
+# listed for every name to avoid this silently re-breaking per file.
+# (See https://github.com/PyCQA/flake8-bugbear/issues/252.)
+extend-immutable-calls =
+    fastapi.Depends,
+    Depends,
+    fastapi.Query,
+    Query,
+    fastapi.Body,
+    Body,
+    fastapi.Path,
+    Path,
+    fastapi.Header,
+    Header,
+    fastapi.Cookie,
+    Cookie,
+    fastapi.Form,
+    Form,
+    fastapi.File,
+    File,
+    fastapi.Security,
+    Security

@@ -51,6 +51,29 @@ def _no_db_persist(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+@pytest.fixture(autouse=True)
+def _no_real_pdf_export(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    Prevent any test in this file from reaching real WeasyPrint.
+
+    Several tests below invoke the full compiled graph end-to-end, which
+    always reaches pdf_export_node on the way to END (portfolio_manager
+    -> report_generator -> pdf_export -> END is an unconditional chain --
+    see backend/graph/graph.py). render_memo_pdf calls real WeasyPrint,
+    which has been observed to crash with a native Windows access
+    violation during font subsetting / box layout on some local
+    WeasyPrint+GTK3 installs -- a fault below the Python interpreter that
+    no try/except in pdf_export.py can catch. This file's tests only
+    assert on debate/routing/state-merge behaviour, never on PDF
+    contents, so PDF rendering is mocked out globally rather than
+    relying on each test's own patch block to remember to do so.
+    """
+    monkeypatch.setattr(
+        "backend.services.pdf_export.render_memo_pdf",
+        lambda *args, **kwargs: None,
+    )
+
+
 from backend.graph.graph import (  # noqa: E402
     PARALLEL_OVERHEAD_S,
     RESEARCH_NODE_NAMES,

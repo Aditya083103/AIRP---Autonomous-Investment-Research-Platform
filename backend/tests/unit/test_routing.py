@@ -76,6 +76,28 @@ def _no_db_persist(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+@pytest.fixture(autouse=True)
+def _no_real_pdf_export(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    Prevent any test in this file from reaching real WeasyPrint.
+
+    TestGraphEndToEnd*Path tests below invoke the full compiled graph,
+    which always reaches pdf_export_node en route to END (portfolio_manager
+    -> report_generator -> pdf_export -> END is unconditional -- see
+    backend/graph/graph.py). render_memo_pdf calls real WeasyPrint, which
+    has been observed to crash with a native Windows access violation
+    during font subsetting / box layout on some local WeasyPrint+GTK3
+    installs -- a fault below the Python interpreter that no try/except
+    in pdf_export.py can catch. These tests only assert on routing/flag
+    behaviour, never on PDF contents, so PDF rendering is mocked out
+    globally here.
+    """
+    monkeypatch.setattr(
+        "backend.services.pdf_export.render_memo_pdf",
+        lambda *args, **kwargs: None,
+    )
+
+
 from backend.graph.graph import ROUTING_NODE_NAMES, build_graph  # noqa: E402
 from backend.graph.nodes import (  # noqa: E402
     NODE_CONTRARIAN,
@@ -208,6 +230,108 @@ def _make_agent_mock(output_key: str, output_value: dict[str, Any]) -> MagicMock
     return MagicMock(return_value={output_key: output_value})
 
 
+#: Schema-valid Phase 4 agent outputs shared by every _run_graph_with_mocks()
+#: call below. These four agents (contrarian/risk/valuation/portfolio
+#: manager) are not under test in this file -- route_after_research and
+#: the error_handler/sentiment_escalation nodes are -- so a single fixed
+#: "everything is fine downstream" mock is reused rather than rebuilt per
+#: call site. Without mocking these, the graph falls through to the real
+#: run_portfolio_manager_decision (a real Groq API call against
+#: conftest.py's fake test key) and real pdf_export_node (real
+#: WeasyPrint, which has crashed with a native Windows access violation
+#: on some local installs) -- neither acceptable in a unit test.
+_CONTRARIAN_OUT: dict[str, Any] = {
+    "contrarian": {
+        "agent_name": "contrarian_investor",
+        "bear_conviction": 3,
+        "counter_arguments": [],
+        "overlooked_risks": [],
+        "challenged_agents": [],
+        "strongest_argument": "Mock argument",
+        "summary": "Mock summary",
+        "error": None,
+    },
+    "debate_round_count": 1,
+}
+
+
+def _risk_mock_side_effect(state: dict[str, Any]) -> dict[str, Any]:
+    """
+    Mimic run_risk_analysis's upstream-flag merge (see
+    backend/agents/risk_officer.py) rather than overwriting risk_flags/
+    critical_flags outright.
+
+    risk_flags and critical_flags in InvestmentState are plain list[str]
+    fields with no LangGraph reducer (no Annotated[..., operator.add]),
+    so a node's partial-update return value REPLACES the prior value for
+    that key rather than appending to it. The real run_risk_analysis
+    reads state["risk_flags"]/state["critical_flags"] and merges its own
+    findings in (_merge_flags) precisely because of this. A mock that
+    just returns risk_flags=[] would silently erase the
+    FUNDAMENTAL_DATA_UNAVAILABLE / NEGATIVE_SENTIMENT flags that
+    error_handler_node / sentiment_escalation_node wrote earlier in the
+    pipeline, breaking TestGraphEndToEndErrorPath and
+    TestGraphEndToEndEscalationPath below.
+    """
+    upstream_risk_flags = list(state.get("risk_flags") or [])
+    upstream_critical_flags = list(state.get("critical_flags") or [])
+    return {
+        "risk": {
+            "agent_name": "risk_officer",
+            "risk_score": 4,
+            "governance_risk": 4,
+            "regulatory_risk": 4,
+            "financial_risk": 4,
+            "concentration_risk": 4,
+            "risk_flags": upstream_risk_flags,
+            "critical_flags": upstream_critical_flags,
+            "risk_recommendation": "proceed_with_caution",
+            "summary": "Mock risk summary",
+            "error": None,
+        },
+        "risk_flags": upstream_risk_flags,
+        "critical_flags": upstream_critical_flags,
+    }
+
+
+_VALUATION_OUT: dict[str, Any] = {
+    "valuation": {
+        "agent_name": "valuation_agent",
+        "valuation_verdict": "fairly_valued",
+        "peer_tickers": [],
+        "summary": "Mock valuation summary",
+        "error": None,
+    }
+}
+
+
+_DECISION_OUT: dict[str, Any] = {
+    "decision": {
+        "agent_name": "portfolio_manager",
+        "verdict": "HOLD",
+        "conviction_score": 5,
+        "price_target": None,
+        "time_horizon": "12 months",
+        "executive_summary": "Mock executive summary.",
+        "investment_thesis": "Mock investment thesis.",
+        "bull_case": "Mock bull case.",
+        "bear_case": "Mock bear case.",
+        "risk_summary": "Mock risk summary.",
+        "valuation_summary": "Mock valuation summary.",
+        "key_risks": [],
+        "key_catalysts": [],
+        "contrarian_response": "Mock contrarian response.",
+        "debate_rounds_used": 1,
+        "agent_weights": {},
+        "summary": "Mock decision summary.",
+        "error": None,
+    },
+    "final_verdict": "HOLD",
+    "conviction_score": 5,
+    "price_target": None,
+}
+
+
 def _run_graph_with_mocks(
     initial_state: InvestmentState,
     fa_output: dict[str, Any],
@@ -215,7 +339,7 @@ def _run_graph_with_mocks(
     sa_output: dict[str, Any],
     ma_output: dict[str, Any],
 ) -> dict[str, Any]:
-    """Run build_graph().invoke() with mocked research agents."""
+    """Run build_graph().invoke() with mocked research and Phase 4 agents."""
     fa_mock = _make_agent_mock("fundamental", fa_output)
     ta_mock = _make_agent_mock("technical", ta_output)
     sa_mock = _make_agent_mock("sentiment", sa_output)
@@ -237,6 +361,22 @@ def _run_graph_with_mocks(
         patch(
             "backend.graph.nodes.run_macro_analysis",
             ma_mock,
+        ),
+        patch(
+            "backend.graph.nodes.run_contrarian_analysis",
+            return_value=_CONTRARIAN_OUT,
+        ),
+        patch(
+            "backend.graph.nodes.run_risk_analysis",
+            side_effect=_risk_mock_side_effect,
+        ),
+        patch(
+            "backend.graph.nodes.run_valuation_analysis",
+            return_value=_VALUATION_OUT,
+        ),
+        patch(
+            "backend.graph.nodes.run_portfolio_manager_decision",
+            return_value=_DECISION_OUT,
         ),
     ):
         compiled = build_graph()

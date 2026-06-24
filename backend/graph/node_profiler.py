@@ -103,6 +103,7 @@ import math
 import os
 import platform
 import signal
+import sys
 import time
 from typing import Any, Callable, Literal
 
@@ -232,13 +233,25 @@ class _SigAlrmTimeout:
 
     def __enter__(self) -> "_SigAlrmTimeout":
         self._start = time.perf_counter()
-        self._old_handler = signal.signal(signal.SIGALRM, self._handler)
-        signal.alarm(self._seconds)
+        # Guarded by sys.platform rather than a `# type: ignore` so mypy's
+        # own platform-conditional stub for `signal` (typeshed declares
+        # SIGALRM/alarm only under `if sys.platform != "win32"`) resolves
+        # this branch correctly on every CI runner. On Linux/macOS CI,
+        # mypy type-checks this block normally -- no ignore needed, none
+        # added. On a Windows dev machine, mypy skips it entirely, so no
+        # attr-defined error is raised there either. At runtime this
+        # branch is always taken: _make_timeout_ctx's _IS_POSIX check
+        # (above) never instantiates _SigAlrmTimeout on Windows in the
+        # first place.
+        if sys.platform != "win32":
+            self._old_handler = signal.signal(signal.SIGALRM, self._handler)
+            signal.alarm(self._seconds)
         return self
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> Literal[False]:
-        signal.alarm(0)
-        signal.signal(signal.SIGALRM, self._old_handler)
+        if sys.platform != "win32":
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, self._old_handler)
         return False  # do not suppress exceptions
 
 
