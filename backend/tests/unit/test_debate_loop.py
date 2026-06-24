@@ -694,6 +694,18 @@ class TestMultiRoundIntegration:
                 "status": "completed",
             }
 
+        def render_memo_pdf_mock(*args: Any, **kwargs: Any) -> None:
+            # Never let this test touch real WeasyPrint/fontTools. On some
+            # Windows installs, WeasyPrint's font subsetting step crashes
+            # with a native access violation rather than raising a normal
+            # Python exception -- something pdf_export.py's own
+            # try/except cannot catch, since the process is killed below
+            # the interpreter. This test only cares about debate_rounds[]
+            # shape, so PDF export is mocked out entirely rather than
+            # relying on render_memo_pdf's already-safe degrade-to-None
+            # behaviour, which only covers catchable failures.
+            return None
+
         with (
             patch(
                 "backend.graph.nodes.run_fundamental_analysis",
@@ -722,6 +734,14 @@ class TestMultiRoundIntegration:
             patch(
                 "backend.graph.nodes.run_valuation_analysis",
                 side_effect=valuation_mock,
+            ),
+            patch(
+                "backend.graph.nodes.run_portfolio_manager_decision",
+                side_effect=portfolio_mock,
+            ),
+            patch(
+                "backend.services.pdf_export.render_memo_pdf",
+                side_effect=render_memo_pdf_mock,
             ),
             patch(
                 "backend.graph.nodes._run_persist",
