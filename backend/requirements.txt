@@ -129,8 +129,23 @@ newsapi-python==0.2.7
 # ── 7. Authentication ─────────────────────────────────────────────────────────
 
 # JWT token creation and verification for FastAPI auth endpoints
-# Used in Phase 5 (T-045) when auth routes are implemented
+# Used in Phase 5 (T-046) for self-issued access tokens
 python-jose[cryptography]==3.3.0
+
+# Password hashing for self-hosted register/login (T-046)
+passlib[bcrypt]==1.7.4
+
+# passlib==1.7.4 (the last released passlib version; upstream is stalled)
+# reads bcrypt.__about__.__version__ internally to detect the bcrypt
+# backend version. That attribute was removed in bcrypt==4.1.0, which
+# only produces a harmless "(trapped) error reading bcrypt version"
+# warning on every hash/verify call -- noisy but functionally correct.
+# bcrypt>=5.0.0 goes further and breaks passlib's 72-byte truncation
+# handling outright, raising "ValueError: password cannot be longer
+# than 72 bytes" on ordinary passwords (github.com/pyca/bcrypt/issues/1079).
+# Pin to the last version that still ships __about__, exactly like the
+# pydyf pin below for the analogous WeasyPrint/pydyf break.
+bcrypt==4.0.1
 
 
 # ── 8. PDF Generation ─────────────────────────────────────────────────────────

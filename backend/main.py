@@ -12,15 +12,14 @@ Responsibilities of this module ONLY
   (drives the auto-generated Swagger UI at /docs and ReDoc at /redoc).
 * Wire CORS so the React frontend (a different origin in dev and prod)
   can call the API and open the WebSocket endpoint added in later tasks.
-* Register routers (currently: health). Each new router added in
-  T-046 onward is included here and nowhere else.
+* Register routers (currently: health, auth). Each new router added in
+  T-047 onward is included here and nowhere else.
 * Provide a typed lifespan context manager as the single place startup
   and shutdown behaviour is added (e.g. warming the LangGraph singleton
   in a later task) -- avoids scattering @app.on_event hooks.
 
-Explicitly OUT of scope for T-045 (later tasks)
-------------------------------------------------
-* JWT auth / Clerk verification middleware       -> T-046
+Explicitly OUT of scope for T-045/T-046 (later tasks)
+------------------------------------------------------
 * /api/v1/analysis/* routers                      -> T-047, T-048
 * WebSocket streaming endpoint                    -> T-049/T-050
 * Document upload endpoint                        -> T-051
@@ -42,7 +41,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.config import settings
-from backend.routers import health
+from backend.routers import auth, health
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +124,7 @@ def create_app() -> FastAPI:
 
     # -- Routers -------------------------------------------------------------
     application.include_router(health.router)
+    application.include_router(auth.router)
 
     return application
 
