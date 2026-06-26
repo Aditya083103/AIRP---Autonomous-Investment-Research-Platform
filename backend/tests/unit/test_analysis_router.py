@@ -1,13 +1,19 @@
 # backend/tests/unit/test_analysis_router.py
 """
-Unit tests for T-047: backend/routers/analysis.py
+Unit tests for T-047 / T-048: backend/routers/analysis.py
 
 End-to-end HTTP tests against the real FastAPI app (httpx.ASGITransport,
 same pattern as test_main.py / test_auth_router.py) with:
   * get_async_session overridden to a small in-memory fake session that
     genuinely tracks inserted Company / Analysis rows (not a real
     PostgreSQL connection) -- mirrors test_auth_router.py's
-    _FakeAsyncSession for User.
+    _FakeAsyncSession for User. T-048 extends this fake to also serve
+    the raw text() status-read query (backend.services.analysis.
+    _SQL_LOAD_STATUS) via a separate, test-populated
+    status_overrides dict -- last_completed_node/error_message/etc.
+    are not ORM-mapped columns (see backend/models/orm.py's Analysis
+    class), so they cannot be read off the plain Analysis objects the
+    POST /start tests already create.
   * get_current_user overridden directly to a fixed User instance --
     T-047 is not re-testing JWT verification (that is T-046's job,
     already covered by test_auth_router.py / test_dependencies_auth.py);
@@ -21,14 +27,20 @@ same pattern as test_main.py / test_auth_router.py) with:
     this file forgot to patch it while the rest remembered.
 
 Acceptance criteria verified (from task spec):
-  * Endpoint returns job_id in <200ms       -- TestLatency
-  * Pipeline starts in background           -- TestBackgroundScheduling
-  * Job record in DB                        -- TestJobPersistence
+  T-047:
+    * Endpoint returns job_id in <200ms       -- TestLatency
+    * Pipeline starts in background           -- TestBackgroundScheduling
+    * Job record in DB                        -- TestJobPersistence
+  T-048:
+    * Status updates reflect actual pipeline
+      progress                                -- TestGetStatusSuccess
+    * 404 for unknown job_id                  -- TestGetStatusNotFound
 """
 
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
+from datetime import datetime, timezone
 import time
 from typing import Any, cast
 from unittest.mock import AsyncMock
@@ -37,6 +49,7 @@ import uuid
 from fastapi import FastAPI
 import httpx
 import pytest
+from sqlalchemy.sql.elements import TextClause
 
 from backend.config import Settings
 from backend.db.session import get_async_session
@@ -61,11 +74,27 @@ class _FakeResult:
         return self._value
 
 
+class _FakeStatusResult:
+    """
+    Minimal stand-in for SQLAlchemy's Result object as returned by a
+    raw text() query -- only fetchone() is needed, unlike _FakeResult
+    (used for the select(Company) ORM query) which needs
+    scalar_one_or_none().
+    """
+
+    def __init__(self, row: Any) -> None:
+        self._row = row
+
+    def fetchone(self) -> Any:
+        return self._row
+
+
 class _FakeAnalysisSession:
     """
     A tiny in-memory fake of AsyncSession supporting exactly the
     operations backend/services/analysis.py uses:
-    execute(select(Company).where(...)), add(), commit(), refresh().
+    execute(select(Company).where(...)), add(), commit(), refresh(),
+    and (T-048) execute(_SQL_LOAD_STATUS, {"job_id": ...}).
 
     Not a SQL engine -- inspects the compiled statement's bound
     parameter VALUES (not their auto-generated names) to find which
@@ -75,14 +104,29 @@ class _FakeAnalysisSession:
     test_auth_router.py's precedent, which only ever filters on one
     column (User.email or User.id) and can safely key off an exact
     name like "email_1".
+
+    T-048's status query is a raw text() clause, not an ORM Select, so
+    execute() branches on isinstance(statement, TextClause) and serves
+    it from status_overrides -- a dict tests populate directly with the
+    exact 7-tuple shape get_analysis_status reads via row[0]..row[6],
+    since last_completed_node/error_message/etc. are not ORM-mapped
+    columns on backend.models.orm.Analysis and so cannot be derived
+    from the plain Analysis objects the POST /start fake already
+    creates in self.analyses.
     """
 
     def __init__(self) -> None:
         self.companies: dict[uuid.UUID, Company] = {}
         self.analyses: dict[uuid.UUID, Analysis] = {}
+        self.status_overrides: dict[uuid.UUID, tuple[Any, ...]] = {}
         self._pending: list[Any] = []
 
-    async def execute(self, statement: Any) -> _FakeResult:
+    async def execute(self, statement: Any, params: Any = None) -> Any:
+        if isinstance(statement, TextClause):
+            job_id = uuid.UUID(str(params["job_id"])) if params else None
+            row = self.status_overrides.get(job_id) if job_id else None
+            return _FakeStatusResult(row)
+
         compiled = statement.compile(compile_kwargs={"literal_binds": False})
         bound_values = set(compiled.params.values())
 
@@ -463,3 +507,267 @@ class TestLatency:
 
         assert response.status_code == 202
         assert elapsed_ms < 200
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/analysis/{job_id}/status -- T-048
+# ---------------------------------------------------------------------------
+
+
+def _seed_status_row(
+    fake_session: _FakeAnalysisSession,
+    job_id: uuid.UUID,
+    user_id: uuid.UUID,
+    status: str = "running",
+    last_completed_node: Any = "fundamental_analyst",
+    error_message: Any = None,
+    requested_at: Any = None,
+    started_at: Any = None,
+    completed_at: Any = None,
+) -> None:
+    """Populate fake_session.status_overrides with the exact 7-tuple
+    shape backend.services.analysis.get_analysis_status reads via
+    row[0]..row[6] -- see _FakeAnalysisSession.execute's TextClause
+    branch."""
+    fake_session.status_overrides[job_id] = (
+        user_id,
+        status,
+        last_completed_node,
+        error_message,
+        requested_at,
+        started_at,
+        completed_at,
+    )
+
+
+class TestGetStatusNotFound:
+    @pytest.mark.asyncio
+    async def test_unknown_job_id_returns_404(self, client: httpx.AsyncClient) -> None:
+        response = await client.get(f"/api/v1/analysis/{uuid.uuid4()}/status")
+        assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_malformed_job_id_returns_422(
+        self, client: httpx.AsyncClient
+    ) -> None:
+        response = await client.get("/api/v1/analysis/not-a-uuid/status")
+        assert response.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_job_belonging_to_a_different_user_returns_404(
+        self, client: httpx.AsyncClient, fake_session: _FakeAnalysisSession
+    ) -> None:
+        job_id = uuid.uuid4()
+        someone_elses_user_id = uuid.uuid4()
+        _seed_status_row(fake_session, job_id, user_id=someone_elses_user_id)
+
+        response = await client.get(f"/api/v1/analysis/{job_id}/status")
+
+        assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_requires_authentication(
+        self,
+        fake_session: _FakeAnalysisSession,
+        test_settings: Settings,
+        patched_pipeline: AsyncMock,
+    ) -> None:
+        app: FastAPI = create_app()
+        app.dependency_overrides[get_async_session] = _make_session_override(
+            fake_session
+        )
+        app.dependency_overrides[get_settings_dependency] = lambda: test_settings
+        # Deliberately NOT overriding get_current_user here.
+        transport = httpx.ASGITransport(app=cast(Any, app))
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://testserver"
+        ) as ac:
+            response = await ac.get(f"/api/v1/analysis/{uuid.uuid4()}/status")
+        assert response.status_code == 401
+
+
+class TestGetStatusSuccess:
+    @pytest.mark.asyncio
+    async def test_returns_200_for_owning_user(
+        self,
+        client: httpx.AsyncClient,
+        fake_session: _FakeAnalysisSession,
+        current_user: User,
+    ) -> None:
+        job_id = uuid.uuid4()
+        _seed_status_row(fake_session, job_id, user_id=current_user.id)
+
+        response = await client.get(f"/api/v1/analysis/{job_id}/status")
+
+        assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_response_includes_job_id(
+        self,
+        client: httpx.AsyncClient,
+        fake_session: _FakeAnalysisSession,
+        current_user: User,
+    ) -> None:
+        job_id = uuid.uuid4()
+        _seed_status_row(fake_session, job_id, user_id=current_user.id)
+
+        response = await client.get(f"/api/v1/analysis/{job_id}/status")
+
+        assert response.json()["job_id"] == str(job_id)
+
+    @pytest.mark.asyncio
+    async def test_pending_job_reports_zero_progress(
+        self,
+        client: httpx.AsyncClient,
+        fake_session: _FakeAnalysisSession,
+        current_user: User,
+    ) -> None:
+        job_id = uuid.uuid4()
+        _seed_status_row(
+            fake_session,
+            job_id,
+            user_id=current_user.id,
+            status="pending",
+            last_completed_node=None,
+        )
+
+        response = await client.get(f"/api/v1/analysis/{job_id}/status")
+        body = response.json()
+
+        assert body["status"] == "pending"
+        assert body["progress_percent"] == 0
+        assert body["completed_nodes"] == []
+
+    @pytest.mark.asyncio
+    async def test_running_job_reports_partial_progress(
+        self,
+        client: httpx.AsyncClient,
+        fake_session: _FakeAnalysisSession,
+        current_user: User,
+    ) -> None:
+        job_id = uuid.uuid4()
+        _seed_status_row(
+            fake_session,
+            job_id,
+            user_id=current_user.id,
+            status="running",
+            last_completed_node="contrarian_investor",
+        )
+
+        response = await client.get(f"/api/v1/analysis/{job_id}/status")
+        body = response.json()
+
+        assert body["status"] == "running"
+        assert 0 < body["progress_percent"] < 100
+        assert "contrarian_investor" in body["completed_nodes"]
+        assert body["current_phase"] == "Building the bear case"
+
+    @pytest.mark.asyncio
+    async def test_completed_job_reports_full_progress(
+        self,
+        client: httpx.AsyncClient,
+        fake_session: _FakeAnalysisSession,
+        current_user: User,
+    ) -> None:
+        job_id = uuid.uuid4()
+        completed_at = datetime(2026, 1, 1, 0, 5, tzinfo=timezone.utc)
+        _seed_status_row(
+            fake_session,
+            job_id,
+            user_id=current_user.id,
+            status="completed",
+            last_completed_node="pdf_export",
+            completed_at=completed_at,
+        )
+
+        response = await client.get(f"/api/v1/analysis/{job_id}/status")
+        body = response.json()
+
+        assert body["status"] == "completed"
+        assert body["progress_percent"] == 100
+        assert len(body["completed_nodes"]) == 9
+
+    @pytest.mark.asyncio
+    async def test_failed_job_includes_error_message(
+        self,
+        client: httpx.AsyncClient,
+        fake_session: _FakeAnalysisSession,
+        current_user: User,
+    ) -> None:
+        job_id = uuid.uuid4()
+        _seed_status_row(
+            fake_session,
+            job_id,
+            user_id=current_user.id,
+            status="failed",
+            last_completed_node="valuation_agent",
+            error_message="yfinance timed out after 3 retries",
+        )
+
+        response = await client.get(f"/api/v1/analysis/{job_id}/status")
+        body = response.json()
+
+        assert body["status"] == "failed"
+        assert body["error_message"] == "yfinance timed out after 3 retries"
+        assert body["progress_percent"] < 100
+
+    @pytest.mark.asyncio
+    async def test_two_consecutive_polls_with_no_progress_return_identical_body(
+        self,
+        client: httpx.AsyncClient,
+        fake_session: _FakeAnalysisSession,
+        current_user: User,
+    ) -> None:
+        """
+        Acceptance criterion: "status updates reflect actual pipeline
+        progress" -- the converse must also hold: with NO progress
+        between two polls, the response must not change either.
+        """
+        job_id = uuid.uuid4()
+        _seed_status_row(
+            fake_session,
+            job_id,
+            user_id=current_user.id,
+            status="running",
+            last_completed_node="risk_officer",
+        )
+
+        first = await client.get(f"/api/v1/analysis/{job_id}/status")
+        second = await client.get(f"/api/v1/analysis/{job_id}/status")
+
+        assert first.json() == second.json()
+
+    @pytest.mark.asyncio
+    async def test_progress_increases_as_last_completed_node_advances(
+        self,
+        client: httpx.AsyncClient,
+        fake_session: _FakeAnalysisSession,
+        current_user: User,
+    ) -> None:
+        """
+        Acceptance criterion: "status updates reflect actual pipeline
+        progress" -- simulates the pipeline advancing between two polls
+        by re-seeding status_overrides with a later last_completed_node,
+        exactly as a real LangGraph node's _persist_after call would
+        update the same analyses row mid-run.
+        """
+        job_id = uuid.uuid4()
+        _seed_status_row(
+            fake_session,
+            job_id,
+            user_id=current_user.id,
+            status="running",
+            last_completed_node="planner",
+        )
+        first = await client.get(f"/api/v1/analysis/{job_id}/status")
+
+        _seed_status_row(
+            fake_session,
+            job_id,
+            user_id=current_user.id,
+            status="running",
+            last_completed_node="valuation_agent",
+        )
+        second = await client.get(f"/api/v1/analysis/{job_id}/status")
+
+        assert second.json()["progress_percent"] > first.json()["progress_percent"]

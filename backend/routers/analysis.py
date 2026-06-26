@@ -1,13 +1,18 @@
 # backend/routers/analysis.py
 """
-AIRP -- Analysis Trigger Router (T-047)
+AIRP -- Analysis Trigger & Status Router (T-047 / T-048)
 
-POST /api/v1/analysis/start.
+POST /api/v1/analysis/start (T-047)
+GET  /api/v1/analysis/{job_id}/status (T-048)
 
-Acceptance criteria (from task spec):
+T-047 acceptance criteria (from task spec):
   * Endpoint returns job_id in <200ms
   * Pipeline starts in background
   * Job record in DB
+
+T-048 acceptance criteria (from task spec):
+  * Status updates reflect actual pipeline progress
+  * 404 for unknown job_id
 
 HTTP-layer concerns only (request validation via Pydantic schemas,
 authentication via get_current_user, translating service-layer results
@@ -15,8 +20,8 @@ into the response schema) -- all ticker resolution, database writes, and
 the LangGraph invocation itself live in backend.services.analysis,
 mirroring the auth router/service split established in T-046.
 
-Why <200ms is achievable
--------------------------
+Why <200ms is achievable (T-047)
+----------------------------------
 The synchronous path this handler executes is exactly:
   1. Resolve the ticker (pure Python, no I/O) -- resolve_company.
   2. One SELECT + at most one INSERT for the Company row --
@@ -27,17 +32,45 @@ The synchronous path this handler executes is exactly:
      response has been sent (per Starlette's BackgroundTasks contract),
      so the 60-90 second LangGraph pipeline never appears on this
      request's critical path at all.
+
+Why status reflects ACTUAL progress (T-048)
+----------------------------------------------
+GET /status never computes or guesses anything about where the pipeline
+"should" be. It reads analyses.last_completed_node and analyses.status
+-- the exact two columns
+backend.services.state_persistence.StatePersistenceService writes
+synchronously after every LangGraph node completes (T-033) and on
+failure (mark_failed) -- and derives current_phase / completed_nodes /
+progress_percent from those two values alone
+(backend.services.analysis.compute_progress). Two polls with no
+pipeline progress in between return byte-identical phase/percentage
+fields, because nothing here is a clock or a guess.
+
+Why a 404 (not 403) for another user's job_id (T-048)
+---------------------------------------------------------
+backend.services.analysis.get_analysis_status returns None both when
+job_id does not exist at all and when it exists but belongs to a
+different user. Returning 404 in both cases (rather than 403 for the
+ownership-mismatch case) avoids leaking which job_id UUIDs are valid to
+a caller who does not own them.
 """
 
-from fastapi import APIRouter, BackgroundTasks, Depends, status
+import uuid
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.session import get_async_session
 from backend.dependencies.auth import get_current_user
 from backend.models.orm import User
-from backend.models.schemas import AnalysisStartRequest, AnalysisStartResponse
+from backend.models.schemas import (
+    AnalysisStartRequest,
+    AnalysisStartResponse,
+    AnalysisStatusResponse,
+)
 from backend.services.analysis import (
     create_analysis_job,
+    get_analysis_status,
     get_or_create_company,
     resolve_company,
     run_analysis_pipeline,
@@ -98,4 +131,52 @@ async def start_analysis(
         company_name=resolution.company_name,
         ticker=resolution.ticker,
         exchange=resolution.exchange,
+    )
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/analysis/{job_id}/status
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/{job_id}/status",
+    response_model=AnalysisStatusResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Poll the status of an analysis job",
+    description=(
+        "Returns the current lifecycle status, phase, completed nodes, "
+        "and progress percentage for an analysis job, read directly from "
+        "the same analyses row the LangGraph pipeline updates after every "
+        "node completes. Returns 404 if job_id does not exist or belongs "
+        "to a different user."
+    ),
+)
+async def get_analysis_status_endpoint(
+    job_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_async_session),
+) -> AnalysisStatusResponse:
+    result = await get_analysis_status(
+        session,
+        job_id=job_id,
+        user_id=current_user.id,
+    )
+
+    if result is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No analysis job found for the given job_id",
+        )
+
+    return AnalysisStatusResponse(
+        job_id=result.job_id,
+        status=result.status,
+        current_phase=result.current_phase,
+        completed_nodes=result.completed_nodes,
+        progress_percent=result.progress_percent,
+        error_message=result.error_message,
+        requested_at=result.requested_at,
+        started_at=result.started_at,
+        completed_at=result.completed_at,
     )

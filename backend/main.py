@@ -1,6 +1,6 @@
 # backend/main.py
 """
-AIRP -- FastAPI Application Entrypoint (T-045 / T-046 / T-047)
+AIRP -- FastAPI Application Entrypoint (T-045 / T-046 / T-047 / T-048)
 
 Creates and configures the single FastAPI ``app`` instance used by both
 local development (``uvicorn backend.main:app --reload``) and production
@@ -13,14 +13,15 @@ Responsibilities of this module ONLY
 * Wire CORS so the React frontend (a different origin in dev and prod)
   can call the API and open the WebSocket endpoint added in later tasks.
 * Register routers (currently: health, auth, analysis). Each new router
-  added in T-048 onward is included here and nowhere else.
+  added in T-049 onward is included here and nowhere else. T-048 added
+  a new route to the EXISTING analysis router (backend/routers/analysis.py)
+  rather than a new router module, so no change was needed here.
 * Provide a typed lifespan context manager as the single place startup
   and shutdown behaviour is added (e.g. warming the LangGraph singleton
   in a later task) -- avoids scattering @app.on_event hooks.
 
-Explicitly OUT of scope for T-045/T-046/T-047 (later tasks)
--------------------------------------------------------------
-* GET /api/v1/analysis/{job_id}/status             -> T-048
+Explicitly OUT of scope for T-045 through T-048 (later tasks)
+-----------------------------------------------------------------
 * WebSocket streaming endpoint                      -> T-049/T-050
 * Document upload endpoint                          -> T-051
 
