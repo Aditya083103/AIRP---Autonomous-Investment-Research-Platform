@@ -146,6 +146,14 @@ class Settings(BaseSettings):
     )
     feature_rate_limiting: bool = True
     max_concurrent_analyses: int = 3
+    max_upload_size_mb: int = Field(
+        default=20,
+        description=(
+            "Maximum accepted PDF upload size in megabytes for "
+            "POST /api/v1/documents/upload. Requests above this are "
+            "rejected with 413 before any text extraction is attempted."
+        ),
+    )
 
     # ── Input normalizers ─────────────────────────────────────────────────
     # Run BEFORE the Literal check so a stray trailing space (a classic

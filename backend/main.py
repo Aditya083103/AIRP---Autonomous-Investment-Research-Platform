@@ -1,7 +1,7 @@
 # backend/main.py
 """
 AIRP -- FastAPI Application Entrypoint
-(T-045 / T-046 / T-047 / T-048 / T-049 / T-050)
+(T-045 / T-046 / T-047 / T-048 / T-049 / T-050 / T-051)
 
 Creates and configures the single FastAPI ``app`` instance used by both
 local development (``uvicorn backend.main:app --reload``) and production
@@ -13,21 +13,22 @@ Responsibilities of this module ONLY
   (drives the auto-generated Swagger UI at /docs and ReDoc at /redoc).
 * Wire CORS so the React frontend (a different origin in dev and prod)
   can call the API and open the WebSocket endpoint added in T-049.
-* Register routers (currently: health, auth, analysis, websocket). Each
-  new router added from T-049 onward is included here and nowhere
-  else. T-048 and T-050 both added new routes to the EXISTING analysis
-  router (backend/routers/analysis.py) rather than a new router
-  module, so no change was needed here for either task. T-049 DOES add
-  a new router module (backend/routers/websocket.py, ``WS /api/v1
-  /analysis/{job_id}/stream``) and is registered below alongside the
-  other three.
+* Register routers (currently: health, auth, analysis, websocket,
+  documents). Each new router added from T-049 onward is included
+  here and nowhere else. T-048 and T-050 both added new routes to the
+  EXISTING analysis router (backend/routers/analysis.py) rather than a
+  new router module, so no change was needed here for either task.
+  T-049 added a new router module (backend/routers/websocket.py,
+  ``WS /api/v1/analysis/{job_id}/stream``) and T-051 adds another
+  (backend/routers/documents.py, ``POST /api/v1/documents/upload``) --
+  both registered below alongside the other routers.
 * Provide a typed lifespan context manager as the single place startup
   and shutdown behaviour is added (e.g. warming the LangGraph singleton
   in a later task) -- avoids scattering @app.on_event hooks.
 
-Explicitly OUT of scope for T-045 through T-050 (later tasks)
+Explicitly OUT of scope for T-045 through T-051 (later tasks)
 -----------------------------------------------------------------
-* Document upload endpoint                          -> T-051
+* API test suite (pytest + httpx coverage pass)  -> T-052
 
 Usage
 -----
@@ -46,7 +47,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.config import settings
-from backend.routers import analysis, auth, health, websocket
+from backend.routers import analysis, auth, documents, health, websocket
 
 logger = logging.getLogger(__name__)
 
@@ -132,6 +133,7 @@ def create_app() -> FastAPI:
     application.include_router(auth.router)
     application.include_router(analysis.router)
     application.include_router(websocket.router)
+    application.include_router(documents.router)
 
     return application
 

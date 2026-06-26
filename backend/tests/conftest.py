@@ -127,6 +127,7 @@ def test_settings() -> Settings:
         feature_pdf_enabled=True,
         feature_rate_limiting=False,  # disabled in tests — no throttling
         max_concurrent_analyses=3,
+        max_upload_size_mb=20,
     )
     assert isinstance(result, Settings)
     return result

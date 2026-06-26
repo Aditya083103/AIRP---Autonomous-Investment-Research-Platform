@@ -15,6 +15,7 @@ Architecture:
     build_chroma_client    — factory combining client + embedding fn
     ingest_news_articles   — batch-ingest structured news dicts
     ingest_transcript      — split + ingest a single transcript
+    ingest_document         — split + ingest a user-uploaded PDF (T-051)
     semantic_search        — similarity search across a collection
 
 Environment routing (ENVIRONMENT variable):
@@ -555,6 +556,100 @@ def ingest_transcript(
         ticker,
         total,
         source,
+    )
+    return ids
+
+
+def ingest_document(
+    text: str,
+    company: str,
+    ticker: str,
+    source_filename: str,
+    chroma: ChromaClient,
+    doc_type: DocumentType = DocumentType.ANNUAL_REPORT,
+    chunk_size: int = DEFAULT_CHUNK_SIZE,
+) -> list[str]:
+    """
+    Embed and store a user-uploaded document in ``airp_documents`` (T-051).
+
+    Generalises ``ingest_transcript``'s chunk-and-store flow for the
+    ``POST /api/v1/documents/upload`` endpoint: a caller-supplied PDF
+    (annual report or earnings call transcript) is split into the same
+    overlapping fixed-size chunks and written with ``doc_type`` set to
+    whichever ``DocumentType`` the upload represents — kept in the
+    dedicated ``COLLECTION_DOCUMENTS`` collection (distinct from
+    ``COLLECTION_TRANSCRIPTS``, which only ever holds Screener.in-scraped
+    earnings calls) so a future per-collection retention or quota policy
+    can treat user uploads independently of scraped data.
+
+    A deterministic base ID is derived from ``(ticker, source_filename)``
+    via SHA-256 — re-uploading the exact same file for the exact same
+    ticker upserts (re-embeds) rather than duplicating, the same
+    idempotency guarantee ``ingest_transcript`` and ``ingest_news_articles``
+    already provide for their own inputs.
+
+    Args:
+        text:             Full extracted document text (already run
+                          through PDF text extraction by the caller —
+                          this function only chunks and embeds).
+        company:          Company display name — stored in metadata so
+                          agents can filter results via
+                          ``semantic_search(..., company_filter=...)``.
+        ticker:           Stock ticker — stored in metadata.
+        source_filename:  Original uploaded filename (e.g.
+                          ``"TCS_Annual_Report_FY24.pdf"``) — stored in
+                          metadata for display/audit, and folded into the
+                          deterministic chunk ID so re-uploads upsert.
+        chroma:           ``ChromaClient`` instance to write into.
+        doc_type:         Which ``DocumentType`` this upload represents.
+                          Defaults to ``ANNUAL_REPORT`` since that is the
+                          acceptance criterion's primary use case; pass
+                          ``DocumentType.TRANSCRIPT`` for an uploaded
+                          earnings-call PDF instead of a scraped one.
+        chunk_size:       Target characters per chunk (default 500,
+                          matching ``ingest_transcript``).
+
+    Returns:
+        List of chunk document IDs added to the collection.
+        Returns ``[]`` if ``text`` is blank.
+    """
+    if not text.strip():
+        logger.warning(
+            "ingest_document: blank text for '%s' (%s) — skipped.",
+            company,
+            source_filename,
+        )
+        return []
+
+    chunks = _chunk_text(text, chunk_size=chunk_size)
+    base_id = _text_to_id(f"{ticker}:{source_filename}", prefix="document")
+
+    documents: list[str] = []
+    metadatas: list[dict[str, Any]] = []
+    ids: list[str] = []
+
+    total = len(chunks)
+    for i, chunk in enumerate(chunks):
+        meta: dict[str, Any] = {
+            "company": company,
+            "ticker": ticker,
+            "doc_type": doc_type.value,
+            "source_filename": source_filename[:256],
+            "chunk_index": i,
+            "total_chunks": total,
+        }
+        documents.append(chunk)
+        metadatas.append(meta)
+        ids.append(f"{base_id}_chunk{i:04d}")
+
+    chroma.add_documents(COLLECTION_DOCUMENTS, documents, metadatas, ids)
+    logger.info(
+        "Ingested document '%s' for %s (%s): %d chunks, doc_type=%s.",
+        source_filename,
+        company,
+        ticker,
+        total,
+        doc_type.value,
     )
     return ids
 
