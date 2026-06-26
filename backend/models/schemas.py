@@ -1,6 +1,6 @@
 # backend/models/schemas.py
 """
-AIRP -- Pydantic Request/Response Schemas (T-046 / T-047)
+AIRP -- Pydantic Request/Response Schemas (T-046 / T-047 / T-048)
 
 Pydantic v2 models for the auth and analysis endpoints' request bodies
 and response shapes. Kept in a separate module from backend/models/orm.py
@@ -28,6 +28,7 @@ __all__ = [
     "TokenPayload",
     "AnalysisStartRequest",
     "AnalysisStartResponse",
+    "AnalysisStatusResponse",
 ]
 
 # ---------------------------------------------------------------------------
@@ -220,3 +221,64 @@ class AnalysisStartResponse(BaseModel):
     company_name: str = Field(description="Resolved company display name")
     ticker: str = Field(description="Resolved Yahoo Finance ticker, e.g. 'TCS.NS'")
     exchange: str = Field(description="Resolved exchange -- 'NSE' or 'BSE'")
+
+
+# ---------------------------------------------------------------------------
+# Response schema -- analysis status polling (T-048)
+# ---------------------------------------------------------------------------
+
+
+class AnalysisStatusResponse(BaseModel):
+    """
+    Body returned by GET /api/v1/analysis/{job_id}/status.
+
+    Reflects the actual state of the LangGraph pipeline for this job,
+    read from the ``analyses`` table -- the same row
+    ``backend.services.state_persistence.StatePersistenceService``
+    updates after every node completes (T-033) and on failure (T-033's
+    ``mark_failed``). Nothing in this schema is computed from the
+    request itself; every field is read straight off that row (or, for
+    ``current_phase``/``progress_percent``, derived from
+    ``last_completed_node`` via
+    ``backend.services.analysis.compute_progress``), so a stale poll
+    interval simply returns the same snapshot twice rather than ever
+    inventing a value.
+    """
+
+    job_id: uuid.UUID = Field(description="UUID of the analysis job")
+    status: str = Field(
+        description="Lifecycle status: 'pending', 'running', 'completed', or 'failed'"
+    )
+    current_phase: str = Field(
+        description=(
+            "Human-readable name of the pipeline phase currently executing "
+            "(or the terminal phase, once status is 'completed' or 'failed')"
+        )
+    )
+    completed_nodes: list[str] = Field(
+        description=(
+            "LangGraph node names completed so far, in execution order, "
+            "derived from last_completed_node's position in the canonical "
+            "pipeline sequence"
+        )
+    )
+    progress_percent: int = Field(
+        ge=0,
+        le=100,
+        description="0-100 estimate of pipeline completion, based on nodes run",
+    )
+    error_message: Optional[str] = Field(
+        default=None,
+        description="Human-readable failure reason when status='failed'; else null",
+    )
+    requested_at: Optional[datetime] = Field(
+        default=None, description="UTC timestamp when the analysis was triggered"
+    )
+    started_at: Optional[datetime] = Field(
+        default=None,
+        description="UTC timestamp when the LangGraph pipeline began executing",
+    )
+    completed_at: Optional[datetime] = Field(
+        default=None,
+        description="UTC timestamp when the pipeline finished, success or failure",
+    )

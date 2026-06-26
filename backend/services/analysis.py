@@ -1,13 +1,13 @@
 # backend/services/analysis.py
 """
-AIRP -- Analysis Trigger Service (T-047)
+AIRP -- Analysis Trigger & Status Service (T-047 / T-048)
 
-Business logic backing POST /api/v1/analysis/start. Pure service-layer
-code with no FastAPI imports (mirrors backend/services/auth.py) so it
-stays independently testable without spinning up an ASGI app; the router
-(backend/routers/analysis.py) translates this module's plain return
-values and exceptions into the correct HTTP response shape and status
-code.
+Business logic backing POST /api/v1/analysis/start (T-047) and
+GET /api/v1/analysis/{job_id}/status (T-048). Pure service-layer code
+with no FastAPI imports (mirrors backend/services/auth.py) so it stays
+independently testable without spinning up an ASGI app; each router
+translates this module's plain return values and exceptions into the
+correct HTTP response shape and status code.
 
 What this module does
 ----------------------
@@ -44,6 +44,21 @@ What this module does
    the background task itself never raises back into FastAPI's
    BackgroundTasks runner, since an unhandled exception there is only
    logged, not surfaced to any caller.
+5. ``compute_progress`` -- pure function: given ``last_completed_node``
+   (the column backend.services.state_persistence.StatePersistenceService
+   writes after every node, T-033) and the row's ``status``, derives
+   ``current_phase``, ``completed_nodes``, and a 0-100
+   ``progress_percent`` against CANONICAL_NODE_SEQUENCE -- the same
+   15-node topology backend.graph.graph.build_graph wires up (T-031
+   through T-043). No I/O; trivially unit-testable.
+6. ``get_analysis_status`` -- reads the single ``analyses`` row for a
+   job_id (raw SQL, same approach as state_persistence.py, since
+   last_completed_node and state_snapshot are not ORM-mapped columns)
+   and returns None when the row does not exist OR belongs to a
+   different user -- the router (backend/routers/analysis.py) turns
+   that None into a 404, deliberately not distinguishing "job does not
+   exist" from "job exists but is not yours" so job_id existence is
+   never leaked to a non-owner.
 
 Design decisions
 -----------------
@@ -56,6 +71,11 @@ Design decisions
 * run_analysis_pipeline never raises -- mirrors the "agent/node
   functions must never raise" project rule, extended to the background
   task that drives them.
+* get_analysis_status uses raw SQL (sqlalchemy.text), not the ORM, for
+  the same reason backend.services.state_persistence does:
+  last_completed_node and state_snapshot are columns added by the T-033
+  migration directly, never added to the Analysis ORM model (the ORM
+  model only maps the original T-016 schema columns).
 
 Public API
 ----------
@@ -65,16 +85,21 @@ Public API
         get_or_create_company,
         create_analysis_job,
         run_analysis_pipeline,
+        AnalysisStatusResult,
+        CANONICAL_NODE_SEQUENCE,
+        compute_progress,
+        get_analysis_status,
     )
 """
 
 import asyncio
 from dataclasses import dataclass
+from datetime import datetime
 import logging
-from typing import Optional, cast
+from typing import Any, Optional, cast
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.graph.state import InvestmentState, make_initial_state
@@ -88,6 +113,11 @@ __all__ = [
     "get_or_create_company",
     "create_analysis_job",
     "run_analysis_pipeline",
+    "AnalysisStatusResult",
+    "CANONICAL_NODE_SEQUENCE",
+    "PHASE_DISPLAY_NAMES",
+    "compute_progress",
+    "get_analysis_status",
 ]
 
 # ---------------------------------------------------------------------------
@@ -442,3 +472,253 @@ async def run_analysis_pipeline(
                 job_id,
                 persist_exc,
             )
+
+
+# ---------------------------------------------------------------------------
+# Progress computation (T-048) -- pure function, no I/O
+# ---------------------------------------------------------------------------
+
+#: The canonical "happy path" through the 15-node graph
+#: (backend.graph.graph.build_graph), used to compute progress percentage.
+#: The 4 parallel research agents collapse into one "research" phase here
+#: -- from the caller's point of view they start and finish together, and
+#: state_persistence.py does not even persist a checkpoint for them
+#: individually (only research_join_node, which runs after all 4 join, is
+#: wrapped with _persist_after). error_handler and sentiment_escalation
+#: are intentionally excluded: they are conditional detours that do not
+#: run on every analysis (backend.graph.routing.route_after_research), so
+#: including them in the denominator would understate progress for the
+#: (much more common) path that skips them.
+CANONICAL_NODE_SEQUENCE: tuple[str, ...] = (
+    "planner",
+    "research_join",
+    "contrarian_investor",
+    "debate_loop",
+    "risk_officer",
+    "valuation_agent",
+    "portfolio_manager",
+    "report_generator",
+    "pdf_export",
+)
+
+#: Human-readable label for each canonical phase, shown as
+#: AnalysisStatusResponse.current_phase. Falls back to the raw node name
+#: (see compute_progress) for any node not in this table -- e.g.
+#: error_handler or sentiment_escalation, which can appear in
+#: last_completed_node on the (uncommon) detour paths even though they
+#: are not part of CANONICAL_NODE_SEQUENCE.
+PHASE_DISPLAY_NAMES: dict[str, str] = {
+    "planner": "Resolving company and initialising analysis",
+    "research_join": "Running fundamental, technical, sentiment, and macro research",
+    "error_handler": "Recovering from a research data error",
+    "sentiment_escalation": "Flagging severe negative sentiment for review",
+    "contrarian_investor": "Building the bear case",
+    "debate_loop": "Running agent debate round",
+    "risk_officer": "Assessing governance and regulatory risk",
+    "valuation_agent": "Running DCF valuation and peer comparison",
+    "portfolio_manager": "Synthesising the final investment decision",
+    "report_generator": "Writing the Investment Memo",
+    "pdf_export": "Exporting the Investment Memo PDF",
+}
+
+#: Phase label shown before the planner node has completed -- there is
+#: no last_completed_node yet, only status='pending'.
+_PHASE_NOT_STARTED = "Queued -- waiting for the pipeline to start"
+
+#: Phase label shown once status='completed', regardless of which node
+#: technically wrote the last checkpoint (T-029/T-043 set
+#: status='completed' as early as portfolio_manager_node, since
+#: report_generator and pdf_export are best-effort finishing touches --
+#: see backend.graph.nodes._portfolio_manager_impl).
+_PHASE_COMPLETED = "Analysis complete"
+
+#: Phase label shown when status='failed' but last_completed_node is
+#: still NULL -- the pipeline failed before the planner's first
+#: checkpoint even persisted (e.g. get_compiled_graph() itself raised
+#: during compilation, inside run_analysis_pipeline's except block).
+_PHASE_FAILED_BEFORE_START = "Failed before the pipeline could start"
+
+#: Phase label prefix shown when status='failed' AND last_completed_node
+#: names a real checkpoint -- last_completed_node still names whichever
+#: node persisted the last good checkpoint BEFORE the failure
+#: (mark_failed does not change last_completed_node), so showing that
+#: node's normal in-progress phrasing on its own would misleadingly read
+#: as "still running". This prefixes it instead.
+_PHASE_FAILED_PREFIX = "Failed after: "
+
+
+@dataclass(frozen=True)
+class AnalysisStatusResult:
+    """
+    Everything GET /api/v1/analysis/{job_id}/status needs, already
+    derived. Built by ``get_analysis_status``; the router maps this
+    1:1 onto ``backend.models.schemas.AnalysisStatusResponse``.
+    """
+
+    job_id: uuid.UUID
+    status: str
+    current_phase: str
+    completed_nodes: list[str]
+    progress_percent: int
+    error_message: Optional[str]
+    requested_at: Optional[datetime]
+    started_at: Optional[datetime]
+    completed_at: Optional[datetime]
+
+
+def compute_progress(
+    last_completed_node: Optional[str],
+    status: str,
+) -> tuple[str, list[str], int]:
+    """
+    Derive (current_phase, completed_nodes, progress_percent) from the
+    raw ``last_completed_node`` / ``status`` columns on an ``analyses``
+    row. Pure function -- no I/O, trivially unit-testable.
+
+    Semantics of last_completed_node (set by
+    backend.graph.nodes._persist_after, T-033): it names the node that
+    JUST finished, not the one currently running. So
+    last_completed_node='planner' means the 4 research agents are
+    starting/running next; completed_nodes therefore includes every
+    CANONICAL_NODE_SEQUENCE entry up to AND INCLUDING the matched node,
+    and current_phase describes that same just-completed node (there is
+    no separate "next node" name to show until IT completes and persists
+    its own checkpoint).
+
+    When status == 'failed', current_phase is prefixed with "Failed
+    after: " (or, if no checkpoint exists yet, replaced entirely with
+    "Failed before the pipeline could start") rather than reusing the
+    plain in-progress phrasing -- mark_failed (T-033) does not change
+    last_completed_node, so without this the response would otherwise
+    describe a failed job as if a phase were still actively running.
+
+    Args:
+        last_completed_node: The analyses.last_completed_node column
+            value (None until the planner node's first checkpoint).
+        status: The analyses.status column value -- 'pending',
+            'running', 'completed', or 'failed'.
+
+    Returns:
+        A 3-tuple:
+          current_phase:     human-readable phase description
+          completed_nodes:   CANONICAL_NODE_SEQUENCE prefix reached so far
+          progress_percent:  0-100, 100 only when status == 'completed'
+    """
+    if status == "completed":
+        return (_PHASE_COMPLETED, list(CANONICAL_NODE_SEQUENCE), 100)
+
+    if not last_completed_node:
+        if status == "failed":
+            return (_PHASE_FAILED_BEFORE_START, [], 0)
+        return (_PHASE_NOT_STARTED, [], 0)
+
+    total = len(CANONICAL_NODE_SEQUENCE)
+    try:
+        position = CANONICAL_NODE_SEQUENCE.index(last_completed_node)
+        completed_nodes = list(CANONICAL_NODE_SEQUENCE[: position + 1])
+        progress_percent = min(99, round((position + 1) / total * 100))
+    except ValueError:
+        # last_completed_node is a real node (error_handler,
+        # sentiment_escalation, or one of the 4 parallel research
+        # agents) that simply is not part of the canonical sequence --
+        # report it by name without claiming a specific percentage
+        # position, rather than silently treating it as 0% progress.
+        completed_nodes = []
+        progress_percent = 1
+
+    if status == "failed":
+        node_label = PHASE_DISPLAY_NAMES.get(last_completed_node, last_completed_node)
+        return (_PHASE_FAILED_PREFIX + node_label, completed_nodes, progress_percent)
+
+    current_phase = PHASE_DISPLAY_NAMES.get(last_completed_node, last_completed_node)
+    return (current_phase, completed_nodes, progress_percent)
+
+
+# ---------------------------------------------------------------------------
+# Status read (T-048) -- raw SQL, same approach as state_persistence.py
+# ---------------------------------------------------------------------------
+
+#: Reads every column AnalysisStatusResult needs in one round trip.
+#: Raw SQL (not the ORM) because last_completed_node and state_snapshot
+#: are T-033-migration-only columns, never added to the Analysis ORM
+#: model (backend.models.orm.Analysis maps only the original T-016
+#: schema) -- the exact same reason state_persistence.py's
+#: _SQL_LOAD_SNAPSHOT uses text() instead of select(Analysis).
+_SQL_LOAD_STATUS = text(
+    """
+    SELECT user_id,
+           status,
+           last_completed_node,
+           error_message,
+           requested_at,
+           started_at,
+           completed_at
+      FROM analyses
+     WHERE id = CAST(:job_id AS uuid)
+     LIMIT 1
+    """
+)
+
+
+async def get_analysis_status(
+    session: AsyncSession,
+    job_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> Optional[AnalysisStatusResult]:
+    """
+    Read the current status of an analysis job, scoped to its owner.
+
+    Returns None both when no ``analyses`` row exists for job_id AND
+    when a row exists but belongs to a different user -- deliberately
+    not distinguishing the two so the router
+    (backend.routers.analysis.get_analysis_status_endpoint) can return
+    404 in both cases without ever revealing to a non-owner whether a
+    given job_id is valid.
+
+    Args:
+        session: Active AsyncSession for this request.
+        job_id:  UUID path parameter from the request.
+        user_id: UUID of the authenticated requester
+                 (current_user.id from get_current_user).
+
+    Returns:
+        AnalysisStatusResult when job_id exists and belongs to user_id,
+        else None.
+    """
+    result = await session.execute(_SQL_LOAD_STATUS, {"job_id": str(job_id)})
+    row: Any = result.fetchone()
+
+    if row is None:
+        logger.debug(
+            "get_analysis_status: no analyses row for job_id=%s",
+            job_id,
+        )
+        return None
+
+    row_user_id = row[0]
+    if row_user_id is not None and uuid.UUID(str(row_user_id)) != user_id:
+        logger.warning(
+            "get_analysis_status: job_id=%s belongs to a different user "
+            "-- returning not-found to requester",
+            job_id,
+        )
+        return None
+
+    status: str = str(row[1])
+    last_completed_node: Optional[str] = row[2]
+    current_phase, completed_nodes, progress_percent = compute_progress(
+        last_completed_node=last_completed_node,
+        status=status,
+    )
+
+    return AnalysisStatusResult(
+        job_id=job_id,
+        status=status,
+        current_phase=current_phase,
+        completed_nodes=completed_nodes,
+        progress_percent=progress_percent,
+        error_message=row[3],
+        requested_at=row[4],
+        started_at=row[5],
+        completed_at=row[6],
+    )
