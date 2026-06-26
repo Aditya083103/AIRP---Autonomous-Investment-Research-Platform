@@ -23,6 +23,13 @@ Design
 
 * All database operations are fully async (SQLAlchemy 2.x asyncpg).
 
+* Dedicated per-call engine for the module-level helpers (see "Why a
+  dedicated engine per call" below) -- ``persist_state``/``load_state``
+  do NOT use ``backend.db.session``'s shared, process-wide
+  ``AsyncSessionLocal``. They build and dispose a throwaway
+  single-connection engine scoped to exactly the ``asyncio`` event loop
+  that is running when they are called.
+
 * In ENVIRONMENT=test the session is always mocked -- this module never
   opens a real DB connection in unit tests.
 
@@ -33,6 +40,59 @@ Design
 
 * NO ``from __future__ import annotations`` -- established AIRP rule
   that prevents Pydantic v2 union resolution breakage.
+
+Why a dedicated engine per call (NOT backend.db.session.AsyncSessionLocal)
+----------------------------------------------------------------------------
+``persist_state``/``load_state`` are called from
+``backend.graph.nodes._run_persist``, which itself runs inside a
+LangGraph node executing on a worker thread (LangGraph dispatches nodes
+via a ThreadPoolExecutor) via ``asyncio.run(...)``. Every single
+``asyncio.run()`` call creates a BRAND NEW event loop, runs the
+coroutine to completion, then closes that loop.
+
+``backend.db.session``'s ``engine``/``AsyncSessionLocal`` is a
+module-level singleton shared by the entire process -- including the
+main FastAPI/uvicorn event loop that handles ordinary HTTP requests
+(GET /status, GET /result, etc.). asyncpg's underlying connection
+objects are NOT safe to use from more than one event loop: each
+connection's internal protocol object binds to the loop that created
+or last used it. The moment a pooled connection that was bound to one
+loop gets checked out and used inside a *different* loop -- which is
+exactly what happens every time ``_run_persist``'s fresh
+``asyncio.run()`` loop reuses a connection from the shared pool --
+asyncpg raises::
+
+    RuntimeError: Task <Task ...> got Future <Future pending> attached
+    to a different loop
+
+This is not a flaky/occasional failure: it happens on effectively every
+node completion once the shared pool has been touched by more than one
+loop, and it can also poison the pool badly enough (partially-cancelled
+connections, "Event loop is closed" warnings) that ordinary HTTP
+requests on the MAIN loop start failing too, even though they never
+touched ``asyncio.run()`` themselves.
+
+The fix: ``persist_state``/``load_state`` build their OWN engine,
+backed by ``NullPool`` (a single connection, opened fresh and closed
+immediately -- never pooled, never reused across calls or loops),
+scoped entirely to the one ``await`` chain running inside the current
+``asyncio.run()`` call's loop. The engine is disposed in a ``finally``
+block before the function returns, so no connection or engine-level
+background task ever outlives the loop that created it. This trades a
+small amount of per-call connection-setup latency (a fresh TCP+SSL
+handshake to Neon per node, instead of reusing a pooled connection) for
+correctness -- an acceptable trade for a ~9-node pipeline with no
+realistic concurrent-analysis load, and the only sound option given
+LangGraph's worker-thread execution model without restructuring how
+nodes schedule their async work (e.g. ``run_coroutine_threadsafe``
+back onto the main loop, a larger change reserved for a future task if
+this code path ever needs to avoid the per-call connection cost).
+
+Ordinary FastAPI route handlers (GET /status, GET /result, GET /history,
+etc.) are UNAFFECTED by this change -- they continue to use
+``backend.db.session.get_async_session``/``AsyncSessionLocal`` exactly
+as before, since they always run on the single main event loop and
+never hit the cross-loop problem this module works around.
 
 Public API
 ----------
@@ -97,6 +157,13 @@ class StatePersistenceService:
         svc = StatePersistenceService(session)
         await svc.save(job_id="abc-123", node_name="planner", state=state)
         saved_state = await svc.load(job_id="abc-123")
+
+    This class itself is loop-agnostic -- it only ever uses whichever
+    ``AsyncSession`` it is constructed with. It is the module-level
+    ``persist_state``/``load_state`` helpers below (not this class)
+    that are responsible for choosing a session bound to the correct
+    event loop -- see this module's "Why a dedicated engine per call"
+    docstring section for why that distinction matters.
     """
 
     def __init__(self, session: AsyncSession) -> None:
@@ -301,12 +368,75 @@ class StatePersistenceService:
 
 
 # ---------------------------------------------------------------------------
+# Dedicated per-call engine builder
+# ---------------------------------------------------------------------------
+# See this module's docstring ("Why a dedicated engine per call") for the
+# full rationale. Every helper below builds, uses, and disposes ONE
+# throwaway engine scoped entirely to the current async call -- never the
+# shared backend.db.session.engine/AsyncSessionLocal singleton.
+
+
+async def _open_dedicated_session() -> tuple[Any, AsyncSession]:
+    """
+    Build a single-connection engine + session bound to the CURRENT
+    running event loop, ready for exactly one unit of work.
+
+    Reuses ``backend.db.session``'s own URL-resolution and SSL-handling
+    helpers (``_build_database_url``, ``_prepare_url``) so this module
+    never re-implements the Neon ``sslmode=require`` -> ``connect_args``
+    translation differently from the rest of the app -- only the
+    pooling strategy differs here, not the connection target or SSL
+    handling.
+
+    ``poolclass=NullPool`` is the load-bearing choice: NullPool opens a
+    brand-new physical connection on every checkout and closes it
+    immediately on return, so there is never a previously-used,
+    possibly-different-loop-bound connection sitting around for this
+    engine to hand out. Each call to this function -- and therefore
+    each call to ``persist_state``/``load_state``/``mark_pipeline_failed``
+    -- gets a connection that is opened and closed entirely within the
+    one event loop currently running, with nothing left over to leak
+    into a future ``asyncio.run()`` call's different loop.
+
+    Returns:
+        (engine, session) -- the caller MUST dispose ``engine`` (via
+        ``await engine.dispose()``) in a ``finally`` block after closing
+        ``session``, or the underlying connection will not be released
+        promptly.
+    """
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from sqlalchemy.pool import NullPool
+
+    from backend.db.session import _build_database_url, _prepare_url
+
+    raw_url = _build_database_url()
+    url, connect_args = _prepare_url(raw_url)
+
+    engine = create_async_engine(
+        url,
+        echo=False,
+        poolclass=NullPool,
+        connect_args=connect_args,
+    )
+    session_factory = async_sessionmaker(
+        bind=engine,
+        class_=AsyncSession,
+        expire_on_commit=False,
+        autoflush=False,
+        autocommit=False,
+    )
+    session: AsyncSession = session_factory()
+    return engine, session
+
+
+# ---------------------------------------------------------------------------
 # Module-level convenience wrappers
 # ---------------------------------------------------------------------------
-# These thin wrappers are imported by graph nodes.  They build a session
-# from the module-level session factory, delegate to the service, and
-# close the session.  In ENVIRONMENT=test they are patched at the
-# module level via unittest.mock.patch so no real DB is ever touched.
+# These thin wrappers are imported by graph nodes.  Each one builds its
+# OWN dedicated engine+session (see _open_dedicated_session above),
+# delegates to the service, then closes the session and disposes the
+# engine.  In ENVIRONMENT=test they are patched at the module level via
+# unittest.mock.patch so no real DB is ever touched.
 
 
 async def persist_state(
@@ -317,8 +447,18 @@ async def persist_state(
     """
     Persist InvestmentState after a node completes (module-level helper).
 
-    Creates a fresh AsyncSession, delegates to StatePersistenceService,
-    then closes the session.  Safe to call from any async context.
+    Builds a dedicated, single-connection engine+session bound to
+    whichever event loop is running when this coroutine executes (see
+    this module's "Why a dedicated engine per call" docstring section),
+    delegates to StatePersistenceService, then closes the session and
+    disposes the engine before returning.
+
+    This is deliberately NOT ``backend.db.session.AsyncSessionLocal`` --
+    this function is called from ``backend.graph.nodes._run_persist``
+    via a fresh ``asyncio.run()`` on every invocation (LangGraph nodes
+    execute on worker threads), and the shared session factory's pooled
+    asyncpg connections are not safe to reuse across the different event
+    loop each such call creates.
 
     In ENVIRONMENT=test this function is patched to return True without
     touching the database.
@@ -331,19 +471,23 @@ async def persist_state(
     Returns:
         True on success, False when no analyses row exists for job_id.
     """
-    from backend.db.session import AsyncSessionLocal
-
-    async with AsyncSessionLocal() as session:
+    engine, session = await _open_dedicated_session()
+    try:
         svc = StatePersistenceService(session)
         return await svc.save(job_id=job_id, node_name=node_name, state=state)
+    finally:
+        await session.close()
+        await engine.dispose()
 
 
 async def load_state(job_id: str) -> Optional[InvestmentState]:
     """
     Load the last persisted InvestmentState (module-level helper).
 
-    Creates a fresh AsyncSession, delegates to StatePersistenceService,
-    then closes the session.
+    Builds a dedicated, single-connection engine+session bound to
+    whichever event loop is running when this coroutine executes --
+    see ``persist_state``'s docstring and this module's "Why a
+    dedicated engine per call" section for the full rationale.
 
     In ENVIRONMENT=test this function is patched to return None.
 
@@ -353,11 +497,13 @@ async def load_state(job_id: str) -> Optional[InvestmentState]:
     Returns:
         InvestmentState dict or None.
     """
-    from backend.db.session import AsyncSessionLocal
-
-    async with AsyncSessionLocal() as session:
+    engine, session = await _open_dedicated_session()
+    try:
         svc = StatePersistenceService(session)
         return await svc.load(job_id=job_id)
+    finally:
+        await session.close()
+        await engine.dispose()
 
 
 # ---------------------------------------------------------------------------

@@ -11,6 +11,15 @@ Design:
     * ``create_async_engine`` with NullPool when ENVIRONMENT=test so each
       test connection is closed immediately — asyncpg does not mix well with
       pytest's event loop teardown when a pool is left open.
+    * ``pool_pre_ping=True`` on every pooled (non-test) engine — Neon's
+      serverless Postgres can silently close idle connections server-side
+      (autosuspend / connection recycling) without the client driver
+      noticing until the connection is next used. Without pre-ping, a
+      stale pooled connection surfaces as
+      ``asyncpg.exceptions._base.InterfaceError: connection is closed``
+      the moment a request tries to use it — pre-ping issues a cheap
+      liveness check (``SELECT 1``) before handing a connection out and
+      transparently reconnects if it's dead, so callers never see this.
     * ``expire_on_commit=False`` on the session factory so ORM objects
       remain accessible after ``session.commit()`` without a re-query.
     * SSL for Neon cloud is passed via ``connect_args={"ssl": True}`` —
@@ -132,7 +141,12 @@ def _build_engine() -> AsyncEngine:
 
     NullPool is used in test environments so asyncpg connections are
     closed immediately after each test — prevents event-loop teardown
-    errors when pytest exits.
+    errors when pytest exits. NullPool opens a brand-new connection on
+    every checkout, so there is never a stale pooled connection to
+    pre-ping there; ``pool_pre_ping`` is therefore only added on the two
+    branches below that actually retain a pool across requests (dev and
+    production), where a connection can otherwise sit idle long enough
+    for Neon to close it server-side before the next request reuses it.
     """
     raw_url = _build_database_url()
     url, connect_args = _prepare_url(raw_url)
@@ -148,6 +162,7 @@ def _build_engine() -> AsyncEngine:
         return create_async_engine(
             url,
             echo=False,
+            pool_pre_ping=True,
             pool_size=settings.db_pool_size,
             max_overflow=settings.db_max_overflow,
             connect_args=connect_args,
@@ -155,6 +170,7 @@ def _build_engine() -> AsyncEngine:
     return create_async_engine(
         url,
         echo=False,
+        pool_pre_ping=True,
         connect_args=connect_args,
     )
 
