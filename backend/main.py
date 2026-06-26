@@ -1,6 +1,6 @@
 # backend/main.py
 """
-AIRP -- FastAPI Application Entrypoint (T-045 / T-046 / T-047 / T-048)
+AIRP -- FastAPI Application Entrypoint (T-045 / T-046 / T-047 / T-048 / T-049)
 
 Creates and configures the single FastAPI ``app`` instance used by both
 local development (``uvicorn backend.main:app --reload``) and production
@@ -11,18 +11,20 @@ Responsibilities of this module ONLY
 * Construct the ``FastAPI`` app with title/description/version metadata
   (drives the auto-generated Swagger UI at /docs and ReDoc at /redoc).
 * Wire CORS so the React frontend (a different origin in dev and prod)
-  can call the API and open the WebSocket endpoint added in later tasks.
-* Register routers (currently: health, auth, analysis). Each new router
-  added in T-049 onward is included here and nowhere else. T-048 added
-  a new route to the EXISTING analysis router (backend/routers/analysis.py)
-  rather than a new router module, so no change was needed here.
+  can call the API and open the WebSocket endpoint added in T-049.
+* Register routers (currently: health, auth, analysis, websocket). Each
+  new router added from T-049 onward is included here and nowhere
+  else. T-048 added a new route to the EXISTING analysis router
+  (backend/routers/analysis.py) rather than a new router module, so no
+  change was needed here for that task. T-049 DOES add a new router
+  module (backend/routers/websocket.py, ``WS /api/v1/analysis/{job_id}
+  /stream``) and is registered below alongside the other three.
 * Provide a typed lifespan context manager as the single place startup
   and shutdown behaviour is added (e.g. warming the LangGraph singleton
   in a later task) -- avoids scattering @app.on_event hooks.
 
-Explicitly OUT of scope for T-045 through T-048 (later tasks)
+Explicitly OUT of scope for T-045 through T-049 (later tasks)
 -----------------------------------------------------------------
-* WebSocket streaming endpoint                      -> T-049/T-050
 * Document upload endpoint                          -> T-051
 
 Usage
@@ -42,7 +44,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.config import settings
-from backend.routers import analysis, auth, health
+from backend.routers import analysis, auth, health, websocket
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +129,7 @@ def create_app() -> FastAPI:
     application.include_router(health.router)
     application.include_router(auth.router)
     application.include_router(analysis.router)
+    application.include_router(websocket.router)
 
     return application
 

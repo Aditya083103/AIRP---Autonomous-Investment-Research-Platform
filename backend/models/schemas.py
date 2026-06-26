@@ -29,6 +29,7 @@ __all__ = [
     "AnalysisStartRequest",
     "AnalysisStartResponse",
     "AnalysisStatusResponse",
+    "AgentStreamEventResponse",
 ]
 
 # ---------------------------------------------------------------------------
@@ -281,4 +282,63 @@ class AnalysisStatusResponse(BaseModel):
     completed_at: Optional[datetime] = Field(
         default=None,
         description="UTC timestamp when the pipeline finished, success or failure",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Response schema -- WebSocket live progress stream (T-049)
+# ---------------------------------------------------------------------------
+
+
+class AgentStreamEventResponse(BaseModel):
+    """
+    Shape of every JSON message sent over
+    WS /api/v1/analysis/{job_id}/stream.
+
+    Mirrors backend.services.ws_broadcaster.AgentStreamEvent field for
+    field -- that module defines the runtime TypedDict the WebSocket
+    route handler actually receives from
+    backend.graph.nodes._run_broadcast and sends as-is;
+    this Pydantic model exists purely so the websocket route's OpenAPI
+    documentation (FastAPI can document WebSocket message schemas
+    separately, surfaced in /docs) and any client-side codegen have a
+    single, explicit, versioned contract to target, matching the
+    existing pattern of every other *Response schema in this module.
+    Not used to validate outgoing messages at runtime -- the route
+    handler sends the TypedDict directly via WebSocket.send_json for
+    minimal per-event overhead during a live stream, the same
+    "schema documents the contract, the hot path skips re-validating
+    it" tradeoff implicit in every other AIRP response model that is
+    only ever constructed once per request rather than once per
+    streamed event.
+    """
+
+    job_id: uuid.UUID = Field(
+        description="UUID of the analysis job this event belongs to"
+    )
+    agent: str = Field(
+        description=(
+            "LangGraph node name that just completed, e.g. "
+            "'fundamental_analyst', 'risk_officer', 'pdf_export'"
+        )
+    )
+    status: str = Field(
+        description="Pipeline lifecycle status at the moment this node completed"
+    )
+    output_preview: str = Field(
+        description="Short human-readable summary of what this node produced"
+    )
+    progress_percent: int = Field(
+        ge=0,
+        le=100,
+        description=(
+            "0-100 estimate of pipeline completion -- identical to "
+            "AnalysisStatusResponse.progress_percent at the same point in time"
+        ),
+    )
+    is_final: bool = Field(
+        description=(
+            "True exactly once per job, on the event after which the server "
+            "closes the WebSocket connection"
+        )
     )
