@@ -1,13 +1,17 @@
 # backend/services/analysis.py
 """
-AIRP -- Analysis Trigger & Status Service (T-047 / T-048)
+AIRP -- Analysis Trigger, Status, Result & History Service
+(T-047 / T-048 / T-050)
 
-Business logic backing POST /api/v1/analysis/start (T-047) and
-GET /api/v1/analysis/{job_id}/status (T-048). Pure service-layer code
-with no FastAPI imports (mirrors backend/services/auth.py) so it stays
-independently testable without spinning up an ASGI app; each router
-translates this module's plain return values and exceptions into the
-correct HTTP response shape and status code.
+Business logic backing POST /api/v1/analysis/start (T-047),
+GET /api/v1/analysis/{job_id}/status (T-048), and (T-050)
+GET /api/v1/analysis/{job_id}/result, the PDF-existence check backing
+GET /api/v1/analysis/{job_id}/memo/pdf, and GET /api/v1/analysis/history.
+Pure service-layer code with no FastAPI imports (mirrors
+backend/services/auth.py) so it stays independently testable without
+spinning up an ASGI app; each router translates this module's plain
+return values and exceptions into the correct HTTP response shape and
+status code.
 
 What this module does
 ----------------------
@@ -59,6 +63,20 @@ What this module does
    that None into a 404, deliberately not distinguishing "job does not
    exist" from "job exists but is not yours" so job_id existence is
    never leaked to a non-owner.
+7. ``get_analysis_result`` (T-050) -- reads the same ``state_snapshot``
+   JSONB column (T-033) and returns its ``decision`` key (an
+   InvestmentDecision.model_dump() dict, see
+   backend.graph.state.InvestmentState) once the pipeline has reached
+   status='completed'. Same None-for-not-found-or-not-yours contract
+   as get_analysis_status; raises AnalysisNotReadyError (distinct from
+   the None case) when the job is real and owned by the caller but has
+   not finished yet, so the router can return 409 instead of 404 for
+   that case.
+8. ``get_analysis_history`` (T-050) -- paginated list of a user's past
+   analyses (newest first), joining ``analyses`` to ``companies`` for
+   display name/ticker/exchange and pulling verdict/conviction_score
+   out of state_snapshot via Postgres's JSONB ->> operator rather than
+   loading and parsing the full snapshot in Python per row.
 
 Design decisions
 -----------------
@@ -89,12 +107,21 @@ Public API
         CANONICAL_NODE_SEQUENCE,
         compute_progress,
         get_analysis_status,
+        AnalysisNotReadyError,
+        AnalysisResultData,
+        get_analysis_result,
+        HistoryEntry,
+        HistoryPage,
+        get_analysis_history,
+        DEFAULT_HISTORY_PAGE_SIZE,
+        MAX_HISTORY_PAGE_SIZE,
     )
 """
 
 import asyncio
 from dataclasses import dataclass
 from datetime import datetime
+import json
 import logging
 from typing import Any, Optional, cast
 import uuid
@@ -118,6 +145,14 @@ __all__ = [
     "PHASE_DISPLAY_NAMES",
     "compute_progress",
     "get_analysis_status",
+    "AnalysisNotReadyError",
+    "AnalysisResultData",
+    "get_analysis_result",
+    "HistoryEntry",
+    "HistoryPage",
+    "get_analysis_history",
+    "DEFAULT_HISTORY_PAGE_SIZE",
+    "MAX_HISTORY_PAGE_SIZE",
 ]
 
 # ---------------------------------------------------------------------------
@@ -722,3 +757,346 @@ async def get_analysis_status(
         started_at=row[5],
         completed_at=row[6],
     )
+
+
+# ---------------------------------------------------------------------------
+# Result read (T-050) -- full InvestmentDecision JSON
+# ---------------------------------------------------------------------------
+
+
+class AnalysisNotReadyError(Exception):
+    """
+    Raised by ``get_analysis_result`` when ``job_id`` exists and belongs
+    to the caller, but the pipeline has not yet produced a decision --
+    ``status`` is 'pending', 'running', or 'failed'.
+
+    Deliberately a distinct exception rather than a third ``None``-like
+    sentinel returned alongside the "not found" ``None``: the router
+    (backend.routers.analysis.get_analysis_result_endpoint) needs to
+    tell these two cases apart to choose between 404 (job_id does not
+    exist or is not yours -- same not-found semantics as
+    get_analysis_status) and 409 Conflict (job_id is real and yours,
+    but there is genuinely no decision yet to return). Carrying
+    ``status`` on the exception instance lets the router's error detail
+    explain *why* -- "still running" reads very differently from
+    "failed" -- without a second database round trip to re-derive it.
+    """
+
+    def __init__(self, status: str) -> None:
+        self.status = status
+        super().__init__(
+            f"Analysis job_id has status={status!r} -- no decision available yet"
+        )
+
+
+@dataclass(frozen=True)
+class AnalysisResultData:
+    """
+    Everything GET /api/v1/analysis/{job_id}/result needs to build an
+    ``InvestmentDecisionResponse``. Built by ``get_analysis_result``;
+    the router maps ``decision`` 1:1 onto that schema's fields (it is
+    already an ``InvestmentDecision.model_dump()`` dict -- see
+    backend.graph.state.InvestmentState's ``decision`` field) and uses
+    ``company_name``/``ticker`` only as a cross-check that the snapshot
+    actually contains a populated decision.
+    """
+
+    job_id: uuid.UUID
+    status: str
+    decision: dict[str, Any]
+
+
+#: Reads the three columns get_analysis_result needs in one round trip:
+#: ownership (user_id), lifecycle status (to distinguish "not ready"
+#: from "ready"), and the full state snapshot the decision dict lives
+#: inside. Raw SQL for the same reason _SQL_LOAD_STATUS is -- state_snapshot
+#: is a T-033-migration-only column, never added to the Analysis ORM model.
+_SQL_LOAD_RESULT = text(
+    """
+    SELECT user_id,
+           status,
+           state_snapshot
+      FROM analyses
+     WHERE id = CAST(:job_id AS uuid)
+     LIMIT 1
+    """
+)
+
+
+async def get_analysis_result(
+    session: AsyncSession,
+    job_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> Optional[AnalysisResultData]:
+    """
+    Read the final InvestmentDecision for a completed analysis job.
+
+    Returns None both when no ``analyses`` row exists for job_id AND
+    when a row exists but belongs to a different user -- identical
+    not-found semantics to ``get_analysis_status``, for the identical
+    reason (never reveal job_id validity to a non-owner). Raises
+    ``AnalysisNotReadyError`` when job_id is real and owned by the
+    caller but ``status`` is not yet 'completed' -- the router
+    translates that into 409, distinct from 404.
+
+    Args:
+        session: Active AsyncSession for this request.
+        job_id:  UUID path parameter from the request.
+        user_id: UUID of the authenticated requester.
+
+    Returns:
+        AnalysisResultData when job_id exists, belongs to user_id, and
+        status == 'completed'. None when job_id does not exist or
+        belongs to a different user.
+
+    Raises:
+        AnalysisNotReadyError: job_id exists and belongs to user_id,
+            but status is 'pending', 'running', or 'failed'.
+    """
+    result = await session.execute(_SQL_LOAD_RESULT, {"job_id": str(job_id)})
+    row: Any = result.fetchone()
+
+    if row is None:
+        logger.debug(
+            "get_analysis_result: no analyses row for job_id=%s",
+            job_id,
+        )
+        return None
+
+    row_user_id = row[0]
+    if row_user_id is not None and uuid.UUID(str(row_user_id)) != user_id:
+        logger.warning(
+            "get_analysis_result: job_id=%s belongs to a different user "
+            "-- returning not-found to requester",
+            job_id,
+        )
+        return None
+
+    status: str = str(row[1])
+    if status != "completed":
+        logger.info(
+            "get_analysis_result: job_id=%s not ready (status=%s)",
+            job_id,
+            status,
+        )
+        raise AnalysisNotReadyError(status=status)
+
+    snapshot_val: Any = row[2]
+    decision = _extract_decision_from_snapshot(snapshot_val, job_id=job_id)
+    if decision is None:
+        # status='completed' but the snapshot has no decision -- should
+        # not happen given the graph topology (portfolio_manager_node
+        # sets both status='completed' and state["decision"] in the
+        # same return dict -- see backend.graph.nodes), but a malformed
+        # or partially-written snapshot must surface as "not ready"
+        # rather than crash the endpoint with an attribute error deep
+        # inside response serialisation.
+        logger.error(
+            "get_analysis_result: job_id=%s status=completed but no "
+            "decision found in state_snapshot -- treating as not ready",
+            job_id,
+        )
+        raise AnalysisNotReadyError(status=status)
+
+    return AnalysisResultData(job_id=job_id, status=status, decision=decision)
+
+
+def _extract_decision_from_snapshot(
+    snapshot_val: Any,
+    job_id: uuid.UUID,
+) -> Optional[dict[str, Any]]:
+    """
+    Parse ``analyses.state_snapshot`` (JSONB) and return its ``decision``
+    key, or None if the snapshot is missing, malformed, or has no
+    decision.
+
+    Mirrors backend.services.state_persistence.StatePersistenceService.load's
+    own asyncpg-vs-psycopg2 normalisation (asyncpg returns JSONB as a
+    dict already; psycopg2 returns a JSON string) -- duplicated here
+    rather than imported because that method returns a full
+    InvestmentState dict via a private cast this function does not need
+    (only one key out of ~30 InvestmentState fields), and a second,
+    purpose-built raw SQL query (_SQL_LOAD_RESULT, fetching exactly
+    user_id/status/state_snapshot rather than load_state's `SELECT
+    state_snapshot, last_completed_node, status`) already avoids the
+    extra round trip load_state would otherwise require.
+
+    Args:
+        snapshot_val: The raw value read from row[2] -- a dict
+                      (asyncpg) or str (psycopg2), or None.
+        job_id:       Only used for logging context.
+
+    Returns:
+        The ``decision`` dict, or None if absent/unparseable.
+    """
+    if snapshot_val is None:
+        return None
+
+    if isinstance(snapshot_val, dict):
+        snapshot: Any = snapshot_val
+    else:
+        try:
+            snapshot = json.loads(str(snapshot_val))
+        except json.JSONDecodeError as exc:
+            logger.error(
+                "get_analysis_result: invalid state_snapshot JSON for " "job_id=%s: %s",
+                job_id,
+                exc,
+            )
+            return None
+
+    if not isinstance(snapshot, dict):
+        return None
+
+    decision = snapshot.get("decision")
+    if not isinstance(decision, dict):
+        return None
+    return decision
+
+
+# ---------------------------------------------------------------------------
+# History (T-050) -- paginated list of a user's past analyses
+# ---------------------------------------------------------------------------
+
+#: Default and maximum page size for GET /api/v1/analysis/history.
+#: The acceptance criterion names "past 20 analyses" as the default
+#: view; the router's Query(ge=1, le=MAX_HISTORY_PAGE_SIZE) accepts a
+#: smaller explicit limit but never a larger one, so a caller cannot
+#: force an unbounded query against the analyses table.
+DEFAULT_HISTORY_PAGE_SIZE = 20
+MAX_HISTORY_PAGE_SIZE = 100
+
+
+@dataclass(frozen=True)
+class HistoryEntry:
+    """One row of GET /api/v1/analysis/history's paginated result."""
+
+    job_id: uuid.UUID
+    company_name: str
+    ticker: str
+    exchange: str
+    status: str
+    requested_at: datetime
+    completed_at: Optional[datetime]
+    verdict: Optional[str]
+    conviction_score: Optional[int]
+
+
+@dataclass(frozen=True)
+class HistoryPage:
+    """
+    A single page of ``HistoryEntry`` rows plus enough metadata for the
+    caller to request the next page without it having to separately
+    track an offset across requests, and to render "page X of Y" /
+    disable a "next" control once exhausted.
+    """
+
+    items: list[HistoryEntry]
+    total_count: int
+    limit: int
+    offset: int
+
+    @property
+    def has_more(self) -> bool:
+        """True when at least one further row exists beyond this page."""
+        return self.offset + len(self.items) < self.total_count
+
+
+#: Joins analyses -> companies to get the display name/ticker/exchange
+#: in one round trip, and pulls verdict/conviction_score out of the
+#: JSONB state_snapshot via Postgres's ->> operator rather than loading
+#: and parsing the full snapshot in Python for every row on the page --
+#: a history list only ever needs two scalar fields out of the dict, so
+#: letting Postgres extract them avoids ~20 wasted json.loads calls
+#: per page for fields the response never uses. ->> 'decision' yields
+#: NULL (rather than raising) for any row whose snapshot has no
+#: 'decision' key yet (pending/running/failed jobs), which is exactly
+#: the fallback HistoryEntry.verdict/conviction_score want for those
+#: rows -- Optional[str]/Optional[int] in the dataclass, surfaced as
+#: null in the JSON response rather than a fabricated placeholder.
+_SQL_LOAD_HISTORY_PAGE = text(
+    """
+    SELECT a.id,
+           c.name,
+           c.ticker_yf,
+           c.exchange,
+           a.status,
+           a.requested_at,
+           a.completed_at,
+           a.state_snapshot -> 'decision' ->> 'verdict'           AS verdict,
+           a.state_snapshot -> 'decision' ->> 'conviction_score'  AS conviction_score
+      FROM analyses a
+      JOIN companies c ON c.id = a.company_id
+     WHERE a.user_id = CAST(:user_id AS uuid)
+     ORDER BY a.requested_at DESC
+     LIMIT :limit OFFSET :offset
+    """
+)
+
+_SQL_COUNT_HISTORY = text(
+    """
+    SELECT COUNT(*)
+      FROM analyses
+     WHERE user_id = CAST(:user_id AS uuid)
+    """
+)
+
+
+async def get_analysis_history(
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    limit: int = DEFAULT_HISTORY_PAGE_SIZE,
+    offset: int = 0,
+) -> HistoryPage:
+    """
+    Read one page of a user's past analyses, newest first.
+
+    Two queries (a COUNT and the page itself) rather than a single
+    window-function query -- this endpoint is read by a human dashboard
+    at human-interaction frequency, not a hot loop, so the second round
+    trip's latency is immaterial next to the clarity of two plain,
+    independently-readable SQL statements over one combining
+    ``COUNT(*) OVER()`` with the row fetch.
+
+    Args:
+        session: Active AsyncSession for this request.
+        user_id: UUID of the authenticated requester -- every row
+                 returned belongs to this user; there is no
+                 cross-user history endpoint.
+        limit:   Page size, already clamped to
+                 [1, MAX_HISTORY_PAGE_SIZE] by the router's
+                 ``Query(ge=1, le=MAX_HISTORY_PAGE_SIZE)`` validation
+                 before this function is called.
+        offset:  Rows to skip, already clamped to >= 0 by the same
+                 validation.
+
+    Returns:
+        A HistoryPage with up to ``limit`` HistoryEntry rows and the
+        total count of the user's analyses (for pagination metadata),
+        regardless of how many fit on this particular page.
+    """
+    count_result = await session.execute(_SQL_COUNT_HISTORY, {"user_id": str(user_id)})
+    total_count = int(count_result.scalar_one())
+
+    page_result = await session.execute(
+        _SQL_LOAD_HISTORY_PAGE,
+        {"user_id": str(user_id), "limit": limit, "offset": offset},
+    )
+    rows = page_result.fetchall()
+
+    items = [
+        HistoryEntry(
+            job_id=row[0],
+            company_name=row[1],
+            ticker=row[2],
+            exchange=row[3],
+            status=row[4],
+            requested_at=row[5],
+            completed_at=row[6],
+            verdict=row[7],
+            conviction_score=int(row[8]) if row[8] is not None else None,
+        )
+        for row in rows
+    ]
+
+    return HistoryPage(items=items, total_count=total_count, limit=limit, offset=offset)

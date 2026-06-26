@@ -1,9 +1,13 @@
 # backend/routers/analysis.py
 """
-AIRP -- Analysis Trigger & Status Router (T-047 / T-048)
+AIRP -- Analysis Trigger, Status, Result, PDF & History Router
+(T-047 / T-048 / T-050)
 
 POST /api/v1/analysis/start (T-047)
 GET  /api/v1/analysis/{job_id}/status (T-048)
+GET  /api/v1/analysis/{job_id}/result (T-050)
+GET  /api/v1/analysis/{job_id}/memo/pdf (T-050)
+GET  /api/v1/analysis/history (T-050)
 
 T-047 acceptance criteria (from task spec):
   * Endpoint returns job_id in <200ms
@@ -13,6 +17,11 @@ T-047 acceptance criteria (from task spec):
 T-048 acceptance criteria (from task spec):
   * Status updates reflect actual pipeline progress
   * 404 for unknown job_id
+
+T-050 acceptance criteria (from task spec):
+  * PDF downloads correctly
+  * result JSON matches InvestmentDecision schema
+  * history paginates
 
 HTTP-layer concerns only (request validation via Pydantic schemas,
 authentication via get_current_user, translating service-layer results
@@ -46,18 +55,73 @@ progress_percent from those two values alone
 pipeline progress in between return byte-identical phase/percentage
 fields, because nothing here is a clock or a guess.
 
-Why a 404 (not 403) for another user's job_id (T-048)
----------------------------------------------------------
-backend.services.analysis.get_analysis_status returns None both when
-job_id does not exist at all and when it exists but belongs to a
-different user. Returning 404 in both cases (rather than 403 for the
-ownership-mismatch case) avoids leaking which job_id UUIDs are valid to
-a caller who does not own them.
+Why a 404 (not 403) for another user's job_id (T-048, T-050)
+------------------------------------------------------------------
+backend.services.analysis.get_analysis_status and
+get_analysis_result both return None both when job_id does not exist
+at all and when it exists but belongs to a different user. Returning
+404 in both cases (rather than 403 for the ownership-mismatch case)
+avoids leaking which job_id UUIDs are valid to a caller who does not
+own them. GET /memo/pdf applies the identical 404-for-both-cases rule
+via the same get_analysis_status lookup, reused here purely as an
+ownership/existence check.
+
+Why GET /result returns 409 (not 404) for a job that exists but is not
+yet finished (T-050)
+------------------------------------------------------------------------
+A job_id the caller legitimately owns, that is still 'pending' or
+'running' (or that 'failed' before producing a decision), is not a
+"not found" condition -- the resource exists, it simply does not have
+the requested representation YET. RFC 9110 reserves 404 for "the
+origin server did not find a current representation for the target
+resource", which describes the unknown/not-yours case exactly, but
+409 Conflict ("the request could not be completed due to a conflict
+with the current state of the resource") better describes "ask again
+once status is completed" -- a condition the caller can resolve by
+waiting, not by using a different job_id. The body still names the
+job_id's current status so a client need not also call GET /status to
+explain the 409.
+
+Why GET /memo/pdf returns the SAME error response shape as a missing
+analysis row when the PDF file itself is absent (T-050)
+------------------------------------------------------------------------
+A PDF can be legitimately absent even for a 'completed' analysis: T-043's
+pdf_export_node degrades to memo_pdf_path=None (not a pipeline failure)
+when WeasyPrint is not installed, when feature_pdf_enabled is False, or
+when rendering itself failed -- in every one of those cases the
+Markdown memo is still available via GET /result's executive_summary/
+investment_thesis/etc. fields, just not as a PDF. The endpoint resolves
+the deterministic on-disk path via
+backend.services.pdf_export.resolve_memo_pdf_path(job_id) and checks
+its existence directly with Path.is_file() rather than trusting
+state["memo_pdf_path"] from the (potentially stale, if the pipeline
+state_snapshot predates a since-deleted file) state_snapshot --
+filesystem reality is the single source of truth for "can this be
+downloaded right now", and resolve_memo_pdf_path is a pure, deterministic
+function of job_id alone (see backend.services.pdf_export module
+docstring), so no extra database read is needed beyond the ownership
+check GET /status already performs.
+
+Why GET /history uses limit/offset rather than a cursor (T-050)
+---------------------------------------------------------------------
+The acceptance criterion asks for "history paginates" against a
+single user's own analyses -- a collection that, for a portfolio
+project's realistic usage, never approaches the row counts where
+limit/offset's well-known performance cliff (the database must still
+scan and discard every skipped row) becomes a practical concern.
+limit/offset also lets a client jump to an arbitrary page directly
+(e.g. "page 3") without first walking through a cursor chain, which is
+the more natural UI for a paginated dashboard table -- the use case
+this endpoint actually serves, as opposed to an infinite-scroll feed
+where a cursor would be the better fit.
 """
 
+import logging
+from pathlib import Path
 import uuid
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.session import get_async_session
@@ -67,16 +131,26 @@ from backend.models.schemas import (
     AnalysisStartRequest,
     AnalysisStartResponse,
     AnalysisStatusResponse,
+    HistoryEntryResponse,
+    HistoryResponse,
+    InvestmentDecisionResponse,
 )
 from backend.services.analysis import (
+    DEFAULT_HISTORY_PAGE_SIZE,
+    MAX_HISTORY_PAGE_SIZE,
+    AnalysisNotReadyError,
     create_analysis_job,
+    get_analysis_history,
+    get_analysis_result,
     get_analysis_status,
     get_or_create_company,
     resolve_company,
     run_analysis_pipeline,
 )
+from backend.services.pdf_export import resolve_memo_pdf_path
 
 router = APIRouter(prefix="/api/v1/analysis", tags=["analysis"])
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -179,4 +253,231 @@ async def get_analysis_status_endpoint(
         requested_at=result.requested_at,
         started_at=result.started_at,
         completed_at=result.completed_at,
+    )
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/analysis/history
+# ---------------------------------------------------------------------------
+#
+# No route in this router is a bare "/{job_id}" (every parameterised
+# route has at least one further literal segment after it -- /status,
+# /result, /memo/pdf), so "/history" cannot collide with any of them
+# regardless of registration order; it is grouped here, immediately
+# after the other two-segment routes, purely so every literal-path
+# route in this file reads top-to-bottom before the job_id-scoped ones.
+
+
+@router.get(
+    "/history",
+    response_model=HistoryResponse,
+    status_code=status.HTTP_200_OK,
+    summary="List the caller's past analyses, newest first",
+    description=(
+        "Returns one page of the authenticated user's own analysis jobs, "
+        "ordered by requested_at descending. Defaults to the most recent "
+        "20 (DEFAULT_HISTORY_PAGE_SIZE); pass limit/offset to page "
+        "further. Never returns another user's analyses -- there is no "
+        "cross-user history endpoint."
+    ),
+)
+async def get_analysis_history_endpoint(
+    limit: int = Query(
+        default=DEFAULT_HISTORY_PAGE_SIZE,
+        ge=1,
+        le=MAX_HISTORY_PAGE_SIZE,
+        description="Maximum number of analyses to return on this page",
+    ),
+    offset: int = Query(
+        default=0,
+        ge=0,
+        description="Number of most-recent analyses to skip before this page",
+    ),
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_async_session),
+) -> HistoryResponse:
+    page = await get_analysis_history(
+        session,
+        user_id=current_user.id,
+        limit=limit,
+        offset=offset,
+    )
+
+    return HistoryResponse(
+        items=[
+            HistoryEntryResponse(
+                job_id=entry.job_id,
+                company_name=entry.company_name,
+                ticker=entry.ticker,
+                exchange=entry.exchange,
+                status=entry.status,
+                requested_at=entry.requested_at,
+                completed_at=entry.completed_at,
+                verdict=entry.verdict,
+                conviction_score=entry.conviction_score,
+            )
+            for entry in page.items
+        ],
+        total_count=page.total_count,
+        limit=page.limit,
+        offset=page.offset,
+        has_more=page.has_more,
+    )
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/analysis/{job_id}/result
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/{job_id}/result",
+    response_model=InvestmentDecisionResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Retrieve the final Investment Decision for a completed analysis",
+    description=(
+        "Returns the full InvestmentDecision produced by the Portfolio "
+        "Manager agent -- verdict, conviction score, price target, and "
+        "every Investment Memo section. Returns 404 if job_id does not "
+        "exist or belongs to a different user, and 409 if the job exists "
+        "but has not yet reached status='completed' (still pending, "
+        "running, or it failed before a decision was produced)."
+    ),
+)
+async def get_analysis_result_endpoint(
+    job_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_async_session),
+) -> InvestmentDecisionResponse:
+    try:
+        result = await get_analysis_result(
+            session,
+            job_id=job_id,
+            user_id=current_user.id,
+        )
+    except AnalysisNotReadyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Analysis job_id={job_id} is not ready yet "
+                f"(status='{exc.status}'). Poll GET /status or open "
+                "WS /stream until status='completed', then retry."
+            ),
+        ) from exc
+
+    if result is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No analysis job found for the given job_id",
+        )
+
+    decision = result.decision
+    try:
+        return InvestmentDecisionResponse(
+            agent_name=decision.get("agent_name", "portfolio_manager"),
+            analysis_id=decision.get("analysis_id", str(job_id)),
+            company_name=decision.get("company_name", ""),
+            ticker=decision.get("ticker", ""),
+            generated_at=decision["generated_at"],
+            error=decision.get("error"),
+            verdict=decision["verdict"],
+            conviction_score=decision["conviction_score"],
+            price_target=decision.get("price_target"),
+            time_horizon=decision.get("time_horizon", "12 months"),
+            executive_summary=decision.get("executive_summary", ""),
+            investment_thesis=decision.get("investment_thesis", ""),
+            bull_case=decision.get("bull_case", ""),
+            bear_case=decision.get("bear_case", ""),
+            risk_summary=decision.get("risk_summary", ""),
+            valuation_summary=decision.get("valuation_summary", ""),
+            key_risks=decision.get("key_risks", []),
+            key_catalysts=decision.get("key_catalysts", []),
+            contrarian_response=decision.get("contrarian_response", ""),
+            debate_rounds_used=decision.get("debate_rounds_used", 1),
+            agent_weights=decision.get("agent_weights", {}),
+            summary=decision.get("summary", ""),
+        )
+    except KeyError as exc:
+        # decision is missing one of the three fields with no sensible
+        # default (generated_at, verdict, conviction_score) -- should
+        # never happen given portfolio_manager_node's contract (it
+        # always writes a complete InvestmentDecision.model_dump() in
+        # the same return dict that sets status='completed'), but a
+        # KeyError surfacing as a bare 500 traceback would be far less
+        # useful to debug than a clear log line naming the job_id and
+        # the missing field.
+        logger.error(
+            "get_analysis_result_endpoint: job_id=%s has status='completed' "
+            "but its decision dict is missing required field %s",
+            job_id,
+            exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Analysis result data is malformed -- please contact support",
+        ) from exc
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/analysis/{job_id}/memo/pdf
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/{job_id}/memo/pdf",
+    status_code=status.HTTP_200_OK,
+    summary="Download the Investment Memo PDF for a completed analysis",
+    description=(
+        "Streams the branded Investment Memo PDF (T-043) for job_id as "
+        "an application/pdf attachment. Returns 404 if job_id does not "
+        "exist or belongs to a different user, OR if no PDF exists on "
+        "disk for this job (the analysis has not finished, or PDF export "
+        "was skipped/unavailable when it ran -- see "
+        "backend.services.pdf_export's degrade-to-None behaviour). The "
+        "Markdown memo content remains available via GET /result "
+        "regardless of whether a PDF was ever produced."
+    ),
+    responses={
+        200: {
+            "content": {"application/pdf": {}},
+            "description": "The Investment Memo PDF file",
+        },
+    },
+)
+async def download_analysis_memo_pdf(
+    job_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_async_session),
+) -> FileResponse:
+    # Reuses the T-048 status lookup purely as an ownership/existence
+    # check -- get_analysis_status's None-for-both-cases contract gives
+    # this endpoint the identical "404 either way" behaviour as every
+    # other job_id-scoped route, with no separate query of its own.
+    status_result = await get_analysis_status(
+        session,
+        job_id=job_id,
+        user_id=current_user.id,
+    )
+    if status_result is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No analysis job found for the given job_id",
+        )
+
+    pdf_path: Path = resolve_memo_pdf_path(str(job_id))
+    if not pdf_path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                "No PDF has been generated for this analysis. It may "
+                "still be running, or PDF export was unavailable when "
+                "it completed -- see GET /result for the Markdown memo "
+                "content."
+            ),
+        )
+
+    return FileResponse(
+        path=pdf_path,
+        media_type="application/pdf",
+        filename=f"AIRP-Investment-Memo-{job_id}.pdf",
     )

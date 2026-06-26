@@ -30,6 +30,9 @@ __all__ = [
     "AnalysisStartResponse",
     "AnalysisStatusResponse",
     "AgentStreamEventResponse",
+    "InvestmentDecisionResponse",
+    "HistoryEntryResponse",
+    "HistoryResponse",
 ]
 
 # ---------------------------------------------------------------------------
@@ -341,4 +344,171 @@ class AgentStreamEventResponse(BaseModel):
             "True exactly once per job, on the event after which the server "
             "closes the WebSocket connection"
         )
+    )
+
+
+# ---------------------------------------------------------------------------
+# Response schema -- analysis result (T-050)
+# ---------------------------------------------------------------------------
+
+
+class InvestmentDecisionResponse(BaseModel):
+    """
+    Body returned by GET /api/v1/analysis/{job_id}/result.
+
+    Field-for-field identical to
+    ``backend.agents.output_models.InvestmentDecision`` (the Portfolio
+    Manager agent's Pydantic output model) -- this schema exists
+    because that model lives in the ``backend.agents`` package and is
+    constructed by LangGraph node code, not by this router; mirroring
+    its shape here (rather than importing and reusing the agent model
+    directly as a FastAPI response_model) keeps the same boundary
+    every other schema in this module already enforces, between
+    agent-internal models and the public HTTP response contract --
+    see this module's own docstring on why backend.models.orm and
+    backend.models.schemas are kept separate for the identical reason.
+
+    Built from ``backend.services.analysis.AnalysisResultData.decision``,
+    which is the exact ``InvestmentDecision.model_dump()`` dict
+    persisted into ``analyses.state_snapshot`` (T-033) by
+    ``portfolio_manager_node`` -- every field below round-trips through
+    that JSONB column with no further computation in this router.
+    """
+
+    agent_name: str = Field(
+        default="portfolio_manager",
+        description=(
+            "Always 'portfolio_manager' -- the agent that produced this decision"
+        ),
+    )
+    analysis_id: str = Field(description="UUID of the parent Analysis job, as a string")
+    company_name: str = Field(description="Human-readable company name")
+    ticker: str = Field(description="Yahoo Finance ticker with exchange suffix")
+    generated_at: datetime = Field(
+        description="UTC timestamp when the Portfolio Manager produced this decision"
+    )
+    error: Optional[str] = Field(
+        default=None,
+        description=(
+            "Always null for a result returned by this endpoint -- a non-null "
+            "error here would mean the Portfolio Manager itself failed, which "
+            "the pipeline never persists as status='completed'"
+        ),
+    )
+
+    verdict: str = Field(
+        description="Final investment recommendation: BUY, HOLD, or SELL"
+    )
+    conviction_score: int = Field(
+        ge=1, le=10, description="Portfolio Manager confidence in the verdict, 1-10"
+    )
+    price_target: Optional[str] = Field(
+        default=None, description="Implied price target, or null if inconclusive"
+    )
+    time_horizon: str = Field(description="Suggested holding period for this verdict")
+
+    executive_summary: str = Field(description="2-3 paragraph executive summary")
+    investment_thesis: str = Field(
+        description="Core investment thesis in 3-5 sentences"
+    )
+    bull_case: str = Field(description="Bull case argument")
+    bear_case: str = Field(description="Bear case, incorporating Contrarian/Risk flags")
+    risk_summary: str = Field(description="Top risks ranked by potential impact")
+    valuation_summary: str = Field(description="DCF and peer comparison summary")
+
+    key_risks: list[str] = Field(
+        default_factory=list, description="Structured list of the most important risks"
+    )
+    key_catalysts: list[str] = Field(
+        default_factory=list,
+        description="Structured list of factors that could move the thesis forward",
+    )
+
+    contrarian_response: str = Field(
+        description=(
+            "How the Portfolio Manager addressed the Contrarian's " "strongest argument"
+        )
+    )
+    debate_rounds_used: int = Field(
+        ge=1, description="Number of agent debate rounds completed before this decision"
+    )
+    agent_weights: dict[str, float] = Field(
+        default_factory=dict,
+        description=(
+            "Weight (0.0-1.0) assigned to each agent's output, keyed by agent_name"
+        ),
+    )
+    summary: str = Field(
+        description="One-sentence summary suitable for dashboard display"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Response schemas -- analysis history (T-050)
+# ---------------------------------------------------------------------------
+
+
+class HistoryEntryResponse(BaseModel):
+    """
+    One row of GET /api/v1/analysis/history's paginated result.
+
+    Deliberately a much smaller shape than ``InvestmentDecisionResponse``
+    -- a history list shows enough to identify and triage past analyses
+    (company, verdict, when, status) without the cost of returning the
+    full Investment Memo text for every row on every page. A caller
+    that wants the full decision for a specific row follows up with
+    GET /api/v1/analysis/{job_id}/result using this entry's ``job_id``.
+    """
+
+    job_id: uuid.UUID = Field(description="UUID of the analysis job")
+    company_name: str = Field(description="Company display name")
+    ticker: str = Field(description="Yahoo Finance ticker with exchange suffix")
+    exchange: str = Field(description="Exchange -- 'NSE' or 'BSE'")
+    status: str = Field(
+        description="Lifecycle status: 'pending', 'running', 'completed', or 'failed'"
+    )
+    requested_at: datetime = Field(
+        description="UTC timestamp when the analysis was triggered"
+    )
+    completed_at: Optional[datetime] = Field(
+        default=None, description="UTC timestamp when the pipeline finished, if it has"
+    )
+    verdict: Optional[str] = Field(
+        default=None,
+        description=(
+            "Final verdict (BUY/HOLD/SELL) once available; null for a "
+            "pending, running, or failed analysis"
+        ),
+    )
+    conviction_score: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=10,
+        description="Conviction score (1-10) once available; null until then",
+    )
+
+
+class HistoryResponse(BaseModel):
+    """
+    Body returned by GET /api/v1/analysis/history.
+
+    ``limit``/``offset`` echo back exactly what was requested (after
+    the router's own clamping via FastAPI's ``Query(ge=..., le=...)``
+    validation -- see backend.routers.analysis.get_analysis_history_endpoint)
+    so a caller can compute the next page's offset
+    (``offset + len(items)``) without tracking pagination state
+    anywhere except this response, and ``has_more`` saves it from
+    having to compare that arithmetic against ``total_count`` itself.
+    """
+
+    items: list[HistoryEntryResponse] = Field(
+        description="This page's analyses, newest first"
+    )
+    total_count: int = Field(
+        ge=0, description="Total number of analyses this user has ever triggered"
+    )
+    limit: int = Field(description="Page size used for this request")
+    offset: int = Field(ge=0, description="Number of rows skipped before this page")
+    has_more: bool = Field(
+        description="True when at least one further row exists beyond this page"
     )
