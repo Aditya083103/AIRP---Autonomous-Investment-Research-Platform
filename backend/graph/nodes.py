@@ -1,11 +1,36 @@
 # backend/graph/nodes.py
 """
 AIRP -- LangGraph Node Functions
-(T-030 / T-031 / T-032 / T-033 / T-036 / T-040 / T-041 / T-042 / T-043)
+(T-030 / T-031 / T-032 / T-033 / T-036 / T-040 / T-041 / T-042 / T-043 / T-049)
 
 Thin wrapper functions that adapt each agent's public API to the
 LangGraph node contract: receive InvestmentState, return a partial
 dict that LangGraph merges back into state.
+
+T-049 addition (live WebSocket broadcast)
+-------------------------------------------
+``_persist_after`` now does two fire-and-forget things after every
+sequential node completes, not just one: it still calls ``_run_persist``
+(T-033's PostgreSQL checkpoint write, unchanged) and now ALSO calls the
+new ``_run_broadcast``, which pushes one ``AgentStreamEvent`` --
+``{agent, status, output_preview, progress_percent, is_final}`` -- to
+``backend.services.ws_broadcaster.publish_event``. Any WebSocket client
+connected via ``WS /api/v1/analysis/{job_id}/stream``
+(``backend.routers.websocket``, T-049) receives that event live, in
+node-completion order, with no polling required. ``progress_percent`` is
+computed via the exact same ``backend.services.analysis.compute_progress``
+T-048 already uses for ``GET /status`` -- the live stream and the poll
+endpoint can never disagree about how far along a job is, by
+construction. ``output_preview`` is built by ``_build_output_preview``,
+which reads each node's own agent-output dict already sitting in the
+merged state (no new agent calls). The PDF export node
+(``pdf_export``, the true final node before ``END`` -- see
+``backend.graph.graph``'s ``add_edge(NODE_PDF_EXPORT, END)``) and any
+node that leaves ``status='failed'`` both set ``is_final=True``, which
+is the signal the WebSocket route handler uses to close the connection
+cleanly. Like ``_run_persist``, ``_run_broadcast`` never raises -- a
+broadcaster bug must never abort the pipeline that is the actual
+product of an analysis run.
 
 T-043 addition (Investment Memo PDF export)
 -------------------------------------------
@@ -74,7 +99,9 @@ T-033 additions (state persistence)
 Every node that runs sequentially (i.e. NOT the 4 parallel research
 nodes) is wrapped by ``_persist_after(node_fn, node_name)`` which calls
 ``services.state_persistence.persist_state`` after the node function
-returns its partial dict.
+returns its partial dict, and (T-049) ALSO calls
+``services.ws_broadcaster.publish_event`` with a live progress event
+for the same node completion -- see "T-049 addition" above.
 
 The 4 parallel research nodes (fundamental, technical, sentiment, macro)
 are NOT wrapped because they run in the same Send super-step and the
@@ -140,6 +167,14 @@ Design decisions
 * Persistence failures are caught and logged (non-fatal).
 * In ENVIRONMENT=test, persist_state is patched to a no-op so no DB
   connections are made during unit tests.
+* (T-049) Broadcast failures (_run_broadcast) are caught and logged
+  exactly like persistence failures -- a stuck or slow WebSocket
+  subscriber must never stall or fail the pipeline. The broadcaster
+  itself (backend.services.ws_broadcaster) touches no DB and no
+  network, so unlike persist_state it does not need to be patched in
+  unit tests to stay hermetic -- a job_id with zero subscribers
+  (true for every test that never calls ws_broadcaster.subscribe) is
+  already a guaranteed no-op.
 
 Public API
 ----------
@@ -291,23 +326,239 @@ def _run_persist(job_id: str, node_name: str, merged: InvestmentState) -> None:
         )
 
 
+#: State field name (see backend.graph.state.InvestmentState) holding
+#: each sequential node's own agent output dict, keyed by the node name
+#: that just completed -- used by _build_output_preview to find the
+#: right field without a long if/elif chain duplicated at every call
+#: site. Nodes with no entry here (planner, research_join,
+#: error_handler, sentiment_escalation, report_generator, pdf_export)
+#: either produce no AgentOutput-shaped dict at all or one whose
+#: "headline" field is read directly in _build_output_preview instead.
+_NODE_OUTPUT_STATE_FIELD: dict[str, str] = {
+    NODE_RISK: "risk",
+    NODE_CONTRARIAN: "contrarian",
+    NODE_VALUATION: "valuation",
+    NODE_PORTFOLIO_MANAGER: "decision",
+}
+
+#: Maximum length of AgentStreamEvent.output_preview. Long enough to
+#: show a complete one-line summary (e.g. a verdict plus a short
+#: reason) without risking an unbounded string if an agent's reasoning
+#: field is unexpectedly long -- this is a live progress indicator,
+#: not a substitute for GET /result (T-050).
+_OUTPUT_PREVIEW_MAX_CHARS = 200
+
+
+def _truncate_preview(text: str) -> str:
+    """Truncate ``text`` to ``_OUTPUT_PREVIEW_MAX_CHARS``, adding an
+    ellipsis marker when truncation actually occurred."""
+    stripped = text.strip()
+    if len(stripped) <= _OUTPUT_PREVIEW_MAX_CHARS:
+        return stripped
+    return stripped[: _OUTPUT_PREVIEW_MAX_CHARS - 1].rstrip() + "\u2026"
+
+
+def _build_output_preview(node_name: str, merged: InvestmentState) -> str:
+    """
+    Build a short, human-readable summary of what ``node_name`` produced.
+
+    Reads the same agent-output dicts already sitting in ``merged``
+    (every agent's ``model_dump()``, per
+    ``backend.agents.output_models.AgentOutput``) -- no new computation,
+    no extra agent call. Every output dict carries a uniform ``error``
+    field (null on success); when it is set, the preview surfaces the
+    error instead of trying to read a "headline" field that the failed
+    agent never populated, since every AgentOutput subclass's headline
+    field still has *some* default/zero value on a failed run and
+    silently showing that would misrepresent a failure as a result.
+
+    Args:
+        node_name: The LangGraph node name that just completed.
+        merged:    The fully-merged InvestmentState (incoming state
+                   overlaid with the node's own partial dict) -- the
+                   same value _persist_after already builds for
+                   persistence, reused here so this function never
+                   needs to read the live `state` argument directly.
+
+    Returns:
+        A short string, never empty, always non-null and always
+        truncated to ``_OUTPUT_PREVIEW_MAX_CHARS``. Falls back to a
+        generic "<node_name> completed" message for nodes with no
+        agent-output field of their own (planner, research_join,
+        error_handler, sentiment_escalation, report_generator,
+        pdf_export) or when the expected field is missing/malformed.
+    """
+    field_name = _NODE_OUTPUT_STATE_FIELD.get(node_name)
+    if field_name is not None:
+        output = _typed_dict_get(merged, field_name)
+        if isinstance(output, dict):
+            error = output.get("error")
+            if error:
+                return _truncate_preview(f"Failed: {error}")
+            return _truncate_preview(_summarise_agent_output(node_name, output))
+
+    if node_name == NODE_REPORT_GENERATOR:
+        memo = merged.get("memo_markdown")
+        if isinstance(memo, str) and memo:
+            return _truncate_preview("Investment Memo drafted")
+        return "Investment Memo generation completed"
+
+    if node_name == NODE_PDF_EXPORT:
+        pdf_path = merged.get("memo_pdf_path")
+        if isinstance(pdf_path, str) and pdf_path:
+            return _truncate_preview(f"PDF exported: {pdf_path}")
+        return "PDF export skipped (no PDF generated)"
+
+    if node_name == NODE_RESEARCH_JOIN:
+        return "Fundamental, technical, sentiment, and macro research complete"
+
+    if node_name == NODE_PLANNER:
+        company = merged.get("company_name") or "company"
+        return _truncate_preview(f"Resolved {company} -- analysis starting")
+
+    return f"{node_name} completed"
+
+
+def _summarise_agent_output(node_name: str, output: dict[str, Any]) -> str:
+    """
+    Extract the single most informative field from a successful agent
+    output dict, keyed by which node produced it.
+
+    A small dispatch table rather than a generic "dump every field"
+    summary -- each agent's most decision-relevant field
+    (backend.agents.output_models) is different (a score for Risk, a
+    verdict for Valuation, a bear_conviction for Contrarian), so a
+    one-size-fits-all formatter would either be too noisy or omit the
+    one number a live viewer most wants to see first.
+
+    Args:
+        node_name: The LangGraph node name the output dict came from.
+        output:    The agent's ``model_dump()`` dict (already confirmed
+                   to have ``error`` falsy by the caller).
+
+    Returns:
+        A short descriptive string. Falls back to a generic
+        "<node_name> output ready" message if the expected headline
+        field is absent (defensive -- should not happen given the
+        output_models.py schemas, but a missing key here must never
+        raise inside a fire-and-forget broadcast path).
+    """
+    if node_name == NODE_RISK:
+        score = output.get("risk_score")
+        flags = output.get("risk_flags")
+        flag_count = len(flags) if isinstance(flags, list) else 0
+        if score is not None:
+            return f"Risk score {score}/10 -- {flag_count} flag(s) raised"
+    elif node_name == NODE_CONTRARIAN:
+        conviction = output.get("bear_conviction")
+        if conviction is not None:
+            return f"Bear conviction {conviction}/10"
+    elif node_name == NODE_VALUATION:
+        verdict = output.get("valuation_verdict")
+        if verdict:
+            return f"Valuation verdict: {verdict}"
+    elif node_name == NODE_PORTFOLIO_MANAGER:
+        verdict = output.get("verdict")
+        conviction = output.get("conviction_score")
+        if verdict is not None and conviction is not None:
+            return f"Final verdict: {verdict} (conviction {conviction}/10)"
+
+    return f"{node_name} output ready"
+
+
+def _run_broadcast(
+    job_id: str,
+    node_name: str,
+    merged: InvestmentState,
+) -> None:
+    """
+    Publish a live AgentStreamEvent for this node completion (T-049).
+
+    Companion to ``_run_persist``: where that function writes the
+    checkpoint T-048's GET /status reads, this one pushes the same
+    moment live to any WebSocket client connected via
+    ``WS /api/v1/analysis/{job_id}/stream``
+    (backend.routers.websocket). Computes ``progress_percent`` via the
+    exact same ``backend.services.analysis.compute_progress`` T-048
+    already uses -- the live stream and the poll endpoint can never
+    disagree about how far along a job is, by construction.
+
+    Never raises -- imports backend.services.analysis and
+    backend.services.ws_broadcaster lazily (same "keep the test surface
+    narrow" pattern backend.services.analysis._invoke_graph_sync already
+    uses for backend.graph.graph) and catches any exception from either
+    module so a broadcaster bug can never abort the LangGraph pipeline
+    that is the actual product of an analysis run -- the identical
+    fire-and-forget contract _run_persist already has for persistence.
+
+    Args:
+        job_id:    UUID string from merged state.
+        node_name: The node name that just completed.
+        merged:    The merged InvestmentState to summarise and publish.
+    """
+    try:
+        from backend.services.analysis import compute_progress
+        from backend.services.ws_broadcaster import cast_event, publish_event
+
+        status: str = str(merged.get("status", "running"))
+        _, _, progress_percent = compute_progress(
+            last_completed_node=node_name,
+            status=status,
+        )
+        output_preview = _build_output_preview(node_name, merged)
+        is_final = node_name == NODE_PDF_EXPORT or status == "failed"
+
+        event = cast_event(
+            job_id=job_id,
+            agent=node_name,
+            status=status,
+            output_preview=output_preview,
+            progress_percent=progress_percent,
+            is_final=is_final,
+        )
+        publish_event(job_id=job_id, event=event)
+    except Exception as exc:
+        # Fire-and-forget: broadcast failures are non-fatal -- log and
+        # continue, mirroring _run_persist's identical contract.
+        logger.error(
+            "_run_broadcast: failed to publish event for node=%s " "job_id=%s: %s",
+            node_name,
+            job_id,
+            exc,
+        )
+
+
 def _persist_after(node_fn: _NodeFn, node_name: str) -> _NodeFn:
     """
-    Wrap a node function to persist state after it returns (T-033).
+    Wrap a node function to persist state and broadcast progress after
+    it returns (T-033 persistence; T-049 adds the live WS broadcast).
 
     The wrapper:
     1. Calls the original node function to get the partial dict.
     2. Merges the partial dict with the incoming state to build the full
        state snapshot that should be persisted.
     3. Calls _run_persist (fire-and-forget, non-fatal on error).
-    4. Returns the original partial dict unchanged so LangGraph can merge
+    4. Calls _run_broadcast (fire-and-forget, non-fatal on error) --
+       pushes one AgentStreamEvent to any WebSocket client subscribed
+       to this job_id, built from the exact same merged state _run_persist
+       just wrote to PostgreSQL.
+    5. Returns the original partial dict unchanged so LangGraph can merge
        it into shared state normally.
 
     Only sequential nodes are wrapped -- NOT the 4 parallel research nodes.
+    Existing tests that patch ``backend.graph.nodes._run_persist`` to a
+    no-op (the established T-033 pattern -- see e.g.
+    test_graph_skeleton.py's ``_no_db_persist`` fixture) are unaffected
+    by the T-049 addition: ``_run_broadcast`` only touches the
+    in-process ``ws_broadcaster`` registry (no DB, no network), and a
+    job_id with zero subscribers -- true for every existing test, since
+    none of them ever calls ``ws_broadcaster.subscribe`` -- is a
+    guaranteed no-op there regardless.
 
     Args:
         node_fn:   The original node function.
-        node_name: The node's string name (used in logs and DB).
+        node_name: The node's string name (used in logs, DB, and the
+                   broadcast event's ``agent`` field).
 
     Returns:
         A wrapped function with the same signature as node_fn.
@@ -318,7 +569,8 @@ def _persist_after(node_fn: _NodeFn, node_name: str) -> _NodeFn:
 
         # Build a merged view: start from incoming state, overlay the
         # partial dict that the node returned.  This is what LangGraph
-        # will store as the new state, so it is what we want in the DB.
+        # will store as the new state, so it is what we want in the DB
+        # and what the broadcast event should summarise.
         merged_raw: dict[str, Any] = dict(state)
         merged_raw.update(partial)
 
@@ -338,10 +590,23 @@ def _persist_after(node_fn: _NodeFn, node_name: str) -> _NodeFn:
                     job_id,
                     exc,
                 )
+
+            try:
+                _run_broadcast(job_id=job_id, node_name=node_name, merged=merged)
+            except Exception as exc:
+                # Fire-and-forget: broadcast errors are non-fatal -- log
+                # and continue, identical contract to persistence above.
+                logger.error(
+                    "_persist_after: _run_broadcast raised for node=%s "
+                    "job_id=%s: %s",
+                    node_name,
+                    job_id,
+                    exc,
+                )
         else:
             logger.warning(
                 "_persist_after: no job_id in state after node=%s "
-                "-- skipping persistence",
+                "-- skipping persistence and broadcast",
                 node_name,
             )
 
