@@ -1,6 +1,6 @@
 # backend/models/schemas.py
 """
-AIRP -- Pydantic Request/Response Schemas (T-046 / T-047 / T-048)
+AIRP -- Pydantic Request/Response Schemas (T-046 / T-047 / T-048 / T-050 / T-051)
 
 Pydantic v2 models for the auth and analysis endpoints' request bodies
 and response shapes. Kept in a separate module from backend/models/orm.py
@@ -33,6 +33,7 @@ __all__ = [
     "InvestmentDecisionResponse",
     "HistoryEntryResponse",
     "HistoryResponse",
+    "DocumentUploadResponse",
 ]
 
 # ---------------------------------------------------------------------------
@@ -511,4 +512,51 @@ class HistoryResponse(BaseModel):
     offset: int = Field(ge=0, description="Number of rows skipped before this page")
     has_more: bool = Field(
         description="True when at least one further row exists beyond this page"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Response schema -- document upload (T-051)
+# ---------------------------------------------------------------------------
+
+
+class DocumentUploadResponse(BaseModel):
+    """
+    Body returned by POST /api/v1/documents/upload.
+
+    There is no matching ``*Request`` schema in this module because the
+    request body is ``multipart/form-data`` (a PDF file plus a couple of
+    plain form fields), not JSON -- FastAPI validates that shape directly
+    via ``UploadFile``/``Form(...)`` parameters on the route handler
+    itself (see backend.routers.documents.upload_document), the same
+    reason backend.routers.analysis's WebSocket route has no Pydantic
+    request schema either.
+
+    ``chunks_ingested`` is the number of ChromaDB chunks written, not the
+    number of pages or characters -- a caller wanting to confirm the
+    upload is now queryable cares about "did at least one chunk land in
+    the vector store", which this field answers directly.
+    """
+
+    company_name: str = Field(description="Resolved company display name")
+    ticker: str = Field(description="Yahoo Finance ticker with exchange suffix")
+    exchange: str = Field(
+        description="Exchange the company was resolved to: NSE or BSE"
+    )
+    source_filename: str = Field(description="Original filename of the uploaded PDF")
+    doc_type: str = Field(
+        description="Document category stored in ChromaDB metadata: "
+        "'annual_report' or 'transcript'"
+    )
+    chunks_ingested: int = Field(
+        ge=0,
+        description=(
+            "Number of text chunks embedded and stored in ChromaDB. "
+            "0 means the PDF was accepted but contained no extractable "
+            "text (e.g. a scanned, image-only PDF) -- nothing was "
+            "embedded, so it will not be retrievable by agents."
+        ),
+    )
+    characters_extracted: int = Field(
+        ge=0, description="Total character count of the text extracted from the PDF"
     )
