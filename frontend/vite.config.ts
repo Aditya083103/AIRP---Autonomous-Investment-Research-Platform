@@ -1,3 +1,5 @@
+import { fileURLToPath } from "node:url";
+
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
@@ -6,15 +8,18 @@ export default defineConfig({
   plugins: [react()],
 
   resolve: {
-    // URL is a DOM global (no node:url import needed). .pathname gives the
-    // filesystem path from a file:// URL, which is correct on Linux/macOS CI.
+    // fileURLToPath correctly converts a file:// URL to a filesystem path on
+    // every platform. `.pathname` must NOT be used here: on Windows it keeps
+    // a leading slash before the drive letter (e.g. "/C:/Users/..."), which
+    // Vite's resolver then concatenates onto an already-absolute Windows
+    // path, producing a broken "C:\C:\Users\..." path and an ENOENT.
     alias: {
-      "@": new URL("./src", import.meta.url).pathname,
-      "@components": new URL("./src/components", import.meta.url).pathname,
-      "@hooks": new URL("./src/hooks", import.meta.url).pathname,
-      "@pages": new URL("./src/pages", import.meta.url).pathname,
-      "@api": new URL("./src/api", import.meta.url).pathname,
-      "@types": new URL("./src/types", import.meta.url).pathname,
+      "@": fileURLToPath(new URL("./src", import.meta.url)),
+      "@components": fileURLToPath(new URL("./src/components", import.meta.url)),
+      "@hooks": fileURLToPath(new URL("./src/hooks", import.meta.url)),
+      "@pages": fileURLToPath(new URL("./src/pages", import.meta.url)),
+      "@api": fileURLToPath(new URL("./src/api", import.meta.url)),
+      "@types": fileURLToPath(new URL("./src/types", import.meta.url)),
     },
   },
 

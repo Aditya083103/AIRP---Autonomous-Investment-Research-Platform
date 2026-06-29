@@ -1,0 +1,14 @@
+# Vite / local build artifacts (root .gitignore also covers node_modules + dist)
+dist
+dist-ssr
+*.local
+.vite
+
+# Local env files (.env.example IS committed)
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*

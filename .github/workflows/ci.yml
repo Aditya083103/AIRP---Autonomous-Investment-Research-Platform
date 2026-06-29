@@ -110,10 +110,9 @@ jobs:
   frontend:
     name: "Frontend — lint & build (Node 20)"
     runs-on: ubuntu-latest
-    # Frontend is a Phase 6 deliverable (T-053+). The placeholder passes
-    # tsc/eslint but this job is non-blocking until Phase 6 is complete.
-    # Remove continue-on-error at T-053.
-    continue-on-error: true
+    # Hard gate as of T-053 (Phase 6 start). The job must pass:
+    # type-check (tsc), eslint (--max-warnings 0), prettier --check, and a
+    # production vite build.
 
     steps:
       # ── Checkout ────────────────────────────────────────────────────────
@@ -163,9 +162,8 @@ jobs:
   ci-pass:
     name: "CI — all checks passed"
     runs-on: ubuntu-latest
-    # Frontend has continue-on-error: true (Phase 6 placeholder).
-    # Only backend is a hard gate. Restore frontend to needs at T-053.
-    needs: [backend]
+    # As of T-053 both backend and frontend are hard gates.
+    needs: [backend, frontend]
     if: always()
 
     steps:
@@ -173,7 +171,14 @@ jobs:
         run: |
           if [[ "${{ needs.backend.result }}" != "success" ]]; then
             echo "❌ Backend CI failed."
-            echo "  backend : ${{ needs.backend.result }}"
+            echo "  backend  : ${{ needs.backend.result }}"
+            echo "  frontend : ${{ needs.frontend.result }}"
             exit 1
           fi
-          echo "✅ Backend CI passed. (Frontend non-blocking until Phase 6)"
+          if [[ "${{ needs.frontend.result }}" != "success" ]]; then
+            echo "❌ Frontend CI failed."
+            echo "  backend  : ${{ needs.backend.result }}"
+            echo "  frontend : ${{ needs.frontend.result }}"
+            exit 1
+          fi
+          echo "✅ All CI checks passed (backend + frontend)."

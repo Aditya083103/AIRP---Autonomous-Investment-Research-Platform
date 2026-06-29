@@ -1,15 +1,25 @@
 // frontend/src/main.tsx
-// Placeholder — replaced with full implementation in Phase 6 (T-053+)
+// Browser entry point: mounts the provider stack and the app into #root.
+// The bare CSS import is what pulls Tailwind's compiled layers into the
+// bundle; it must run before first paint, hence its position here.
+
 import React from "react";
 import ReactDOM from "react-dom/client";
 
-import App from "./App";
+import App from "@/App";
+import { AppProviders } from "@/providers/AppProviders";
 
-const root = document.getElementById("root");
-if (!root) throw new Error("Root element #root not found in index.html");
+import "./index.css";
 
-ReactDOM.createRoot(root).render(
+const rootElement = document.getElementById("root");
+if (!rootElement) {
+  throw new Error("Root element #root not found in index.html");
+}
+
+ReactDOM.createRoot(rootElement).render(
   <React.StrictMode>
-    <App />
+    <AppProviders>
+      <App />
+    </AppProviders>
   </React.StrictMode>,
 );
