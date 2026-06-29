@@ -46,6 +46,11 @@ module.exports = {
     // import/resolver intentionally omitted — eslint-import-resolver-typescript
     // has a known compatibility issue with eslint-plugin-import v2 on Windows.
     // Import resolution is covered by tsc (tsconfig paths + strict mode).
+    //
+    // Treat "@/..." path-alias imports (tsconfig paths + vite alias) as the
+    // "internal" group so import/order places them in their own block after
+    // external packages, instead of lumping them in with node_modules.
+    "import/internal-regex": "^@/",
   },
 
   rules: {
@@ -108,6 +113,16 @@ module.exports = {
       rules: {
         "@typescript-eslint/no-unsafe-assignment": "off",
         "@typescript-eslint/no-unsafe-call": "off",
+      },
+    },
+    {
+      // Ambient declaration files. The `/// <reference types="vite/client" />`
+      // directive in src/vite-env.d.ts is the canonical, Vite-recommended way
+      // to pull in import.meta.env typings and cannot be expressed as an
+      // `import`, so the triple-slash rule is disabled for *.d.ts only.
+      files: ["*.d.ts"],
+      rules: {
+        "@typescript-eslint/triple-slash-reference": "off",
       },
     },
   ],

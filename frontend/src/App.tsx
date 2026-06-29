@@ -1,13 +1,13 @@
 // frontend/src/App.tsx
-// Placeholder — replaced with full implementation in Phase 6 (T-053+)
+// Root application component. Providers live in AppProviders (rendered by
+// main.tsx), so App's only job is to mount the route tree. Keeping App
+// free of provider wiring means routes can be unit-tested in isolation in
+// later Phase 6 tasks by rendering <App /> inside a test-specific provider.
+
+import { AppRoutes } from "@/routes/AppRoutes";
 
 function App(): JSX.Element {
-  return (
-    <div>
-      <h1>AIRP — Autonomous Investment Research Platform</h1>
-      <p>Frontend coming in Phase 6.</p>
-    </div>
-  );
+  return <AppRoutes />;
 }
 
 export default App;
