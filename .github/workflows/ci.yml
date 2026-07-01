@@ -108,11 +108,11 @@ jobs:
   # JOB 2 — Frontend: type-check, lint, build
   # ───────────────────────────────────────────────────────────────────────────
   frontend:
-    name: "Frontend — lint & build (Node 20)"
+    name: "Frontend — lint, test & build (Node 20)"
     runs-on: ubuntu-latest
     # Hard gate as of T-053 (Phase 6 start). The job must pass:
-    # type-check (tsc), eslint (--max-warnings 0), prettier --check, and a
-    # production vite build.
+    # type-check (tsc), eslint (--max-warnings 0), prettier --check,
+    # Vitest component tests (added T-054), and a production vite build.
 
     steps:
       # ── Checkout ────────────────────────────────────────────────────────
@@ -146,6 +146,13 @@ jobs:
       - name: "Format check — prettier"
         working-directory: frontend
         run: npm run format:check
+
+      # ── Component tests (Vitest, added T-054) ────────────────────────────
+      # "test:run" (vitest run) executes once and exits — "test" alone
+      # starts Vitest's interactive watch mode, which never exits in CI.
+      - name: "Test — vitest"
+        working-directory: frontend
+        run: npm run test:run
 
       # ── Production build ──────────────────────────────────────────────────
       # Catches import errors and missing modules that type-check alone misses
