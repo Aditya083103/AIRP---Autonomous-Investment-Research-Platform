@@ -1,11 +1,53 @@
 // frontend/src/components/layout/RootLayout.tsx
 // The persistent app shell: a slim top bar and a footer that wrap every
-// routed page via <Outlet />. This is intentionally minimal for T-053 --
-// the navigation, auth menu, and responsive behaviour land in their own
-// Phase 6 tasks; this only establishes the structural frame and proves the
-// nested-route layout pattern works end to end.
+// routed page via <Outlet />. Structural frame and nested-route layout
+// pattern established in T-053; T-056 makes the header auth-aware (the
+// static "Phase 6 - Frontend" badge is replaced with real Log in /
+// Log out state) now that /login, /register, and /dashboard are real
+// routes instead of placeholders.
 
-import { Link, Outlet } from "react-router-dom";
+import { Link, Outlet, useNavigate } from "react-router-dom";
+
+import { Button } from "@/components/ui";
+import { useAuth } from "@/hooks/useAuth";
+
+function HeaderAuthArea(): JSX.Element {
+  const { isAuthenticated, user, logout } = useAuth();
+  const navigate = useNavigate();
+
+  const handleLogout = async (): Promise<void> => {
+    await logout();
+    navigate("/", { replace: true });
+  };
+
+  if (!isAuthenticated) {
+    return (
+      <div className="flex items-center gap-4">
+        <Link to="/login" className="text-sm font-medium text-ink hover:text-brand-600">
+          Log in
+        </Link>
+        <Link
+          to="/register"
+          className={
+            "rounded-card bg-brand-600 px-4 py-2 text-sm font-medium text-white " +
+            "transition-colors hover:bg-brand-700"
+          }
+        >
+          Get started
+        </Link>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-4">
+      <span className="hidden text-sm text-muted sm:inline">{user?.email}</span>
+      <Button variant="secondary" size="sm" onClick={() => void handleLogout()}>
+        Log out
+      </Button>
+    </div>
+  );
+}
 
 export function RootLayout(): JSX.Element {
   return (
@@ -20,9 +62,7 @@ export function RootLayout(): JSX.Element {
               Autonomous Investment Research Platform
             </span>
           </Link>
-          <span className="rounded-full bg-brand-50 px-3 py-1 text-xs font-medium text-brand-700">
-            Phase 6 - Frontend
-          </span>
+          <HeaderAuthArea />
         </div>
       </header>
 

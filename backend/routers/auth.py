@@ -1,8 +1,8 @@
 # backend/routers/auth.py
 """
-AIRP -- Auth Router (T-046)
+AIRP -- Auth Router (T-046, extended in T-056)
 
-POST /auth/register, POST /auth/login, GET /auth/me.
+POST /auth/register, POST /auth/login, POST /auth/logout, GET /auth/me.
 
 Acceptance criteria (from task spec):
   * Register -> login -> access protected route works end-to-end
@@ -12,9 +12,27 @@ Business logic (password hashing, JWT encode/decode) lives in
 backend.services.auth; this module only handles the HTTP-layer
 concerns -- request validation (via Pydantic schemas), database
 queries, and translating service-layer exceptions into HTTP responses.
+
+T-056 (React auth pages) note on cookies
+-----------------------------------------
+register() and login() now ALSO set an httpOnly cookie carrying the
+same JWT the JSON body returns, so the browser holds a copy that is
+not readable by JavaScript. This is deliberately additive:
+GET /auth/me and every other protected route still authenticate via
+the Authorization header ONLY (get_current_user is unchanged) -- the
+frontend's WebSocket hook (useAnalysisStream, T-049) needs the raw
+token value in JS to send it as a `?token=` query parameter (browsers
+cannot attach custom headers to a WebSocket handshake), so the token
+must stay available in JS memory for that call regardless of the
+cookie. The cookie exists for defense-in-depth today and as the
+foundation for a future task to make GET /auth/me also accept it (so
+a page refresh can silently restore a session without JS ever holding
+the token) -- that consumption side is intentionally NOT implemented
+here to avoid changing get_current_user's contract (and every existing
+test that calls it directly) inside a frontend-focused task.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -33,6 +51,44 @@ from backend.models.schemas import (
 from backend.services.auth import create_access_token, hash_password, verify_password
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+#: Name of the httpOnly cookie set by register()/login() and cleared by
+#: logout(). Not read by any dependency yet (see module docstring) --
+#: exists so the browser has a JS-inaccessible copy of the token today,
+#: ready for a future task to wire consumption of it into
+#: get_current_user without any change to this constant or the cookie
+#: itself.
+ACCESS_TOKEN_COOKIE_NAME = "airp_access_token"
+
+
+def _set_access_token_cookie(
+    response: Response,
+    *,
+    access_token: str,
+    expires_in_minutes: int,
+    settings: Settings,
+) -> None:
+    """
+    Set ``ACCESS_TOKEN_COOKIE_NAME`` as a real httpOnly cookie on ``response``.
+
+    ``secure`` follows ``settings.is_production`` -- the cookie is
+    marked Secure (HTTPS-only) in production and left un-secured in
+    local/test HTTP development, matching how ``Settings.is_production``
+    already gates other environment-specific behaviour elsewhere in the
+    backend. ``samesite="lax"`` allows the cookie on top-level
+    navigations (e.g. a redirect back from an OAuth-style flow, if one
+    is ever added) while still blocking it on cross-site POST/fetch
+    requests, the standard CSRF-mitigating default.
+    """
+    response.set_cookie(
+        key=ACCESS_TOKEN_COOKIE_NAME,
+        value=access_token,
+        httponly=True,
+        secure=settings.is_production,
+        samesite="lax",
+        max_age=expires_in_minutes * 60,
+        path="/",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -54,6 +110,7 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 )
 async def register(
     body: UserRegisterRequest,
+    response: Response,
     session: AsyncSession = Depends(get_async_session),
     settings: Settings = Depends(get_settings_dependency),
 ) -> TokenResponse:
@@ -86,6 +143,12 @@ async def register(
     await session.refresh(user)
 
     access_token, expires_in = create_access_token(user.id, settings=settings)
+    _set_access_token_cookie(
+        response,
+        access_token=access_token,
+        expires_in_minutes=expires_in,
+        settings=settings,
+    )
     return TokenResponse(
         access_token=access_token,
         expires_in_minutes=expires_in,
@@ -106,6 +169,7 @@ async def register(
 )
 async def login(
     body: UserLoginRequest,
+    response: Response,
     session: AsyncSession = Depends(get_async_session),
     settings: Settings = Depends(get_settings_dependency),
 ) -> TokenResponse:
@@ -128,11 +192,39 @@ async def login(
         raise invalid_credentials
 
     access_token, expires_in = create_access_token(user.id, settings=settings)
+    _set_access_token_cookie(
+        response,
+        access_token=access_token,
+        expires_in_minutes=expires_in,
+        settings=settings,
+    )
     return TokenResponse(
         access_token=access_token,
         expires_in_minutes=expires_in,
         user=UserResponse.model_validate(user),
     )
+
+
+# ---------------------------------------------------------------------------
+# POST /auth/logout
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/logout",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Clear the access-token cookie",
+    description=(
+        "Clears the httpOnly cookie set by register()/login(). Does not "
+        "require authentication and does not touch any server-side "
+        "session state -- AIRP's JWTs are stateless, so 'logout' is "
+        "purely a client-side (cookie deletion) concern. The frontend "
+        "additionally drops its in-memory access token on the same "
+        "action; this endpoint exists so the cookie is cleared too."
+    ),
+)
+async def logout(response: Response) -> None:
+    response.delete_cookie(key=ACCESS_TOKEN_COOKIE_NAME, path="/")
 
 
 # ---------------------------------------------------------------------------
