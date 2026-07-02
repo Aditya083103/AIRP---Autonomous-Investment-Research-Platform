@@ -379,7 +379,7 @@ class TestGetEmbeddingFunction:
         ) as mock_cls:
             mock_cls.return_value = _MockEF()
             get_embedding_function("all-MiniLM-L6-v2")
-        mock_cls.assert_called_once_with(model_name="all-MiniLM-L6-v2")
+        mock_cls.assert_called_once_with(model_name="all-MiniLM-L6-v2", device="cpu")
 
     def test_uses_default_model_when_no_arg(self) -> None:
         with patch(
@@ -387,7 +387,9 @@ class TestGetEmbeddingFunction:
         ) as mock_cls:
             mock_cls.return_value = _MockEF()
             get_embedding_function()
-        mock_cls.assert_called_once_with(model_name=EMBEDDING_MODEL_DEFAULT)
+        mock_cls.assert_called_once_with(
+            model_name=EMBEDDING_MODEL_DEFAULT, device="cpu"
+        )
 
 
 # ---------------------------------------------------------------------------

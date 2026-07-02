@@ -119,6 +119,19 @@ def get_embedding_function(
     in ``~/.cache/torch/sentence_transformers``.  Subsequent calls are
     instant because the model is loaded from disk.
 
+    ``device="cpu"`` is passed explicitly rather than left to the
+    library default. Without it, recent ``transformers`` releases (when
+    ``accelerate`` is also installed -- a transitive dependency pulled
+    in by this project's other packages) can initialise the model on a
+    "meta" device first as a low-memory-usage optimisation, then fail
+    to materialise it onto a real device with:
+        "Cannot copy out of meta tensor; no data! Please use
+        torch.nn.Module.to_empty() instead of torch.nn.Module.to()..."
+    This model is a small (~90 MB), CPU-only, local embedding model --
+    there is no GPU to route it to and no memory-pressure reason to
+    defer allocation -- so forcing a plain CPU load sidesteps that
+    accelerate code path entirely rather than working around its bug.
+
     Args:
         model_name: HuggingFace model identifier.
                     Default: ``all-MiniLM-L6-v2`` (384-dim, fast, good
@@ -129,7 +142,7 @@ def get_embedding_function(
         ``list[list[float]]`` of dimension EMBEDDING_DIMENSION.
     """
     logger.debug("Loading sentence-transformer model: %s", model_name)
-    return SentenceTransformerEmbeddingFunction(model_name=model_name)
+    return SentenceTransformerEmbeddingFunction(model_name=model_name, device="cpu")
 
 
 # ── Raw client factory ─────────────────────────────────────────────────────────
