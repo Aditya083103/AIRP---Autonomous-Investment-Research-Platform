@@ -175,3 +175,13 @@ aiohttp==3.9.5
 
 # Type stubs for requests (improves mypy coverage on tool files)
 types-requests==2.31.0.20240406
+
+# ── 8b. PDF Text Extraction ────────────────────────────────────────────────
+
+# Extracts text from uploaded PDFs (annual reports, T-051) and earnings
+# call transcripts (T-015) — backend.tools.earnings_transcript tries
+# pdfminer.six first, falling back to PyPDF2 if pdfminer.six raises.
+# Both were referenced in code but missing from this file; add both so
+# the fallback path is actually exercisable, not just theoretical.
+pdfminer.six==20231228
+PyPDF2==3.0.1
