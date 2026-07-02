@@ -36,3 +36,29 @@ export interface HistoryResponse {
   offset: number;
   has_more: boolean;
 }
+
+/**
+ * Mirrors backend.models.schemas.AnalysisStartResponse (T-047/T-058).
+ * Returned by POST /api/v1/analysis/start the moment the job is
+ * created -- before any agent has run.
+ */
+export interface AnalysisStartResponse {
+  job_id: string;
+  status: AnalysisStatus;
+  company_name: string;
+  ticker: string;
+  exchange: string;
+}
+
+/**
+ * Mirrors backend.models.schemas.DocumentUploadResponse (T-051/T-058).
+ * Returned by POST /api/v1/documents/upload.
+ */
+export interface DocumentUploadResponse {
+  company_name: string;
+  ticker: string;
+  exchange: string;
+  source_filename: string;
+  doc_type: string;
+  chunks_ingested: number;
+}

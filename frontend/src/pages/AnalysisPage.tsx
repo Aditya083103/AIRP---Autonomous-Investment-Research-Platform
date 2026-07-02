@@ -1,31 +1,168 @@
 // frontend/src/pages/AnalysisPage.tsx
-// Placeholder for the Analysis Input page. T-055's landing page CTAs
-// ("Run a live analysis" / "Start a free analysis") link to /analysis so
-// there is no dead link on the landing page, but the real form -- company
-// autocomplete, PDF upload, validation -- is T-058 (per the master task
-// list) and is explicitly out of scope here. This stays a small, honest
-// placeholder rather than a fake form, and is not linked from the header
-// nav or footer as a "finished" feature.
+// AIRP -- Analysis Input page (T-058)
+//
+// Replaces T-055's placeholder with the real form: a company
+// autocomplete over the static top-50 NSE list (src/data/nseTop50.ts),
+// an optional PDF upload (<=10MB, validated client-side --
+// src/lib/validation/analysisSchemas.ts), and a "Start Analysis"
+// button. Now behind ProtectedRoute (src/routes/AppRoutes.tsx) --
+// starting an analysis requires an authenticated user's Bearer token,
+// so the placeholder's "public page" status no longer applies once the
+// form actually calls the backend.
+//
+// Submit order when a PDF is attached: upload FIRST, then start the
+// analysis. backend/services/documents.py's ingestion is independent of
+// any specific analysis job (it links the document to a
+// company/ticker, not a job_id), but starting the pipeline before the
+// upload finishes risks the News Sentiment / Macro Economist agents
+// querying ChromaDB for this run before the just-uploaded document is
+// embedded -- a race this form avoids by simply doing the two requests
+// in the order that matters, and refusing to start the analysis at all
+// if the upload the user explicitly asked for fails.
 
-import { Link } from "react-router-dom";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { useState } from "react";
+import { Controller, useForm } from "react-hook-form";
+import { useNavigate } from "react-router-dom";
+
+import { AnalysisApiError, startAnalysis, uploadDocument } from "@/api/analysis";
+import { CompanyAutocomplete } from "@/components/analysis/CompanyAutocomplete";
+import { PdfUploadField } from "@/components/analysis/PdfUploadField";
+import { Button } from "@/components/ui";
+import { NSE_TOP_50 } from "@/data/nseTop50";
+import { useAuth } from "@/hooks/useAuth";
+import {
+  analysisInputSchema,
+  isPdfFile,
+  isPdfWithinSizeLimit,
+  type AnalysisInputFormValues,
+} from "@/lib/validation/analysisSchemas";
 
 export function AnalysisPage(): JSX.Element {
+  const { accessToken } = useAuth();
+  const navigate = useNavigate();
+  const [pdfFile, setPdfFile] = useState<File | null>(null);
+  const [pdfError, setPdfError] = useState<string | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
+
+  const {
+    control,
+    handleSubmit,
+    formState: { errors, isSubmitting },
+  } = useForm<AnalysisInputFormValues>({
+    resolver: zodResolver(analysisInputSchema),
+    defaultValues: { companyTicker: "" },
+  });
+
+  function handlePdfChange(selected: File | null): void {
+    setPdfError(null);
+    if (selected === null) {
+      setPdfFile(null);
+      return;
+    }
+    if (!isPdfFile(selected)) {
+      setPdfError("Only PDF files are accepted.");
+      setPdfFile(null);
+      return;
+    }
+    if (!isPdfWithinSizeLimit(selected)) {
+      setPdfError("PDF must be smaller than 10MB.");
+      setPdfFile(null);
+      return;
+    }
+    setPdfFile(selected);
+  }
+
+  const onSubmit = async (values: AnalysisInputFormValues): Promise<void> => {
+    setFormError(null);
+
+    if (accessToken === null) {
+      setFormError("You must be logged in to start an analysis.");
+      return;
+    }
+    const company = NSE_TOP_50.find((candidate) => candidate.ticker === values.companyTicker);
+    if (!company) {
+      // Unreachable in practice: zod already required a non-empty
+      // companyTicker, and CompanyAutocomplete only ever writes a
+      // ticker that came from this exact list. Guards against the
+      // lookup silently returning undefined rather than asserting.
+      setFormError("Select a company from the list.");
+      return;
+    }
+
+    try {
+      if (pdfFile !== null) {
+        await uploadDocument({
+          accessToken,
+          file: pdfFile,
+          companyName: company.name,
+          ticker: company.ticker,
+          exchange: company.exchange,
+        });
+      }
+
+      const started = await startAnalysis({
+        accessToken,
+        companyName: company.name,
+        ticker: company.ticker,
+        exchange: company.exchange,
+      });
+      navigate(`/analysis/${started.job_id}/result`, { replace: true });
+    } catch (error) {
+      setFormError(
+        error instanceof AnalysisApiError
+          ? error.message
+          : "Could not start the analysis. Please try again.",
+      );
+    }
+  };
+
   return (
-    <div className="mx-auto max-w-lg py-16 text-center">
-      <p className="font-mono text-xs uppercase tracking-[0.2em] text-brand-600">Coming soon</p>
-      <h1 className="mt-4 font-display text-3xl font-semibold text-ink">
-        The analysis input page is being built.
+    <div className="mx-auto max-w-lg py-12">
+      <p className="font-mono text-xs uppercase tracking-[0.2em] text-brand-600">New analysis</p>
+      <h1 className="mt-2 font-display text-3xl font-semibold text-ink">
+        Run the committee on a company.
       </h1>
-      <p className="mt-4 text-sm leading-relaxed text-muted">
-        Company search, PDF upload, and the live 8-agent progress viewer land here in T-058 and
-        T-059 of the AIRP build. In the meantime, you can read how the committee works below.
+      <p className="mt-2 text-sm text-muted">
+        Pick an NSE company and, optionally, attach its latest annual report -- the committee will
+        read it before debating.
       </p>
-      <Link
-        to="/#how-it-works"
-        className="mt-8 inline-flex h-11 items-center justify-center rounded-card bg-brand-600 px-5 text-sm font-medium text-white transition-colors hover:bg-brand-700"
-      >
-        See how it works
-      </Link>
+
+      <form className="mt-8 flex flex-col gap-6" onSubmit={handleSubmit(onSubmit)} noValidate>
+        <Controller
+          control={control}
+          name="companyTicker"
+          render={({ field }) => {
+            const selected = NSE_TOP_50.find((company) => company.ticker === field.value) ?? null;
+            return (
+              <CompanyAutocomplete
+                label="Company"
+                value={selected}
+                onChange={(company) => field.onChange(company ? company.ticker : "")}
+                options={NSE_TOP_50}
+                hint="Search by name or ticker, e.g. 'Infosys' or 'TCS'."
+                {...(errors.companyTicker?.message ? { error: errors.companyTicker.message } : {})}
+              />
+            );
+          }}
+        />
+
+        <PdfUploadField
+          file={pdfFile}
+          onChange={handlePdfChange}
+          {...(pdfError ? { error: pdfError } : {})}
+        />
+
+        {formError ? (
+          <p role="alert" className="text-sm text-verdict-sell">
+            {formError}
+          </p>
+        ) : null}
+
+        <Button type="submit" isLoading={isSubmitting} disabled={pdfError !== null} fullWidth>
+          Start Analysis
+        </Button>
+      </form>
     </div>
   );
 }
