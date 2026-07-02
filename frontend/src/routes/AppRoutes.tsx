@@ -1,6 +1,6 @@
 // frontend/src/routes/AppRoutes.tsx
 // The route table. A layout route with a home index (the landing page,
-// T-055), a placeholder /analysis route (real form lands in T-058),
+// T-055), a protected /analysis route (the real input form, T-058),
 // /login and /register (T-056), a protected /dashboard (real history
 // table, T-057) and a protected /analysis/:jobId/result placeholder
 // (real results page lands in T-061), the T-054 component preview
@@ -25,7 +25,14 @@ export function AppRoutes(): JSX.Element {
     <Routes>
       <Route element={<RootLayout />}>
         <Route index element={<HomePage />} />
-        <Route path="analysis" element={<AnalysisPage />} />
+        <Route
+          path="analysis"
+          element={
+            <ProtectedRoute>
+              <AnalysisPage />
+            </ProtectedRoute>
+          }
+        />
         <Route path="login" element={<LoginPage />} />
         <Route path="register" element={<RegisterPage />} />
         <Route

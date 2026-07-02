@@ -1,13 +1,16 @@
 // frontend/src/api/analysis.ts
-// AIRP -- Analysis API client (T-057)
+// AIRP -- Analysis API client (T-057, extended in T-058)
 //
-// Thin fetch wrapper around GET /api/v1/analysis/history
-// (backend/routers/analysis.py, T-050). Unlike src/api/auth.ts, this
-// endpoint authenticates via a Bearer Authorization header rather than
-// the httpOnly cookie -- it is called with the in-memory accessToken
-// from useAuth(), the same token useAnalysisStream.ts already needs for
-// its WebSocket `?token=` parameter (see AuthProvider.tsx's docstring
-// for the full reasoning on why that token lives in JS memory at all).
+// Thin fetch wrappers around three backend/routers/analysis.py and
+// backend/routers/documents.py endpoints:
+//   - GET  /api/v1/analysis/history  (T-050) -- fetchAnalysisHistory
+//   - POST /api/v1/analysis/start    (T-047) -- startAnalysis
+//   - POST /api/v1/documents/upload  (T-051) -- uploadDocument
+// All three authenticate via a Bearer Authorization header rather than
+// the httpOnly cookie -- called with the in-memory accessToken from
+// useAuth(), the same token useAnalysisStream.ts already needs for its
+// WebSocket `?token=` parameter (see AuthProvider.tsx's docstring for
+// the full reasoning on why that token lives in JS memory at all).
 //
 // AnalysisApiError and parseErrorDetail intentionally duplicate
 // src/api/auth.ts's AuthApiError/parseErrorDetail rather than sharing
@@ -17,7 +20,11 @@
 // docstring makes for its duplicated ticker-override table.
 
 import { env } from "@/config/env";
-import { type HistoryResponse } from "@/types/analysis";
+import {
+  type AnalysisStartResponse,
+  type DocumentUploadResponse,
+  type HistoryResponse,
+} from "@/types/analysis";
 
 export class AnalysisApiError extends Error {
   readonly status: number;
@@ -101,4 +108,93 @@ export async function fetchAnalysisHistory({
     throw new AnalysisApiError(response.status, await parseErrorDetail(response));
   }
   return (await response.json()) as HistoryResponse;
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/v1/analysis/start (T-047, consumed by the T-058 input form)
+// ---------------------------------------------------------------------------
+
+export interface StartAnalysisParams {
+  accessToken: string;
+  companyName: string;
+  /** Yahoo Finance ticker override, e.g. 'TCS.NS'. See AnalysisStartRequest's docstring. */
+  ticker: string;
+  exchange: string;
+}
+
+/**
+ * POST /api/v1/analysis/start. Always sends `ticker`/`exchange`
+ * explicitly (from the selected NSE_TOP_50 entry) rather than leaving
+ * the backend to resolve `companyName` on its own -- see
+ * src/data/nseTop50.ts's docstring for why that matters: the backend's
+ * name-resolution table only covers ~15 companies, but an explicit
+ * ticker override skips that resolution step entirely and works for
+ * all 50.
+ */
+export async function startAnalysis({
+  accessToken,
+  companyName,
+  ticker,
+  exchange,
+}: StartAnalysisParams): Promise<AnalysisStartResponse> {
+  const response = await fetch(`${env.apiBaseUrl}/analysis/start`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({ company_name: companyName, ticker, exchange }),
+  });
+
+  if (!response.ok) {
+    throw new AnalysisApiError(response.status, await parseErrorDetail(response));
+  }
+  return (await response.json()) as AnalysisStartResponse;
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/v1/documents/upload (T-051, consumed by the T-058 input form)
+// ---------------------------------------------------------------------------
+
+export interface UploadDocumentParams {
+  accessToken: string;
+  file: File;
+  companyName: string;
+  ticker: string;
+  exchange: string;
+}
+
+/**
+ * POST /api/v1/documents/upload as multipart/form-data -- no
+ * `Content-Type` header is set explicitly so the browser fills in the
+ * `multipart/form-data; boundary=...` value itself (setting it by hand
+ * on a FormData body is a classic bug: the boundary the browser
+ * actually writes into the body would no longer match a hand-set
+ * header, and the backend's multipart parser would silently see zero
+ * parts). See backend/routers/documents.py's docstring for why this
+ * endpoint takes form fields instead of a JSON body at all.
+ */
+export async function uploadDocument({
+  accessToken,
+  file,
+  companyName,
+  ticker,
+  exchange,
+}: UploadDocumentParams): Promise<DocumentUploadResponse> {
+  const formData = new FormData();
+  formData.set("file", file);
+  formData.set("company_name", companyName);
+  formData.set("ticker", ticker);
+  formData.set("exchange", exchange);
+
+  const response = await fetch(`${env.apiBaseUrl}/documents/upload`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}` },
+    body: formData,
+  });
+
+  if (!response.ok) {
+    throw new AnalysisApiError(response.status, await parseErrorDetail(response));
+  }
+  return (await response.json()) as DocumentUploadResponse;
 }
