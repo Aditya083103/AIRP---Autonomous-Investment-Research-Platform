@@ -30,6 +30,13 @@ export default defineConfig({
         target: "http://localhost:8000",
         changeOrigin: true,
       },
+      // T-056: backend/routers/auth.py mounts at "/auth", not under
+      // "/api/v1" (see backend/main.py's router registration), so it
+      // needs its own proxy entry rather than falling under "/api" above.
+      "/auth": {
+        target: "http://localhost:8000",
+        changeOrigin: true,
+      },
       "/ws": {
         target: "ws://localhost:8000",
         ws: true,
