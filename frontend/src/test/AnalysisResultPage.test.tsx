@@ -126,7 +126,9 @@ describe("AnalysisResultPage", () => {
     });
 
     expect(await screen.findByText("This analysis did not complete.")).toBeInTheDocument();
-    expect(screen.getByText("yFinance rate limit exceeded.")).toBeInTheDocument();
+    // The failure message correctly appears twice: once on the failed
+    // agent's own card, once in the summary panel below the board.
+    expect(screen.getAllByText("yFinance rate limit exceeded.")).toHaveLength(2);
   });
 
   it("does not show a completion summary while the job is still running", () => {
