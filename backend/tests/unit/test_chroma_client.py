@@ -64,7 +64,7 @@ import os
 os.environ.setdefault("ENVIRONMENT", "test")
 
 from typing import Any  # noqa: E402
-from unittest.mock import MagicMock, patch  # noqa: E402
+from unittest.mock import ANY, MagicMock, patch  # noqa: E402
 
 import chromadb  # noqa: E402
 from chromadb.config import Settings as _ChromaSettings  # noqa: E402
@@ -349,7 +349,11 @@ class TestGetChromaClient:
             with patch("backend.db.chroma_client.chromadb.HttpClient") as mock_http:
                 mock_http.return_value = MagicMock()
                 get_chroma_client()
-        mock_http.assert_called_once_with(host="chromadb", port=8001)
+        # settings=ANY: get_chroma_client() always passes a Settings
+        # object with anonymized_telemetry=False (see that function's
+        # docstring for why) -- this test only pins the host/port
+        # routing, not the exact Settings instance.
+        mock_http.assert_called_once_with(host="chromadb", port=8001, settings=ANY)
 
     def test_development_env_calls_persistent_client(self) -> None:
         mock_settings = MagicMock()
@@ -360,7 +364,7 @@ class TestGetChromaClient:
             ) as mock_pers:
                 mock_pers.return_value = MagicMock()
                 get_chroma_client(persist_dir="/tmp/test_chroma")
-        mock_pers.assert_called_once_with(path="/tmp/test_chroma")
+        mock_pers.assert_called_once_with(path="/tmp/test_chroma", settings=ANY)
 
 
 # ---------------------------------------------------------------------------

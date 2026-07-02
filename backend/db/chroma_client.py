@@ -48,6 +48,7 @@ import os
 from typing import Any
 
 import chromadb
+from chromadb.config import Settings as ChromaSettings
 from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 
 try:
@@ -145,6 +146,17 @@ def get_chroma_client(
         - ``production``  → ``HttpClient``        (Docker container)
         - ``development`` → ``PersistentClient``  (local disk)
 
+    Every client is constructed with ``anonymized_telemetry=False``.
+    Without it, chromadb's bundled posthog telemetry client silently
+    fails on every single call with "Failed to send telemetry event
+    ...: capture() takes 1 positional argument but 3 were given" --
+    a known chromadb/posthog version-compatibility issue (chromadb's
+    pinned posthog client calls ``capture()`` with a signature newer
+    posthog releases changed). It's harmless -- telemetry failing
+    doesn't affect ingestion or search -- but it is pure, constant log
+    noise on every ChromaDB call, and there is no reason a personal
+    project needs Chroma's anonymized usage telemetry running at all.
+
     Args:
         persist_dir: Directory used by ``PersistentClient`` in development.
                      Ignored in test and production environments.
@@ -152,6 +164,8 @@ def get_chroma_client(
     Returns:
         A ``chromadb.ClientAPI`` instance.
     """
+    client_settings = ChromaSettings(anonymized_telemetry=False)
+
     env = (
         _settings.environment
         if _settings is not None
@@ -160,17 +174,17 @@ def get_chroma_client(
 
     if env == "test":
         logger.debug("ChromaDB → EphemeralClient (test environment)")
-        return chromadb.EphemeralClient()
+        return chromadb.EphemeralClient(settings=client_settings)
 
     if env == "production":
         host = _settings.chroma_host if _settings is not None else "localhost"
         port = _settings.chroma_port if _settings is not None else 8001
         logger.info("ChromaDB → HttpClient (%s:%d)", host, port)
-        return chromadb.HttpClient(host=host, port=port)
+        return chromadb.HttpClient(host=host, port=port, settings=client_settings)
 
     # development (default)
     logger.info("ChromaDB → PersistentClient (%s)", persist_dir)
-    return chromadb.PersistentClient(path=persist_dir)
+    return chromadb.PersistentClient(path=persist_dir, settings=client_settings)
 
 
 # ── ChromaClient ───────────────────────────────────────────────────────────────
