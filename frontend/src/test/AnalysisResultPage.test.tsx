@@ -5,6 +5,7 @@
 // WebSocket global is needed to drive it deterministically.
 
 import { act, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -155,5 +156,49 @@ describe("AnalysisResultPage", () => {
     });
 
     await waitFor(() => expect(screen.getByText("Revenue grew 8% YoY.")).toBeInTheDocument());
+  });
+
+  it("shows the agent progress board by default", () => {
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    renderResultPage();
+
+    expect(screen.getByRole("tab", { name: "Agent progress" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(screen.queryByTestId("debate-viewer")).not.toBeInTheDocument();
+  });
+
+  it("switches to the debate transcript when its tab is clicked", async () => {
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    renderResultPage();
+
+    await userEvent.click(screen.getByRole("tab", { name: "Debate transcript" }));
+
+    expect(screen.getByTestId("debate-viewer")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Debate transcript" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+  });
+
+  it("carries stream events over into the debate transcript tab", async () => {
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    renderResultPage();
+
+    act(() => {
+      lastSocket().emitMessage({
+        job_id: "job-1",
+        agent: "fundamental_analyst",
+        status: "completed",
+        output_preview: "Revenue grew 8% YoY.",
+        progress_percent: 20,
+        is_final: false,
+      });
+    });
+
+    await userEvent.click(screen.getByRole("tab", { name: "Debate transcript" }));
+
+    expect(await screen.findByText("Revenue grew 8% YoY.")).toBeInTheDocument();
   });
 });
