@@ -73,13 +73,34 @@ module = [
     "tenacity.*",
     "redis.*",
     "groq.*",
-    "transformers.*",
     "torch.*",
     "sklearn.*",
     "pdfminer.*",
     "PyPDF2.*",
 ]
 ignore_missing_imports = true
+disable_error_code = ["import-untyped"]
+
+# transformers (pulled in transitively by sentence-transformers, T-017)
+# triggers a real mypy 1.10.0 INTERNAL ERROR when it tries to parse
+# transformers/models/sam_hq/processing_samhq.py -- a known mypy/library
+# incompatibility, unrelated to any AIRP code. follow_imports = "skip"
+# stops mypy opening the module's source at all (treats it as Any),
+# which ignore_missing_imports alone does not do -- that flag only
+# silences the "missing stub" warning, it doesn't prevent mypy from
+# still trying to read and analyse the installed source when present.
+#
+# IMPORTANT: "transformers.*" must appear in exactly ONE override
+# section in this file. Two separate [[tool.mypy.overrides]] blocks
+# matching the identical module glob is ambiguous -- mypy does not
+# reliably merge them, and follow_imports = "skip" silently failed to
+# apply the one time this was tried with "transformers.*" duplicated
+# across two sections. If you need to add more transformers-specific
+# settings later, add them to *this* block, not a new one.
+[[tool.mypy.overrides]]
+module = ["transformers.*"]
+ignore_missing_imports = true
+follow_imports = "skip"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

@@ -390,7 +390,7 @@ class TestBuildCashFlow:
 class TestFetchFinancialsFromYfinance:
     def test_returns_financial_statements_model(self) -> None:
         mock = _make_ticker_mock()
-        with patch("backend.tools.financials.yf.Ticker", return_value=mock):
+        with patch("backend.tools.market_data.yf.Ticker", return_value=mock):
             result = _fetch_financials_from_yfinance("TCS.NS")
         assert isinstance(result, FinancialStatements)
         assert result.ticker == "TCS.NS"
@@ -398,25 +398,25 @@ class TestFetchFinancialsFromYfinance:
 
     def test_ticker_uppercased(self) -> None:
         mock = _make_ticker_mock()
-        with patch("backend.tools.financials.yf.Ticker", return_value=mock):
+        with patch("backend.tools.market_data.yf.Ticker", return_value=mock):
             result = _fetch_financials_from_yfinance("tcs.ns")
         assert result.ticker == "TCS.NS"
 
     def test_years_available_is_4_for_full_data(self) -> None:
         mock = _make_ticker_mock()
-        with patch("backend.tools.financials.yf.Ticker", return_value=mock):
+        with patch("backend.tools.market_data.yf.Ticker", return_value=mock):
             result = _fetch_financials_from_yfinance("TCS.NS")
         assert result.years_available == 4
 
     def test_currency_output_always_inr(self) -> None:
         mock = _make_ticker_mock(currency="USD")
-        with patch("backend.tools.financials.yf.Ticker", return_value=mock):
+        with patch("backend.tools.market_data.yf.Ticker", return_value=mock):
             result = _fetch_financials_from_yfinance("AAPL")
         assert result.currency_output == "INR"
 
     def test_raises_financials_not_found_when_all_empty(self) -> None:
         mock = _make_empty_ticker_mock()
-        with patch("backend.tools.financials.yf.Ticker", return_value=mock):
+        with patch("backend.tools.market_data.yf.Ticker", return_value=mock):
             with pytest.raises(FinancialsNotFoundError, match="TCS.NS"):
                 _fetch_financials_from_yfinance("TCS.NS")
 
@@ -426,32 +426,32 @@ class TestFetchFinancialsFromYfinance:
             balance_df=_make_balance_df(n_years=2),
             cashflow_df=_make_cashflow_df(n_years=2),
         )
-        with patch("backend.tools.financials.yf.Ticker", return_value=mock):
+        with patch("backend.tools.market_data.yf.Ticker", return_value=mock):
             result = _fetch_financials_from_yfinance("TCS.NS")
         assert result.years_available == 2
         assert any("2 annual period" in w for w in result.data_warnings)
 
     def test_warning_added_when_income_statement_missing(self) -> None:
         mock = _make_ticker_mock(income_df=pd.DataFrame())
-        with patch("backend.tools.financials.yf.Ticker", return_value=mock):
+        with patch("backend.tools.market_data.yf.Ticker", return_value=mock):
             result = _fetch_financials_from_yfinance("TCS.NS")
         assert any("Income statement" in w for w in result.data_warnings)
 
     def test_no_crash_when_balance_sheet_empty(self) -> None:
         mock = _make_ticker_mock(balance_df=pd.DataFrame())
-        with patch("backend.tools.financials.yf.Ticker", return_value=mock):
+        with patch("backend.tools.market_data.yf.Ticker", return_value=mock):
             result = _fetch_financials_from_yfinance("TCS.NS")
         assert result.balance_sheet[0].total_assets_crores is None
 
     def test_company_name_from_info(self) -> None:
         mock = _make_ticker_mock()
-        with patch("backend.tools.financials.yf.Ticker", return_value=mock):
+        with patch("backend.tools.market_data.yf.Ticker", return_value=mock):
             result = _fetch_financials_from_yfinance("TCS.NS")
         assert result.company_name == "Tata Consultancy Services Limited"
 
     def test_all_three_statement_lists_present(self) -> None:
         mock = _make_ticker_mock()
-        with patch("backend.tools.financials.yf.Ticker", return_value=mock):
+        with patch("backend.tools.market_data.yf.Ticker", return_value=mock):
             result = _fetch_financials_from_yfinance("TCS.NS")
         assert len(result.income_statement) == 4
         assert len(result.balance_sheet) == 4
@@ -466,7 +466,7 @@ class TestFetchFinancialsFromYfinance:
 class TestFetchFinancialsTool:
     def test_returns_dict_on_success(self) -> None:
         mock = _make_ticker_mock()
-        with patch("backend.tools.financials.yf.Ticker", return_value=mock):
+        with patch("backend.tools.market_data.yf.Ticker", return_value=mock):
             result = fetch_financials.invoke({"ticker": "TCS.NS"})
         assert isinstance(result, dict)
         assert "error" not in result
@@ -476,7 +476,7 @@ class TestFetchFinancialsTool:
 
     def test_income_statement_has_expected_keys(self) -> None:
         mock = _make_ticker_mock()
-        with patch("backend.tools.financials.yf.Ticker", return_value=mock):
+        with patch("backend.tools.market_data.yf.Ticker", return_value=mock):
             result = fetch_financials.invoke({"ticker": "TCS.NS"})
         first = result["income_statement"][0]
         for key in ("fiscal_year", "revenue_crores", "net_margin_pct", "basic_eps"):
@@ -484,7 +484,7 @@ class TestFetchFinancialsTool:
 
     def test_balance_sheet_has_expected_keys(self) -> None:
         mock = _make_ticker_mock()
-        with patch("backend.tools.financials.yf.Ticker", return_value=mock):
+        with patch("backend.tools.market_data.yf.Ticker", return_value=mock):
             result = fetch_financials.invoke({"ticker": "TCS.NS"})
         first = result["balance_sheet"][0]
         for key in (
@@ -497,7 +497,7 @@ class TestFetchFinancialsTool:
 
     def test_cash_flow_has_expected_keys(self) -> None:
         mock = _make_ticker_mock()
-        with patch("backend.tools.financials.yf.Ticker", return_value=mock):
+        with patch("backend.tools.market_data.yf.Ticker", return_value=mock):
             result = fetch_financials.invoke({"ticker": "TCS.NS"})
         first = result["cash_flow"][0]
         for key in (
@@ -509,7 +509,7 @@ class TestFetchFinancialsTool:
 
     def test_error_dict_on_invalid_ticker(self) -> None:
         mock = _make_empty_ticker_mock()
-        with patch("backend.tools.financials.yf.Ticker", return_value=mock):
+        with patch("backend.tools.market_data.yf.Ticker", return_value=mock):
             result = fetch_financials.invoke({"ticker": "FAKE.NS"})
         assert result["error"] == "financials_not_found"
         assert "FAKE.NS" in result["ticker"]
@@ -518,7 +518,7 @@ class TestFetchFinancialsTool:
         # Raise at the Ticker() constructor level so it bypasses the
         # all_empty guard and hits the bare `except Exception` branch.
         with patch(
-            "backend.tools.financials.yf.Ticker",
+            "backend.tools.market_data.yf.Ticker",
             side_effect=RuntimeError("yfinance internal crash"),
         ):
             result = fetch_financials.invoke({"ticker": "TCS.NS"})
@@ -526,13 +526,13 @@ class TestFetchFinancialsTool:
 
     def test_currency_output_always_inr(self) -> None:
         mock = _make_ticker_mock(currency="USD")
-        with patch("backend.tools.financials.yf.Ticker", return_value=mock):
+        with patch("backend.tools.market_data.yf.Ticker", return_value=mock):
             result = fetch_financials.invoke({"ticker": "AAPL"})
         assert result.get("currency_output") == "INR"
 
     def test_data_warnings_key_present(self) -> None:
         mock = _make_ticker_mock()
-        with patch("backend.tools.financials.yf.Ticker", return_value=mock):
+        with patch("backend.tools.market_data.yf.Ticker", return_value=mock):
             result = fetch_financials.invoke({"ticker": "TCS.NS"})
         assert "data_warnings" in result
         assert isinstance(result["data_warnings"], list)
@@ -546,7 +546,7 @@ class TestFetchFinancialsTool:
 class TestFetchIncomeStatementTool:
     def test_returns_income_statement_only(self) -> None:
         mock = _make_ticker_mock()
-        with patch("backend.tools.financials.yf.Ticker", return_value=mock):
+        with patch("backend.tools.market_data.yf.Ticker", return_value=mock):
             result = fetch_income_statement.invoke({"ticker": "TCS.NS"})
         assert "income_statement" in result
         assert "balance_sheet" not in result
@@ -554,7 +554,7 @@ class TestFetchIncomeStatementTool:
 
     def test_error_on_empty_data(self) -> None:
         mock = _make_empty_ticker_mock()
-        with patch("backend.tools.financials.yf.Ticker", return_value=mock):
+        with patch("backend.tools.market_data.yf.Ticker", return_value=mock):
             result = fetch_income_statement.invoke({"ticker": "FAKE.NS"})
         assert result["error"] == "financials_not_found"
 
@@ -567,7 +567,7 @@ class TestFetchIncomeStatementTool:
 class TestFetchBalanceSheetTool:
     def test_returns_balance_sheet_only(self) -> None:
         mock = _make_ticker_mock()
-        with patch("backend.tools.financials.yf.Ticker", return_value=mock):
+        with patch("backend.tools.market_data.yf.Ticker", return_value=mock):
             result = fetch_balance_sheet.invoke({"ticker": "TCS.NS"})
         assert "balance_sheet" in result
         assert "income_statement" not in result
@@ -575,7 +575,7 @@ class TestFetchBalanceSheetTool:
 
     def test_error_on_empty_data(self) -> None:
         mock = _make_empty_ticker_mock()
-        with patch("backend.tools.financials.yf.Ticker", return_value=mock):
+        with patch("backend.tools.market_data.yf.Ticker", return_value=mock):
             result = fetch_balance_sheet.invoke({"ticker": "FAKE.NS"})
         assert result["error"] == "financials_not_found"
 
@@ -588,7 +588,7 @@ class TestFetchBalanceSheetTool:
 class TestFetchCashFlowTool:
     def test_returns_cash_flow_only(self) -> None:
         mock = _make_ticker_mock()
-        with patch("backend.tools.financials.yf.Ticker", return_value=mock):
+        with patch("backend.tools.market_data.yf.Ticker", return_value=mock):
             result = fetch_cash_flow.invoke({"ticker": "TCS.NS"})
         assert "cash_flow" in result
         assert "income_statement" not in result
@@ -596,7 +596,7 @@ class TestFetchCashFlowTool:
 
     def test_error_on_empty_data(self) -> None:
         mock = _make_empty_ticker_mock()
-        with patch("backend.tools.financials.yf.Ticker", return_value=mock):
+        with patch("backend.tools.market_data.yf.Ticker", return_value=mock):
             result = fetch_cash_flow.invoke({"ticker": "FAKE.NS"})
         assert result["error"] == "financials_not_found"
 

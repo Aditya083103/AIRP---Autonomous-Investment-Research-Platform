@@ -104,6 +104,17 @@ class Settings(BaseSettings):
     chroma_port: int = 8001
     chroma_collection: str = "airp_documents"
     embedding_model: str = "all-MiniLM-L6-v2"
+    chroma_persist_dir: str = Field(
+        default="",
+        description=(
+            "Override for the local-dev ChromaDB PersistentClient directory. "
+            "Empty string means 'use the default outside the repo root' "
+            "(backend.db.chroma_client.CHROMA_PERSIST_DIR, ~/.airp/chroma_data). "
+            "Set this only if you need PersistentClient data somewhere else — "
+            "it must stay outside any directory 'uvicorn --reload' watches, "
+            "or writes to it will trigger reloads mid-analysis."
+        ),
+    )
 
     # ── 7. Authentication ─────────────────────────────────────────────────
     clerk_secret_key: str = Field(

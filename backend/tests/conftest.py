@@ -25,6 +25,7 @@ from typing import Any
 import pytest
 
 from backend.config import Settings
+from backend.tools.market_data import reset_shared_ticker_cache
 
 # ── Environment Guard ─────────────────────────────────────────────────────────
 
@@ -56,6 +57,24 @@ def require_test_environment() -> Generator[None, None, None]:
             '  set "ENVIRONMENT=test"        (windows cmd)'
         )
     yield
+
+
+@pytest.fixture(autouse=True)
+def _reset_shared_ticker_cache() -> Generator[None, None, None]:
+    """
+    Clear the shared yf.Ticker cache (backend.tools.market_data) before
+    and after every test.
+
+    Without this, a test that patches ``backend.tools.market_data.yf.Ticker``
+    with one mock could receive a *different* test's cached instance for
+    the same ticker symbol (e.g. "TCS.NS" is reused across dozens of
+    stock_price/financials/ratios tests), silently exercising the wrong
+    mock. Autouse + function scope keeps every test's yfinance mocking
+    fully isolated regardless of which module it lives in.
+    """
+    reset_shared_ticker_cache()
+    yield
+    reset_shared_ticker_cache()
 
 
 # ── Settings Fixture ──────────────────────────────────────────────────────────

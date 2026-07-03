@@ -45,6 +45,7 @@ from enum import Enum
 import hashlib
 import logging
 import os
+from pathlib import Path
 from typing import Any
 
 import chromadb
@@ -62,7 +63,23 @@ logger = logging.getLogger(__name__)
 
 EMBEDDING_MODEL_DEFAULT = "all-MiniLM-L6-v2"
 EMBEDDING_DIMENSION = 384  # all-MiniLM-L6-v2 output dimension
-CHROMA_PERSIST_DIR = ".chroma_data"  # local dev persistence path
+
+# Local dev persistence path.
+#
+# This MUST live outside the project directory tree. ``uvicorn --reload``
+# (used for local dev — see README) watches every file under the current
+# working directory by default, including a relative "./.chroma_data".
+# Every document upload or analysis writes to this directory (embedding
+# inserts, collection metadata), and each write was previously detected by
+# watchfiles as a source change, triggering a full app reload mid-analysis
+# — which kills any open WebSocket with an abnormal closure (code 1006)
+# and silently drops whatever background task was running. Placing the
+# persistence directory under the user's home directory instead means dev
+# server reloads are only ever triggered by real source edits.
+#
+# Override with settings.chroma_persist_dir (CHROMA_PERSIST_DIR env var)
+# if a different location is needed (e.g. a mounted volume).
+CHROMA_PERSIST_DIR = str(Path.home() / ".airp" / "chroma_data")
 
 # Standard collection names — one per document type
 COLLECTION_NEWS = "airp_news"
@@ -149,7 +166,7 @@ def get_embedding_function(
 
 
 def get_chroma_client(
-    persist_dir: str = CHROMA_PERSIST_DIR,
+    persist_dir: str | None = None,
 ) -> Any:
     """
     Return an environment-appropriate ChromaDB raw client.
@@ -172,11 +189,18 @@ def get_chroma_client(
 
     Args:
         persist_dir: Directory used by ``PersistentClient`` in development.
-                     Ignored in test and production environments.
+                     Ignored in test and production environments. Defaults
+                     to ``settings.chroma_persist_dir`` if set, otherwise
+                     ``CHROMA_PERSIST_DIR`` (``~/.airp/chroma_data``) — an
+                     explicit override always wins over both.
 
     Returns:
         A ``chromadb.ClientAPI`` instance.
     """
+    if persist_dir is None:
+        configured = getattr(_settings, "chroma_persist_dir", "") if _settings else ""
+        persist_dir = configured or CHROMA_PERSIST_DIR
+
     client_settings = ChromaSettings(anonymized_telemetry=False)
 
     env = (

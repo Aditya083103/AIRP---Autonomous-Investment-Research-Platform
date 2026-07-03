@@ -135,6 +135,21 @@ _CLOSE_NOT_FOUND = 4404
 #: between node completions.
 _QUEUE_POLL_INTERVAL_SECONDS = 2.0
 
+#: How many consecutive poll-interval timeouts (i.e. how many seconds,
+#: at _QUEUE_POLL_INTERVAL_SECONDS each) may pass with no real node
+#: event before a lightweight heartbeat is pushed to the client. At the
+#: default 2s poll interval this is 10s -- comfortably under the
+#: ~30-60s idle-connection timeout many home routers, corporate
+#: proxies, and some browsers enforce on a WebSocket carrying no
+#: traffic in either direction. Without this, a slow LLM call (a Groq
+#: free-tier rate limit forcing an agent to wait/retry for 30-40+
+#: seconds is the observed real-world trigger) can leave the socket
+#: completely silent long enough for an intermediary to drop the
+#: connection with an abnormal closure (code 1006) even though the
+#: backend pipeline is still healthy and will complete normally in the
+#: background.
+_HEARTBEAT_AFTER_TICKS = 5
+
 
 # ---------------------------------------------------------------------------
 # Auth -- query-param token (browsers cannot set WS handshake headers)
@@ -323,11 +338,20 @@ async def _forward_live_events(websocket: WebSocket, job_id: uuid.UUID) -> None:
     exception), so a job_id can never accumulate a leaked subscriber
     for the lifetime of the process.
 
+    Also pushes a lightweight heartbeat event (see
+    ``_HEARTBEAT_AFTER_TICKS``) whenever real node-completion events
+    stop arriving for too long -- e.g. an agent stuck retrying against
+    a rate-limited LLM provider -- so the socket is never silent long
+    enough for a router/proxy/browser idle-connection timeout to close
+    it out from under a still-healthy pipeline.
+
     Args:
         websocket: The accepted, already-authenticated connection.
         job_id:    UUID of the analysis job to stream.
     """
     queue = await subscribe(str(job_id))
+    idle_ticks = 0
+    last_progress_percent = 0
     try:
         while True:
             try:
@@ -341,7 +365,28 @@ async def _forward_live_events(websocket: WebSocket, job_id: uuid.UUID) -> None:
                 # while a dead connection's subscriber sits registered.
                 if not await _client_still_connected(websocket):
                     return
+
+                idle_ticks += 1
+                if idle_ticks >= _HEARTBEAT_AFTER_TICKS:
+                    idle_ticks = 0
+                    heartbeat = cast_event(
+                        job_id=str(job_id),
+                        agent="pipeline",
+                        status="running",
+                        output_preview="Still working -- no update yet.",
+                        progress_percent=last_progress_percent,
+                        is_final=False,
+                    )
+                    try:
+                        await websocket.send_json(heartbeat)
+                    except Exception:
+                        # Send failed -- the connection is gone. Nothing
+                        # further to forward.
+                        return
                 continue
+
+            idle_ticks = 0
+            last_progress_percent = event["progress_percent"]
 
             try:
                 await websocket.send_json(event)

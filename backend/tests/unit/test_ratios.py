@@ -395,7 +395,7 @@ class TestFetchRatiosFromSources:
     def test_returns_ratios_model_with_correct_values(self) -> None:
         mock = _make_ratios_ticker_mock(_STOCKS["TCS.NS"])
         with (
-            patch("backend.tools.ratios.yf.Ticker", return_value=mock),
+            patch("backend.tools.market_data.yf.Ticker", return_value=mock),
             patch(
                 "backend.tools.ratios._fetch_alpha_vantage_ratios", return_value=None
             ),
@@ -427,7 +427,7 @@ class TestFetchRatiosFromSources:
             "ev_to_ebitda": 21.5,
         }
         with (
-            patch("backend.tools.ratios.yf.Ticker", return_value=mock),
+            patch("backend.tools.market_data.yf.Ticker", return_value=mock),
             patch("backend.tools.ratios._fetch_alpha_vantage_ratios", return_value=av),
         ):
             result = _fetch_ratios_from_sources("TCS.NS")
@@ -442,7 +442,7 @@ class TestFetchRatiosFromSources:
         empty.balance_sheet = pd.DataFrame()
         empty.financials = pd.DataFrame()
         with (
-            patch("backend.tools.ratios.yf.Ticker", return_value=empty),
+            patch("backend.tools.market_data.yf.Ticker", return_value=empty),
             patch(
                 "backend.tools.ratios._fetch_alpha_vantage_ratios", return_value=None
             ),
@@ -460,7 +460,7 @@ class TestFetchRatiosTool:
     def test_returns_dict_matching_schema(self) -> None:
         mock = _make_ratios_ticker_mock(_STOCKS["INFY.NS"])
         with (
-            patch("backend.tools.ratios.yf.Ticker", return_value=mock),
+            patch("backend.tools.market_data.yf.Ticker", return_value=mock),
             patch(
                 "backend.tools.ratios._fetch_alpha_vantage_ratios", return_value=None
             ),
@@ -494,7 +494,7 @@ class TestFetchRatiosTool:
         empty.balance_sheet = pd.DataFrame()
         empty.financials = pd.DataFrame()
         with (
-            patch("backend.tools.ratios.yf.Ticker", return_value=empty),
+            patch("backend.tools.market_data.yf.Ticker", return_value=empty),
             patch(
                 "backend.tools.ratios._fetch_alpha_vantage_ratios", return_value=None
             ),
@@ -506,7 +506,7 @@ class TestFetchRatiosTool:
     def test_summary_returns_six_ratios_only(self) -> None:
         mock = _make_ratios_ticker_mock(_STOCKS["RELIANCE.NS"])
         with (
-            patch("backend.tools.ratios.yf.Ticker", return_value=mock),
+            patch("backend.tools.market_data.yf.Ticker", return_value=mock),
             patch(
                 "backend.tools.ratios._fetch_alpha_vantage_ratios", return_value=None
             ),

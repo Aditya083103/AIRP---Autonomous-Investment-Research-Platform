@@ -35,7 +35,8 @@ from typing import Any
 
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field, field_validator
-import yfinance as yf
+
+from backend.tools.market_data import get_shared_ticker
 
 logger = logging.getLogger(__name__)
 
@@ -496,7 +497,7 @@ def _fetch_financials_from_yfinance(ticker: str) -> FinancialStatements:
     ticker = ticker.strip().upper()
     logger.info("Fetching yFinance financials: ticker=%s", ticker)
 
-    yf_ticker = yf.Ticker(ticker)
+    yf_ticker = get_shared_ticker(ticker)
 
     # Fetch all three statements (annual=True is the default)
     income_df = yf_ticker.financials  # income statement

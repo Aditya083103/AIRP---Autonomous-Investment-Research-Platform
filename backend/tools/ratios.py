@@ -62,7 +62,6 @@ from tenacity import (
     stop_after_attempt,
     wait_exponential,
 )
-import yfinance as yf
 
 try:
     from backend.config import settings as _settings
@@ -74,6 +73,7 @@ except Exception:
 settings = _settings
 
 from backend.tools.cache import RATIOS_TTL, cached  # noqa: E402
+from backend.tools.market_data import get_shared_ticker  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -558,7 +558,7 @@ def _fetch_ratios_from_sources(ticker: str) -> RatiosModel:
     ticker = ticker.strip().upper()
     logger.info("Fetching ratios: ticker=%s", ticker)
 
-    yf_ticker = yf.Ticker(ticker)
+    yf_ticker = get_shared_ticker(ticker)
 
     info: dict[str, Any] = {}
     try:

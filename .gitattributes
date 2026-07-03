@@ -1,0 +1,33 @@
+# .gitattributes
+#
+# Forces LF line endings for all text files regardless of the checkout
+# platform's core.autocrlf setting.
+#
+# Root cause this fixes: this repo had no .gitattributes at all. On
+# Windows, Git commonly defaults to (or a contributor's global config has)
+# core.autocrlf=true, which rewrites LF -> CRLF on checkout for every
+# text file. frontend/.prettierrc.json sets "endOfLine": "lf", so any file
+# re-saved by a Windows editor after that CRLF checkout gets flagged by
+# `prettier --check` in CI ("Code style issues found ... run --write to
+# fix") even when nothing meaningful about the file actually changed --
+# only its line endings did. Forcing eol=lf here makes Git itself
+# normalise line endings on checkout/checkin, so this class of failure
+# cannot recur regardless of any individual contributor's local Git config.
+#
+# After adding this file, existing working-tree files must be
+# renormalised once (see the T-061-hardening workflow doc's step 3.3):
+#   git add --renormalize .
+
+* text=auto eol=lf
+
+# Explicit binary types -- never touched by line-ending normalisation.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.eot binary

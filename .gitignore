@@ -93,6 +93,9 @@ docker-compose.override.yml  # local overrides — never shared
 chroma_db/
 chromadb/
 chroma/
+.chroma_data/  # pre-hardening default path -- now ~/.airp/chroma_data by
+               # default (backend.db.chroma_client.CHROMA_PERSIST_DIR); kept
+               # here too in case an old local checkout still has one
 
 
 # ── Database ──────────────────────────────────────────────────────────────────
@@ -119,5 +122,3 @@ generated/
 .Spotlight-V100
 .Trashes
 ehthumbs.db
-
-.chroma_data/
