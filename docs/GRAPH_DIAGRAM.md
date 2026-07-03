@@ -4,7 +4,7 @@
 > on every `build_graph()` call.  **Do not edit manually** -- your
 > changes will be overwritten on the next graph compile.
 >
-> Generated: 2026-07-03 06:21:36 UTC
+> Generated: 2026-07-03 11:58:41 UTC
 
 ## Overview
 

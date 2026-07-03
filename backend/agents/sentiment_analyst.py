@@ -70,7 +70,13 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from backend.agents.llm_factory import get_llm
 from backend.agents.output_models import SentimentAnalysis
 from backend.agents.tracing import traced_agent
-from backend.db.chroma_client import COLLECTION_NEWS, semantic_search
+from backend.config import settings
+from backend.db.chroma_client import (
+    COLLECTION_NEWS,
+    build_chroma_client,
+    ingest_news_articles,
+    semantic_search,
+)
 from backend.tools.news import fetch_news
 
 logger = logging.getLogger(__name__)
@@ -493,6 +499,31 @@ def _run_sentiment_analysis_core(
         )
 
     articles: list[dict[str, Any]] = news_result.get("articles", [])
+
+    # --- Step 1.5: Ingest fetched articles into ChromaDB (non-fatal)
+    #
+    # Without this, the airp_news collection is permanently empty --
+    # `fetch_news` above only returns articles in-memory for this run's
+    # own scoring; nothing was ever writing them into ChromaDB, so the
+    # semantic_search() call in Step 5 below always ran against an empty
+    # collection ("query_documents: collection 'airp_news' is empty."
+    # logged on every single analysis, regardless of ticker). Ingesting
+    # here means each analysis both queries *and* grows the corpus, so
+    # semantic_search has something to find on this and future runs.
+    if articles and settings.environment != "test":
+        try:
+            ingest_news_articles(
+                articles=articles,
+                company=company_name,
+                ticker=ticker,
+                chroma=build_chroma_client(),
+            )
+        except Exception as exc:
+            logger.warning(
+                "ingest_news_articles failed for %s (non-fatal): %s",
+                company_name,
+                exc,
+            )
 
     # --- Step 2: Per-article scoring (pure Python, deterministic)
     article_scores: list[float] = []

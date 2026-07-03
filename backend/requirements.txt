@@ -57,6 +57,18 @@ langgraph==0.2.28
 # Switch to anthropic by setting LLM_PROVIDER=anthropic in .env
 langchain-groq==0.2.0
 
+# The underlying Groq Python SDK -- langchain-groq==0.2.0 depends on this
+# but does not pin it, so a fresh "pip install -r requirements.txt" run
+# next month could silently resolve a newer groq SDK with different
+# default timeout/retry behaviour than the one this project was actually
+# built and tested against. Pin it explicitly, like every other dependency
+# in this file. ACTION REQUIRED: run `pip show groq` in your working venv
+# (the one this project already runs against) and replace X.Y.Z below with
+# the version it reports, so the pin reflects the version already proven
+# to work here rather than a version guessed without testing.
+groq==0.37.1
+
+
 # LangChain Anthropic integration — Claude API backbone for final demo (Phase 8)
 # anthropic SDK version is NOT pinned separately — langchain-anthropic pulls
 # in a compatible version automatically. Pinning both caused a conflict.

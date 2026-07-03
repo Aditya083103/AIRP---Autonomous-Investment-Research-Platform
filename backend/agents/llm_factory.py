@@ -41,6 +41,21 @@ def get_llm() -> Any:
     # configure_tracing() is idempotent -- safe to call on every get_llm().
     configure_tracing()
 
+    # timeout / max_retries are set explicitly on both clients below.
+    # Without them, langchain_groq/langchain_anthropic fall back to the
+    # underlying SDK's own defaults, which are NOT guaranteed to be
+    # bounded -- observed in practice as a node hanging with zero log
+    # output (no timeout warning, no traceback) well past
+    # node_profiler.NODE_TIMEOUT_S (30s), because that soft-timeout can
+    # only detect an overrun *after* the blocking call returns on its
+    # own (see node_profiler.py's _ThreadTimeout docstring). Capping the
+    # HTTP-level timeout here at 25s -- under NODE_TIMEOUT_S -- means the
+    # call itself raises before the node-level timeout would even need
+    # to fire, on every platform, not just POSIX (SIGALRM). max_retries=1
+    # additionally prevents the SDK's own internal retry/backoff on 429s
+    # from silently multiplying that 25s into 60-90+ seconds across
+    # several attempts before the exception ever surfaces to AIRP's own
+    # try/except graceful-degradation handling in each agent.
     if settings.llm_provider == "groq":
         from langchain_groq import ChatGroq
 
@@ -48,6 +63,8 @@ def get_llm() -> Any:
             api_key=settings.groq_api_key,
             model_name=settings.groq_model,
             temperature=0,
+            timeout=25.0,
+            max_retries=1,
         )
     else:
         from langchain_anthropic import ChatAnthropic
@@ -57,4 +74,6 @@ def get_llm() -> Any:
             model=settings.anthropic_model,
             max_tokens=settings.anthropic_max_tokens,
             temperature=0,
+            timeout=25.0,
+            max_retries=1,
         )
