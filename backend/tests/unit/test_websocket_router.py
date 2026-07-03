@@ -48,6 +48,7 @@ ENVIRONMENT must be set to 'test' before any backend import.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Generator
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -62,6 +63,7 @@ from backend.config import Settings
 from backend.dependencies.common import get_settings_dependency
 from backend.main import create_app
 from backend.models.orm import User
+from backend.routers.websocket import _forward_live_events
 from backend.services.analysis import AnalysisStatusResult
 from backend.services.auth import create_access_token
 from backend.services.ws_broadcaster import (
@@ -449,3 +451,90 @@ class TestLiveForwarding:
                 received = ws.receive_json()
 
         assert received["agent"] == "pdf_export"
+
+
+# ---------------------------------------------------------------------------
+# Heartbeat during long idle gaps (PERF-001 follow-up: prevents a router/
+# proxy/browser idle-connection timeout from closing a still-healthy
+# stream with an abnormal closure, code 1006, while an agent is stuck
+# retrying against a rate-limited LLM provider).
+# ---------------------------------------------------------------------------
+
+
+class _FakeStreamWebSocket:
+    """
+    Minimal async double for the one WebSocket surface
+    ``_forward_live_events`` touches: ``send_json`` and, via
+    ``_client_still_connected``, ``receive``.
+
+    ``receive`` never resolves within ``_client_still_connected``'s
+    0.01s probe window until ``disconnect_after`` calls have been made,
+    at which point it raises WebSocketDisconnect -- simulating "still
+    connected" for a controlled number of idle ticks, then a clean
+    client-initiated disconnect so the test's while-loop terminates.
+    """
+
+    def __init__(self, disconnect_after: int) -> None:
+        self.sent: list[dict[str, Any]] = []
+        self.closed_with_code: int | None = None
+        self._receive_calls = 0
+        self._disconnect_after = disconnect_after
+
+    async def send_json(self, data: dict[str, Any]) -> None:
+        self.sent.append(data)
+
+    async def close(self, code: int = 1000) -> None:
+        self.closed_with_code = code
+
+    async def receive(self) -> dict[str, Any]:
+        self._receive_calls += 1
+        if self._receive_calls > self._disconnect_after:
+            raise WebSocketDisconnect()
+        await asyncio.sleep(1)  # never resolves within the 0.01s probe
+        return {}  # pragma: no cover -- unreachable, sleep always wins
+
+
+class TestHeartbeat:
+    async def test_heartbeat_sent_after_idle_ticks_with_no_events(self) -> None:
+        job_id = uuid.uuid4()
+        fake_ws = _FakeStreamWebSocket(disconnect_after=3)
+
+        with (
+            patch("backend.routers.websocket._QUEUE_POLL_INTERVAL_SECONDS", 0.01),
+            patch("backend.routers.websocket._HEARTBEAT_AFTER_TICKS", 2),
+        ):
+            await _forward_live_events(fake_ws, job_id)  # type: ignore[arg-type]
+
+        heartbeats = [e for e in fake_ws.sent if e["agent"] == "pipeline"]
+        assert heartbeats, "expected at least one heartbeat event"
+        assert all(h["is_final"] is False for h in heartbeats)
+        assert all(h["job_id"] == str(job_id) for h in heartbeats)
+
+    async def test_no_heartbeat_when_real_events_keep_arriving(self) -> None:
+        job_id = uuid.uuid4()
+        fake_ws = _FakeStreamWebSocket(disconnect_after=100)
+
+        async def _publish_soon() -> None:
+            await asyncio.sleep(0.02)
+            final = cast_event(
+                job_id=str(job_id),
+                agent="pdf_export",
+                status="completed",
+                output_preview="PDF exported",
+                progress_percent=100,
+                is_final=True,
+            )
+            publish_event(str(job_id), final)
+
+        with (
+            patch("backend.routers.websocket._QUEUE_POLL_INTERVAL_SECONDS", 0.01),
+            patch("backend.routers.websocket._HEARTBEAT_AFTER_TICKS", 1000),
+        ):
+            await asyncio.gather(
+                _forward_live_events(fake_ws, job_id),  # type: ignore[arg-type]
+                _publish_soon(),
+            )
+
+        assert len(fake_ws.sent) == 1
+        assert fake_ws.sent[0]["agent"] == "pdf_export"
+        assert fake_ws.closed_with_code == 1000

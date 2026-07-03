@@ -28,7 +28,7 @@ os.environ.setdefault("ENVIRONMENT", "test")
 
 from datetime import date as Date  # noqa: E402
 from datetime import datetime  # noqa: E402
-from typing import Any  # noqa: E402
+from typing import Any, cast  # noqa: E402
 from unittest.mock import MagicMock, patch  # noqa: E402
 
 import pandas as pd  # noqa: E402
@@ -165,7 +165,7 @@ class TestBuildStats:
         hist = _make_hist_df(260)
         records: list[OHLCVRecord] = [
             OHLCVRecord(
-                date=idx.date(),
+                date=cast(pd.Timestamp, idx).date(),
                 open=float(row["Open"]),
                 high=float(row["High"]),
                 low=float(row["Low"]),
@@ -184,7 +184,7 @@ class TestBuildStats:
         hist = _make_hist_df(30)
         records = [
             OHLCVRecord(
-                date=idx.date(),
+                date=cast(pd.Timestamp, idx).date(),
                 open=float(row["Open"]),
                 high=float(row["High"]),
                 low=float(row["Low"]),
@@ -208,7 +208,7 @@ class TestBuildStats:
 class TestFetchFromYfinance:
     def test_returns_stock_price_model(self, mock_yf_ticker_valid: MagicMock) -> None:
         with patch(
-            "backend.tools.stock_price.yf.Ticker", return_value=mock_yf_ticker_valid
+            "backend.tools.market_data.yf.Ticker", return_value=mock_yf_ticker_valid
         ):
             result = _fetch_from_yfinance("TCS.NS", "1y")
 
@@ -221,14 +221,14 @@ class TestFetchFromYfinance:
 
     def test_company_name_from_info(self, mock_yf_ticker_valid: MagicMock) -> None:
         with patch(
-            "backend.tools.stock_price.yf.Ticker", return_value=mock_yf_ticker_valid
+            "backend.tools.market_data.yf.Ticker", return_value=mock_yf_ticker_valid
         ):
             result = _fetch_from_yfinance("TCS.NS", "1y")
         assert result.company_name == "Tata Consultancy Services Limited"
 
     def test_ticker_uppercased(self, mock_yf_ticker_valid: MagicMock) -> None:
         with patch(
-            "backend.tools.stock_price.yf.Ticker", return_value=mock_yf_ticker_valid
+            "backend.tools.market_data.yf.Ticker", return_value=mock_yf_ticker_valid
         ):
             result = _fetch_from_yfinance("tcs.ns", "1y")
         assert result.ticker == "TCS.NS"
@@ -237,7 +237,7 @@ class TestFetchFromYfinance:
         self, mock_yf_ticker_empty: MagicMock
     ) -> None:
         with patch(
-            "backend.tools.stock_price.yf.Ticker", return_value=mock_yf_ticker_empty
+            "backend.tools.market_data.yf.Ticker", return_value=mock_yf_ticker_empty
         ):
             with pytest.raises(TickerNotFoundError, match="INVALID.NS"):
                 _fetch_from_yfinance("INVALID.NS", "1y")
@@ -246,7 +246,7 @@ class TestFetchFromYfinance:
         self, mock_yf_ticker_valid: MagicMock
     ) -> None:
         with patch(
-            "backend.tools.stock_price.yf.Ticker", return_value=mock_yf_ticker_valid
+            "backend.tools.market_data.yf.Ticker", return_value=mock_yf_ticker_valid
         ):
             with pytest.raises(ValueError, match="Invalid period"):
                 _fetch_from_yfinance("TCS.NS", "10y")
@@ -255,7 +255,7 @@ class TestFetchFromYfinance:
         self, mock_yf_ticker_valid: MagicMock
     ) -> None:
         with patch(
-            "backend.tools.stock_price.yf.Ticker", return_value=mock_yf_ticker_valid
+            "backend.tools.market_data.yf.Ticker", return_value=mock_yf_ticker_valid
         ):
             result = _fetch_from_yfinance("TCS.NS", "1y")
         assert result.exchange == "NSE"
@@ -265,7 +265,7 @@ class TestFetchFromYfinance:
         self, mock_yf_ticker_valid: MagicMock
     ) -> None:
         with patch(
-            "backend.tools.stock_price.yf.Ticker", return_value=mock_yf_ticker_valid
+            "backend.tools.market_data.yf.Ticker", return_value=mock_yf_ticker_valid
         ):
             result = _fetch_from_yfinance("TCS.NS", "1y")
         first = result.ohlcv[0]
@@ -279,14 +279,14 @@ class TestFetchFromYfinance:
         mock.history.return_value = _make_hist_df(260)
         mock.info = {}
 
-        with patch("backend.tools.stock_price.yf.Ticker", return_value=mock):
+        with patch("backend.tools.market_data.yf.Ticker", return_value=mock):
             result = _fetch_from_yfinance("RELIANCE.NS", "1y")
         assert result.company_name == "RELIANCE.NS"
 
     def test_all_periods_accepted(self, mock_yf_ticker_valid: MagicMock) -> None:
         for period in ("1y", "3y", "5y"):
             with patch(
-                "backend.tools.stock_price.yf.Ticker", return_value=mock_yf_ticker_valid
+                "backend.tools.market_data.yf.Ticker", return_value=mock_yf_ticker_valid
             ):
                 result = _fetch_from_yfinance("TCS.NS", period)
             assert result.period == period
@@ -302,7 +302,7 @@ class TestFetchStockPriceTool:
         self, mock_yf_ticker_valid: MagicMock
     ) -> None:
         with patch(
-            "backend.tools.stock_price.yf.Ticker", return_value=mock_yf_ticker_valid
+            "backend.tools.market_data.yf.Ticker", return_value=mock_yf_ticker_valid
         ):
             result = fetch_stock_price.invoke({"ticker": "TCS.NS", "period": "1y"})
 
@@ -314,7 +314,7 @@ class TestFetchStockPriceTool:
 
     def test_stats_keys_present(self, mock_yf_ticker_valid: MagicMock) -> None:
         with patch(
-            "backend.tools.stock_price.yf.Ticker", return_value=mock_yf_ticker_valid
+            "backend.tools.market_data.yf.Ticker", return_value=mock_yf_ticker_valid
         ):
             result = fetch_stock_price.invoke({"ticker": "TCS.NS", "period": "1y"})
 
@@ -338,7 +338,7 @@ class TestFetchStockPriceTool:
         self, mock_yf_ticker_empty: MagicMock
     ) -> None:
         with patch(
-            "backend.tools.stock_price.yf.Ticker", return_value=mock_yf_ticker_empty
+            "backend.tools.market_data.yf.Ticker", return_value=mock_yf_ticker_empty
         ):
             result = fetch_stock_price.invoke({"ticker": "FAKE.NS", "period": "1y"})
 
@@ -350,7 +350,7 @@ class TestFetchStockPriceTool:
         self, mock_yf_ticker_valid: MagicMock
     ) -> None:
         with patch(
-            "backend.tools.stock_price.yf.Ticker", return_value=mock_yf_ticker_valid
+            "backend.tools.market_data.yf.Ticker", return_value=mock_yf_ticker_valid
         ):
             result = fetch_stock_price.invoke({"ticker": "TCS.NS", "period": "10y"})
 
@@ -358,21 +358,21 @@ class TestFetchStockPriceTool:
 
     def test_tool_default_period_is_1y(self, mock_yf_ticker_valid: MagicMock) -> None:
         with patch(
-            "backend.tools.stock_price.yf.Ticker", return_value=mock_yf_ticker_valid
+            "backend.tools.market_data.yf.Ticker", return_value=mock_yf_ticker_valid
         ):
             result = fetch_stock_price.invoke({"ticker": "TCS.NS"})
         assert result.get("period") == "1y"
 
     def test_ohlcv_list_is_not_empty(self, mock_yf_ticker_valid: MagicMock) -> None:
         with patch(
-            "backend.tools.stock_price.yf.Ticker", return_value=mock_yf_ticker_valid
+            "backend.tools.market_data.yf.Ticker", return_value=mock_yf_ticker_valid
         ):
             result = fetch_stock_price.invoke({"ticker": "INFY.NS", "period": "1y"})
         assert len(result["ohlcv"]) > 0
 
     def test_ohlcv_record_structure(self, mock_yf_ticker_valid: MagicMock) -> None:
         with patch(
-            "backend.tools.stock_price.yf.Ticker", return_value=mock_yf_ticker_valid
+            "backend.tools.market_data.yf.Ticker", return_value=mock_yf_ticker_valid
         ):
             result = fetch_stock_price.invoke({"ticker": "TCS.NS", "period": "1y"})
         first_candle = result["ohlcv"][0]
@@ -382,7 +382,7 @@ class TestFetchStockPriceTool:
     def test_unexpected_exception_returns_error_dict(self) -> None:
         mock = MagicMock()
         mock.history.side_effect = RuntimeError("yfinance internal error")
-        with patch("backend.tools.stock_price.yf.Ticker", return_value=mock):
+        with patch("backend.tools.market_data.yf.Ticker", return_value=mock):
             result = fetch_stock_price.invoke({"ticker": "TCS.NS", "period": "1y"})
         assert result["error"] == "unexpected_error"
         assert "TCS.NS" in result["ticker"]
@@ -396,7 +396,7 @@ class TestFetchStockPriceTool:
 class TestFetchOhlcvTool:
     def test_returns_only_candle_series(self, mock_yf_ticker_valid: MagicMock) -> None:
         with patch(
-            "backend.tools.stock_price.yf.Ticker", return_value=mock_yf_ticker_valid
+            "backend.tools.market_data.yf.Ticker", return_value=mock_yf_ticker_valid
         ):
             result = fetch_ohlcv.invoke({"ticker": "TCS.NS", "period": "1y"})
 
@@ -408,7 +408,7 @@ class TestFetchOhlcvTool:
 
     def test_error_on_empty_ticker(self, mock_yf_ticker_empty: MagicMock) -> None:
         with patch(
-            "backend.tools.stock_price.yf.Ticker", return_value=mock_yf_ticker_empty
+            "backend.tools.market_data.yf.Ticker", return_value=mock_yf_ticker_empty
         ):
             result = fetch_ohlcv.invoke({"ticker": "XXXX.NS", "period": "1y"})
         assert result["error"] == "ticker_not_found"
@@ -417,7 +417,7 @@ class TestFetchOhlcvTool:
         self, mock_yf_ticker_valid: MagicMock
     ) -> None:
         with patch(
-            "backend.tools.stock_price.yf.Ticker", return_value=mock_yf_ticker_valid
+            "backend.tools.market_data.yf.Ticker", return_value=mock_yf_ticker_valid
         ):
             result = fetch_ohlcv.invoke({"ticker": "TCS.NS", "period": "1y"})
         assert result["data_points"] == len(result["ohlcv"])

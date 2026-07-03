@@ -19,7 +19,7 @@ What this module does NOT do:
 """
 
 from datetime import datetime, timedelta, timezone
-from typing import Any, cast
+from typing import Any
 import uuid
 
 from jose import JWTError, jwt
@@ -61,7 +61,7 @@ def hash_password(plain_password: str) -> str:
     validation belongs to the Pydantic request schema
     (UserRegisterRequest), not here.
     """
-    return cast(str, _pwd_context.hash(plain_password))
+    return _pwd_context.hash(plain_password)
 
 
 def verify_password(plain_password: str, password_hash: str) -> bool:

@@ -27,9 +27,9 @@ from typing import Any
 
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field, field_validator
-import yfinance as yf
 
 from backend.tools.cache import STOCK_TTL, cached
+from backend.tools.market_data import get_shared_ticker
 
 logger = logging.getLogger(__name__)
 
@@ -220,7 +220,7 @@ def _fetch_stock_data(ticker: str, period: str) -> dict[str, Any]:
 
     logger.info("Fetching yFinance data: ticker=%s period=%s", ticker, period)
 
-    yf_ticker = yf.Ticker(ticker)
+    yf_ticker = get_shared_ticker(ticker)
 
     # Download historical OHLCV
     hist = yf_ticker.history(period=PERIOD_MAP[period], auto_adjust=True)
