@@ -1,13 +1,16 @@
 // frontend/src/test/AnalysisResultPage.test.tsx
-// Tests for AnalysisResultPage (T-059, extended T-060/T-061). Same
-// FakeWebSocket approach as useAnalysisStream.test.ts -- this page
-// calls the real hook (unlike AgentProgressBoard, which takes events
-// as plain props), so a fake WebSocket global is needed to drive it
-// deterministically. T-061 adds a QueryClientProvider wrapper (the
-// page now also calls useAnalysisResult, a React Query hook, once the
-// stream reports completion) and mocks global.fetch for the
-// GET /analysis/{job_id}/result call the same way DashboardPage.test.tsx
-// mocks GET /analysis/history.
+// Tests for AnalysisResultPage (T-059, extended T-060/T-061/T-062).
+// Same FakeWebSocket approach as useAnalysisStream.test.ts -- this
+// page calls the real hook (unlike AgentProgressBoard, which takes
+// events as plain props), so a fake WebSocket global is needed to
+// drive it deterministically. T-061 added a QueryClientProvider
+// wrapper (the page calls useAnalysisResult, a React Query hook, once
+// the stream reports completion) and mocked global.fetch for the
+// GET /analysis/{job_id}/result call. T-062 adds a second, parallel
+// query (useAnalysisCharts) on the same completion gate -- mockFetch
+// below routes by URL substring so /result and /charts each resolve
+// their own response shape instead of one test's single mock
+// accidentally serving the wrong body to the other endpoint.
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, waitFor } from "@testing-library/react";
@@ -79,6 +82,40 @@ const RESULT_RESPONSE = {
   summary: "Infosys: BUY with conviction 8/10.",
 };
 
+const CHART_DATA_RESPONSE = {
+  job_id: "job-1",
+  ticker: "INFY.NS",
+  company_name: "Infosys",
+  price_currency: "INR",
+  price_history: [{ date: "2026-06-18", close: 1780.5, volume: 1_000_000 }],
+  financials: [{ fiscal_year: "FY 2024", revenue_crores: 153_670.0, net_income_crores: 26_233.0 }],
+  valuation: {
+    pe_ratio: 24.1,
+    sector_avg_pe: 22.5,
+    pb_ratio: 8.2,
+    sector_avg_pb: 7.9,
+    ev_ebitda: 15.3,
+    sector_avg_ev_ebitda: 14.8,
+    peer_tickers: ["TCS.NS"],
+  },
+  sentiment: {
+    sentiment_score: 0.18,
+    sentiment_label: "positive",
+    articles_analysed: 19,
+    positive_articles: 9,
+    negative_articles: 4,
+    neutral_articles: 6,
+  },
+  risk: {
+    risk_score: 3,
+    governance_risk: 2,
+    regulatory_risk: 2,
+    financial_risk: 4,
+    concentration_risk: 5,
+  },
+  data_warnings: [],
+};
+
 const AUTH_VALUE: AuthContextValue = {
   user: {
     id: "1",
@@ -94,6 +131,27 @@ const AUTH_VALUE: AuthContextValue = {
   logout: async () => {},
 };
 
+/**
+ * Routes a fetch mock's response by URL substring -- /result and
+ * /charts each get their own configured status/body, defaulting to a
+ * 404 for any URL neither map covers (surfaces a mistaken/missing
+ * route immediately instead of silently returning undefined).
+ */
+function mockFetchByUrl(routes: {
+  result?: { status: number; body: unknown };
+  charts?: { status: number; body: unknown };
+}): ReturnType<typeof vi.fn<[url: string], Promise<Response>>> {
+  return vi.fn<[url: string], Promise<Response>>((url) => {
+    if (url.includes("/charts") && routes.charts) {
+      return Promise.resolve(jsonResponse(routes.charts.status, routes.charts.body));
+    }
+    if (url.includes("/result") && routes.result) {
+      return Promise.resolve(jsonResponse(routes.result.status, routes.result.body));
+    }
+    return Promise.resolve(jsonResponse(404, { detail: "unmapped URL in test" }));
+  });
+}
+
 function renderResultPage(jobId = "job-1"): void {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
@@ -108,6 +166,19 @@ function renderResultPage(jobId = "job-1"): void {
       </AuthContext.Provider>
     </QueryClientProvider>,
   );
+}
+
+function emitFinalEvent(status: "completed" | "failed" = "completed"): void {
+  act(() => {
+    lastSocket().emitMessage({
+      job_id: "job-1",
+      agent: status === "completed" ? "pdf_export" : "fundamental_analyst",
+      status,
+      output_preview: status === "completed" ? "Memo generated." : "yFinance rate limit exceeded.",
+      progress_percent: status === "completed" ? 100 : 40,
+      is_final: true,
+    });
+  });
 }
 
 afterEach(() => {
@@ -137,39 +208,45 @@ describe("AnalysisResultPage", () => {
 
   it("shows completion summary and the Investment Memo once the final event arrives", async () => {
     vi.stubGlobal("WebSocket", FakeWebSocket);
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(200, RESULT_RESPONSE)));
+    vi.stubGlobal(
+      "fetch",
+      mockFetchByUrl({
+        result: { status: 200, body: RESULT_RESPONSE },
+        charts: { status: 200, body: CHART_DATA_RESPONSE },
+      }),
+    );
     renderResultPage();
 
-    act(() => {
-      lastSocket().emitMessage({
-        job_id: "job-1",
-        agent: "pdf_export",
-        status: "completed",
-        output_preview: "Memo generated.",
-        progress_percent: 100,
-        is_final: true,
-      });
-    });
+    emitFinalEvent("completed");
 
     expect(await screen.findByText("Analysis complete.")).toBeInTheDocument();
     expect(await screen.findByTestId("results-panel")).toBeInTheDocument();
     expect(screen.getByText("Infosys shows strong deal momentum.")).toBeInTheDocument();
   });
 
+  it("shows the charts panel once the final event arrives", async () => {
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    vi.stubGlobal(
+      "fetch",
+      mockFetchByUrl({
+        result: { status: 200, body: RESULT_RESPONSE },
+        charts: { status: 200, body: CHART_DATA_RESPONSE },
+      }),
+    );
+    renderResultPage();
+
+    emitFinalEvent("completed");
+
+    expect(await screen.findByTestId("charts-panel")).toBeInTheDocument();
+    expect(screen.getByTestId("stock-price-chart")).toBeInTheDocument();
+    expect(screen.getByTestId("risk-radar-chart")).toBeInTheDocument();
+  });
+
   it("shows a failure summary when the pipeline terminates with status failed", async () => {
     vi.stubGlobal("WebSocket", FakeWebSocket);
     renderResultPage();
 
-    act(() => {
-      lastSocket().emitMessage({
-        job_id: "job-1",
-        agent: "fundamental_analyst",
-        status: "failed",
-        output_preview: "yFinance rate limit exceeded.",
-        progress_percent: 40,
-        is_final: true,
-      });
-    });
+    emitFinalEvent("failed");
 
     expect(await screen.findByText("This analysis did not complete.")).toBeInTheDocument();
     // The failure message correctly appears twice: once on the failed
@@ -177,22 +254,16 @@ describe("AnalysisResultPage", () => {
     expect(screen.getAllByText("yFinance rate limit exceeded.")).toHaveLength(2);
   });
 
-  it("does not fetch the result for a failed analysis", async () => {
+  it("does not fetch the result or the charts for a failed analysis", async () => {
     vi.stubGlobal("WebSocket", FakeWebSocket);
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, RESULT_RESPONSE));
+    const fetchMock = mockFetchByUrl({
+      result: { status: 200, body: RESULT_RESPONSE },
+      charts: { status: 200, body: CHART_DATA_RESPONSE },
+    });
     vi.stubGlobal("fetch", fetchMock);
     renderResultPage();
 
-    act(() => {
-      lastSocket().emitMessage({
-        job_id: "job-1",
-        agent: "fundamental_analyst",
-        status: "failed",
-        output_preview: "yFinance rate limit exceeded.",
-        progress_percent: 40,
-        is_final: true,
-      });
-    });
+    emitFinalEvent("failed");
 
     await screen.findByText("This analysis did not complete.");
     expect(fetchMock).not.toHaveBeenCalled();
@@ -202,22 +273,56 @@ describe("AnalysisResultPage", () => {
     vi.stubGlobal("WebSocket", FakeWebSocket);
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(jsonResponse(500, { detail: "Something broke" })),
+      mockFetchByUrl({
+        result: { status: 500, body: { detail: "Something broke" } },
+        charts: { status: 200, body: CHART_DATA_RESPONSE },
+      }),
     );
     renderResultPage();
 
-    act(() => {
-      lastSocket().emitMessage({
-        job_id: "job-1",
-        agent: "pdf_export",
-        status: "completed",
-        output_preview: "Memo generated.",
-        progress_percent: 100,
-        is_final: true,
-      });
-    });
+    emitFinalEvent("completed");
 
     expect(await screen.findByText("Something broke")).toBeInTheDocument();
+  });
+
+  it("shows an error message if the charts fail to load, without blocking the memo", async () => {
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    vi.stubGlobal(
+      "fetch",
+      mockFetchByUrl({
+        result: { status: 200, body: RESULT_RESPONSE },
+        charts: { status: 500, body: { detail: "Charts backend broke" } },
+      }),
+    );
+    renderResultPage();
+
+    emitFinalEvent("completed");
+
+    expect(await screen.findByTestId("results-panel")).toBeInTheDocument();
+    expect(await screen.findByText("Charts backend broke")).toBeInTheDocument();
+    expect(screen.queryByTestId("charts-panel")).not.toBeInTheDocument();
+  });
+
+  it("shows a warnings banner in the charts panel when a source is degraded", async () => {
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const degradedCharts = {
+      ...CHART_DATA_RESPONSE,
+      valuation: null,
+      data_warnings: ["Valuation data was not available for this analysis."],
+    };
+    vi.stubGlobal(
+      "fetch",
+      mockFetchByUrl({
+        result: { status: 200, body: RESULT_RESPONSE },
+        charts: { status: 200, body: degradedCharts },
+      }),
+    );
+    renderResultPage();
+
+    emitFinalEvent("completed");
+
+    expect(await screen.findByTestId("charts-panel-warnings")).toBeInTheDocument();
+    expect(screen.getByTestId("sentiment-gauge-chart")).toBeInTheDocument();
   });
 
   it("does not show a completion summary while the job is still running", () => {

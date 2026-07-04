@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   AnalysisApiError,
+  fetchAnalysisCharts,
   fetchAnalysisHistory,
   fetchAnalysisResult,
   startAnalysis,
@@ -325,6 +326,126 @@ describe("fetchAnalysisResult", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const error = await fetchAnalysisResult({
+      accessToken: "jwt-token",
+      jobId: "missing-job",
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(AnalysisApiError);
+    expect((error as AnalysisApiError).status).toBe(404);
+  });
+});
+
+const CHART_DATA_RESPONSE = {
+  job_id: "11111111-1111-1111-1111-111111111111",
+  ticker: "INFY.NS",
+  company_name: "Infosys",
+  price_currency: "INR",
+  price_history: [{ date: "2026-06-18", close: 1780.5, volume: 1_000_000 }],
+  financials: [{ fiscal_year: "FY 2024", revenue_crores: 153_670.0, net_income_crores: 26_233.0 }],
+  valuation: {
+    pe_ratio: 24.1,
+    sector_avg_pe: 22.5,
+    pb_ratio: 8.2,
+    sector_avg_pb: 7.9,
+    ev_ebitda: 15.3,
+    sector_avg_ev_ebitda: 14.8,
+    peer_tickers: ["TCS.NS", "WIPRO.NS"],
+  },
+  sentiment: {
+    sentiment_score: 0.18,
+    sentiment_label: "positive",
+    articles_analysed: 19,
+    positive_articles: 9,
+    negative_articles: 4,
+    neutral_articles: 6,
+  },
+  risk: {
+    risk_score: 3,
+    governance_risk: 2,
+    regulatory_risk: 2,
+    financial_risk: 4,
+    concentration_risk: 5,
+  },
+  data_warnings: [],
+};
+
+describe("fetchAnalysisCharts", () => {
+  it("sends the Authorization header with the given token", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, CHART_DATA_RESPONSE));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchAnalysisCharts({
+      accessToken: "jwt-token",
+      jobId: "11111111-1111-1111-1111-111111111111",
+    });
+
+    const [, options] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const headers = options.headers as Record<string, string>;
+    expect(headers.Authorization).toBe("Bearer jwt-token");
+  });
+
+  it("requests GET /analysis/{job_id}/charts", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, CHART_DATA_RESPONSE));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchAnalysisCharts({
+      accessToken: "jwt-token",
+      jobId: "11111111-1111-1111-1111-111111111111",
+    });
+
+    const [url, options] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain("/analysis/11111111-1111-1111-1111-111111111111/charts");
+    expect(options.method).toBe("GET");
+  });
+
+  it("resolves with the parsed AnalysisChartDataResponse on success", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, CHART_DATA_RESPONSE));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchAnalysisCharts({
+      accessToken: "jwt-token",
+      jobId: "11111111-1111-1111-1111-111111111111",
+    });
+
+    expect(result).toEqual(CHART_DATA_RESPONSE);
+  });
+
+  it("resolves successfully when a source is null (partial degradation)", async () => {
+    const degraded = {
+      ...CHART_DATA_RESPONSE,
+      valuation: null,
+      data_warnings: ["Valuation data was not available for this analysis."],
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, degraded));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchAnalysisCharts({
+      accessToken: "jwt-token",
+      jobId: "11111111-1111-1111-1111-111111111111",
+    });
+
+    expect(result.valuation).toBeNull();
+    expect(result.data_warnings).toHaveLength(1);
+  });
+
+  it("throws AnalysisApiError with the backend's detail on a 409 (not ready)", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse(409, { detail: "Analysis job_id=... is not ready yet" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      fetchAnalysisCharts({ accessToken: "jwt-token", jobId: "not-ready-job" }),
+    ).rejects.toThrow("Analysis job_id=... is not ready yet");
+  });
+
+  it("throws an AnalysisApiError instance carrying the 404 status code", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse(404, { detail: "No analysis job found" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const error = await fetchAnalysisCharts({
       accessToken: "jwt-token",
       jobId: "missing-job",
     }).catch((caught: unknown) => caught);

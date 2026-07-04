@@ -1,6 +1,7 @@
 # backend/models/schemas.py
 """
-AIRP -- Pydantic Request/Response Schemas (T-046 / T-047 / T-048 / T-050 / T-051)
+AIRP -- Pydantic Request/Response Schemas
+(T-046 / T-047 / T-048 / T-050 / T-051 / T-062)
 
 Pydantic v2 models for the auth and analysis endpoints' request bodies
 and response shapes. Kept in a separate module from backend/models/orm.py
@@ -34,6 +35,12 @@ __all__ = [
     "HistoryEntryResponse",
     "HistoryResponse",
     "DocumentUploadResponse",
+    "PricePointResponse",
+    "RevenueProfitPointResponse",
+    "ValuationChartResponse",
+    "SentimentChartResponse",
+    "RiskRadarResponse",
+    "AnalysisChartDataResponse",
 ]
 
 # ---------------------------------------------------------------------------
@@ -559,4 +566,170 @@ class DocumentUploadResponse(BaseModel):
     )
     characters_extracted: int = Field(
         ge=0, description="Total character count of the text extracted from the PDF"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Response schemas -- charts & visualisations (T-062)
+# ---------------------------------------------------------------------------
+
+
+class PricePointResponse(BaseModel):
+    """
+    Single day of the 1-year stock price series returned by
+    GET /api/v1/analysis/{job_id}/charts.
+
+    Deliberately only ``close``/``volume`` rather than the full OHLC
+    candle -- the acceptance criterion asks for a price line chart, not
+    a candlestick chart, and a lean per-point shape keeps a 252-point
+    series small on the wire.
+    """
+
+    date: str = Field(description="Trading date, YYYY-MM-DD")
+    close: float = Field(description="Closing price for the day")
+    volume: int = Field(description="Shares traded that day")
+
+
+class RevenueProfitPointResponse(BaseModel):
+    """
+    Single fiscal year of the revenue/net-income trend returned by
+    GET /api/v1/analysis/{job_id}/charts. Up to 4 years, oldest first --
+    field-for-field the subset of
+    ``backend.tools.financials.IncomeStatementYear`` this chart needs.
+    """
+
+    fiscal_year: str = Field(description="Fiscal year label, e.g. 'FY 2024'")
+    revenue_crores: Optional[float] = Field(
+        default=None, description="Total revenue in INR Crores"
+    )
+    net_income_crores: Optional[float] = Field(
+        default=None, description="Net income (PAT) in INR Crores"
+    )
+
+
+class ValuationChartResponse(BaseModel):
+    """
+    P/E-vs-peers chart data, read straight out of
+    ``backend.agents.output_models.ValuationOutput`` (already computed
+    once by the Valuation Agent during the pipeline run -- no live
+    re-fetch). Null when the Valuation Agent's output is missing from
+    the analysis's state_snapshot.
+    """
+
+    pe_ratio: Optional[float] = Field(
+        default=None, description="Current trailing P/E ratio"
+    )
+    sector_avg_pe: Optional[float] = Field(
+        default=None, description="Sector average P/E ratio for peer comparison"
+    )
+    pb_ratio: Optional[float] = Field(
+        default=None, description="Current price-to-book ratio"
+    )
+    sector_avg_pb: Optional[float] = Field(
+        default=None, description="Sector average P/B ratio for peer comparison"
+    )
+    ev_ebitda: Optional[float] = Field(
+        default=None, description="Current EV/EBITDA multiple"
+    )
+    sector_avg_ev_ebitda: Optional[float] = Field(
+        default=None, description="Sector average EV/EBITDA for peer comparison"
+    )
+    peer_tickers: list[str] = Field(
+        default_factory=list,
+        description="Yahoo Finance tickers of peer companies used in comparison",
+    )
+
+
+class SentimentChartResponse(BaseModel):
+    """
+    Sentiment gauge data, read straight out of
+    ``backend.agents.output_models.SentimentAnalysis`` (already
+    computed once by the News Sentiment agent during the pipeline run
+    -- no live re-fetch). Null when that agent's output is missing
+    from the analysis's state_snapshot.
+    """
+
+    sentiment_score: float = Field(
+        ge=-1.0, le=1.0, description="Aggregate sentiment score: -1.0 to +1.0"
+    )
+    sentiment_label: str = Field(
+        description="Human-readable label: 'very_positive' .. 'very_negative'"
+    )
+    articles_analysed: int = Field(ge=0, description="Number of news articles analysed")
+    positive_articles: int = Field(
+        ge=0, description="Count of positively-scored articles"
+    )
+    negative_articles: int = Field(
+        ge=0, description="Count of negatively-scored articles"
+    )
+    neutral_articles: int = Field(
+        ge=0, description="Count of neutrally-scored articles"
+    )
+
+
+class RiskRadarResponse(BaseModel):
+    """
+    Risk radar chart data (5 axes), read straight out of
+    ``backend.agents.output_models.RiskAnalysis`` (already computed
+    once by the Risk Officer during the pipeline run -- no live
+    re-fetch). Null when that agent's output is missing from the
+    analysis's state_snapshot.
+    """
+
+    risk_score: int = Field(
+        ge=1, le=10, description="Overall risk level, 1 (low) - 10 (high)"
+    )
+    governance_risk: int = Field(
+        ge=1, le=10, description="Governance/management quality risk"
+    )
+    regulatory_risk: int = Field(
+        ge=1, le=10, description="Regulatory and compliance risk"
+    )
+    financial_risk: int = Field(
+        ge=1, le=10, description="Financial health/leverage risk"
+    )
+    concentration_risk: int = Field(
+        ge=1, le=10, description="Customer/geography/revenue-stream concentration risk"
+    )
+
+
+class AnalysisChartDataResponse(BaseModel):
+    """
+    Body returned by GET /api/v1/analysis/{job_id}/charts (T-062).
+
+    Built from ``backend.services.analysis.AnalysisChartData`` -- see
+    that dataclass's docstring for why ``valuation``/``sentiment``/
+    ``risk`` are nullable and ``price_history``/``financials`` can be
+    empty lists: each of the five chart sources degrades
+    independently, so one missing snapshot key or one failed live
+    yFinance call never fails the whole response. ``data_warnings``
+    names exactly which source(s), if any, could not be populated.
+    """
+
+    job_id: str = Field(description="UUID of the parent Analysis job, as a string")
+    ticker: str = Field(description="Yahoo Finance ticker with exchange suffix")
+    company_name: str = Field(description="Human-readable company name")
+    price_currency: str = Field(
+        description="Trading currency for price_history (e.g. INR, USD)"
+    )
+    price_history: list[PricePointResponse] = Field(
+        default_factory=list,
+        description="1-year daily closing price series, oldest first",
+    )
+    financials: list[RevenueProfitPointResponse] = Field(
+        default_factory=list,
+        description="Up to 4 years of annual revenue/net income, oldest first",
+    )
+    valuation: Optional[ValuationChartResponse] = Field(
+        default=None, description="P/E-vs-peers data, null if unavailable"
+    )
+    sentiment: Optional[SentimentChartResponse] = Field(
+        default=None, description="Sentiment gauge data, null if unavailable"
+    )
+    risk: Optional[RiskRadarResponse] = Field(
+        default=None, description="Risk radar data, null if unavailable"
+    )
+    data_warnings: list[str] = Field(
+        default_factory=list,
+        description="Notes on any chart source that could not be populated",
     )

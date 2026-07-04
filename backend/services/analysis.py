@@ -1,12 +1,13 @@
 # backend/services/analysis.py
 """
-AIRP -- Analysis Trigger, Status, Result & History Service
-(T-047 / T-048 / T-050)
+AIRP -- Analysis Trigger, Status, Result, Charts & History Service
+(T-047 / T-048 / T-050 / T-062)
 
 Business logic backing POST /api/v1/analysis/start (T-047),
 GET /api/v1/analysis/{job_id}/status (T-048), and (T-050)
 GET /api/v1/analysis/{job_id}/result, the PDF-existence check backing
-GET /api/v1/analysis/{job_id}/memo/pdf, and GET /api/v1/analysis/history.
+GET /api/v1/analysis/{job_id}/memo/pdf, GET /api/v1/analysis/history,
+and (T-062) GET /api/v1/analysis/{job_id}/charts.
 Pure service-layer code with no FastAPI imports (mirrors
 backend/services/auth.py) so it stays independently testable without
 spinning up an ASGI app; each router translates this module's plain
@@ -77,6 +78,20 @@ What this module does
    display name/ticker/exchange and pulling verdict/conviction_score
    out of state_snapshot via Postgres's JSONB ->> operator rather than
    loading and parsing the full snapshot in Python per row.
+9. ``get_analysis_chart_data`` (T-062) -- reuses the identical
+   ``_SQL_LOAD_RESULT`` query get_analysis_result already issues (same
+   three columns: ownership, status, state_snapshot) but reads
+   ``ticker``/``valuation``/``sentiment``/``risk`` out of the snapshot
+   instead of ``decision``, then makes two LIVE yFinance calls
+   (fetch_ohlcv, fetch_income_statement -- both existing T-018/T-019
+   tools, each offloaded to a worker thread via asyncio.to_thread) to
+   get the 1-year price series and 4-year revenue/profit trend, since
+   neither was ever persisted into state_snapshot by the original
+   pipeline run (only derived summary statistics were). Each of the
+   five chart data sources degrades independently -- a failed live
+   fetch or a missing snapshot key produces ``None``/an empty list for
+   that one chart plus a warning string, never a 500 for the whole
+   endpoint.
 
 Design decisions
 -----------------
@@ -115,6 +130,8 @@ Public API
         get_analysis_history,
         DEFAULT_HISTORY_PAGE_SIZE,
         MAX_HISTORY_PAGE_SIZE,
+        AnalysisChartData,
+        get_analysis_chart_data,
     )
 """
 
@@ -131,6 +148,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.graph.state import InvestmentState, make_initial_state
 from backend.models.orm import Analysis, Company
+from backend.tools.financials import fetch_income_statement
+from backend.tools.stock_price import fetch_ohlcv
 
 logger = logging.getLogger(__name__)
 
@@ -153,6 +172,8 @@ __all__ = [
     "get_analysis_history",
     "DEFAULT_HISTORY_PAGE_SIZE",
     "MAX_HISTORY_PAGE_SIZE",
+    "AnalysisChartData",
+    "get_analysis_chart_data",
 ]
 
 # ---------------------------------------------------------------------------
@@ -901,25 +922,24 @@ async def get_analysis_result(
     return AnalysisResultData(job_id=job_id, status=status, decision=decision)
 
 
-def _extract_decision_from_snapshot(
+def _parse_state_snapshot(
     snapshot_val: Any,
     job_id: uuid.UUID,
 ) -> Optional[dict[str, Any]]:
     """
-    Parse ``analyses.state_snapshot`` (JSONB) and return its ``decision``
-    key, or None if the snapshot is missing, malformed, or has no
-    decision.
+    Normalise ``analyses.state_snapshot`` (JSONB) into a plain dict, or
+    None if it is missing or malformed.
 
     Mirrors backend.services.state_persistence.StatePersistenceService.load's
     own asyncpg-vs-psycopg2 normalisation (asyncpg returns JSONB as a
     dict already; psycopg2 returns a JSON string) -- duplicated here
     rather than imported because that method returns a full
-    InvestmentState dict via a private cast this function does not need
-    (only one key out of ~30 InvestmentState fields), and a second,
-    purpose-built raw SQL query (_SQL_LOAD_RESULT, fetching exactly
-    user_id/status/state_snapshot rather than load_state's `SELECT
-    state_snapshot, last_completed_node, status`) already avoids the
-    extra round trip load_state would otherwise require.
+    InvestmentState dict via a private cast this module does not need,
+    and both ``_extract_decision_from_snapshot`` (GET /result) and
+    ``_extract_chart_inputs_from_snapshot`` (GET /charts, T-062) only
+    ever need a handful of top-level keys out of ~30 InvestmentState
+    fields -- one shared normalisation step, two different callers
+    picking their own keys back out of the same parsed dict.
 
     Args:
         snapshot_val: The raw value read from row[2] -- a dict
@@ -927,7 +947,7 @@ def _extract_decision_from_snapshot(
         job_id:       Only used for logging context.
 
     Returns:
-        The ``decision`` dict, or None if absent/unparseable.
+        The parsed snapshot dict, or None if absent/unparseable.
     """
     if snapshot_val is None:
         return None
@@ -939,13 +959,36 @@ def _extract_decision_from_snapshot(
             snapshot = json.loads(str(snapshot_val))
         except json.JSONDecodeError as exc:
             logger.error(
-                "get_analysis_result: invalid state_snapshot JSON for " "job_id=%s: %s",
+                "_parse_state_snapshot: invalid state_snapshot JSON for job_id=%s: %s",
                 job_id,
                 exc,
             )
             return None
 
     if not isinstance(snapshot, dict):
+        return None
+    return snapshot
+
+
+def _extract_decision_from_snapshot(
+    snapshot_val: Any,
+    job_id: uuid.UUID,
+) -> Optional[dict[str, Any]]:
+    """
+    Parse ``analyses.state_snapshot`` (JSONB) and return its ``decision``
+    key, or None if the snapshot is missing, malformed, or has no
+    decision.
+
+    Args:
+        snapshot_val: The raw value read from row[2] -- a dict
+                      (asyncpg) or str (psycopg2), or None.
+        job_id:       Only used for logging context.
+
+    Returns:
+        The ``decision`` dict, or None if absent/unparseable.
+    """
+    snapshot = _parse_state_snapshot(snapshot_val, job_id=job_id)
+    if snapshot is None:
         return None
 
     decision = snapshot.get("decision")
@@ -1100,3 +1143,241 @@ async def get_analysis_history(
     ]
 
     return HistoryPage(items=items, total_count=total_count, limit=limit, offset=offset)
+
+
+# ---------------------------------------------------------------------------
+# Chart data (T-062) -- price history, revenue/profit trend, valuation,
+# sentiment, and risk data for the frontend charts page
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class AnalysisChartData:
+    """
+    Everything GET /api/v1/analysis/{job_id}/charts needs to build an
+    AnalysisChartDataResponse. Built by ``get_analysis_chart_data``;
+    the router maps each field 1:1 onto that schema.
+
+    ``price_history``/``financials`` come from a LIVE yFinance call
+    this function makes (never persisted by the original pipeline
+    run -- only derived summary statistics were);
+    ``valuation``/``sentiment``/``risk`` come straight out of
+    ``state_snapshot``, already computed once during the pipeline and
+    never re-fetched. Every field is independently optional/empty-able
+    -- see this module's docstring, item 9, for why one missing or
+    failed source must not fail the whole response.
+    """
+
+    job_id: uuid.UUID
+    ticker: str
+    company_name: str
+    price_currency: str
+    price_history: list[dict[str, Any]]
+    financials: list[dict[str, Any]]
+    valuation: Optional[dict[str, Any]]
+    sentiment: Optional[dict[str, Any]]
+    risk: Optional[dict[str, Any]]
+    data_warnings: list[str]
+
+
+def _fetch_price_history_sync(
+    ticker: str,
+) -> tuple[list[dict[str, Any]], str, Optional[str]]:
+    """
+    Blocking yFinance call (via the existing T-018 ``fetch_ohlcv``
+    tool) -- callers MUST run this through ``asyncio.to_thread``, never
+    directly on the event loop.
+
+    Nearly always a Redis cache hit in practice: fetch_ohlcv shares its
+    cache key (``airp:stock:{ticker}:{period}``, STOCK_TTL) with
+    fetch_stock_price, which the Technical Analyst agent already called
+    for this exact ticker/period during the original pipeline run.
+
+    Returns:
+        (price_points, currency, warning) -- price_points is already
+        the exact ``{date, close, volume}`` shape PricePointResponse
+        expects, ready to pass straight into that schema. On failure,
+        price_points is ``[]`` and warning explains why.
+    """
+    result = fetch_ohlcv.invoke({"ticker": ticker, "period": "1y"})
+    if "error" in result:
+        message = result.get("message", result["error"])
+        logger.warning(
+            "get_analysis_chart_data: fetch_ohlcv failed for ticker=%s: %s",
+            ticker,
+            message,
+        )
+        return [], "INR", f"Price history unavailable: {message}"
+
+    price_points = [
+        {"date": candle["date"], "close": candle["close"], "volume": candle["volume"]}
+        for candle in result.get("ohlcv", [])
+    ]
+    currency = cast(str, result.get("currency", "INR"))
+    return price_points, currency, None
+
+
+def _fetch_financial_trend_sync(
+    ticker: str,
+) -> tuple[list[dict[str, Any]], Optional[str]]:
+    """
+    Blocking yFinance call (via the existing T-019
+    ``fetch_income_statement`` tool) -- callers MUST run this through
+    ``asyncio.to_thread``.
+
+    Unlike price history, this is NOT Redis-cached (fetch_income_statement
+    has no ``@cached`` decorator) -- every call re-hits yFinance, even
+    though the Fundamental Analyst already fetched the same statements
+    once during the original pipeline run. Tracked as a known gap
+    (see docs/week-17/T-062-Build-Charts-And-Visualisations.md), out of
+    scope for this task to fix.
+
+    Returns:
+        (financial_points, warning) -- financial_points is already the
+        exact ``{fiscal_year, revenue_crores, net_income_crores}`` shape
+        RevenueProfitPointResponse expects. On failure, financial_points
+        is ``[]`` and warning explains why.
+    """
+    result = fetch_income_statement.invoke({"ticker": ticker})
+    if "error" in result:
+        message = result.get("message", result["error"])
+        logger.warning(
+            "get_analysis_chart_data: fetch_income_statement failed for ticker=%s: %s",
+            ticker,
+            message,
+        )
+        return [], f"Revenue/profit trend unavailable: {message}"
+
+    financial_points = [
+        {
+            "fiscal_year": year["fiscal_year"],
+            "revenue_crores": year.get("revenue_crores"),
+            "net_income_crores": year.get("net_income_crores"),
+        }
+        for year in result.get("income_statement", [])
+    ]
+    return financial_points, None
+
+
+async def get_analysis_chart_data(
+    session: AsyncSession,
+    job_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> Optional[AnalysisChartData]:
+    """
+    Assemble chart-ready data for a completed analysis job.
+
+    Same None-for-not-found-or-not-yours / ``AnalysisNotReadyError``-
+    for-not-finished-yet contract as ``get_analysis_result`` (reuses
+    that function's exact ``_SQL_LOAD_RESULT`` query -- both need only
+    ownership, status, and state_snapshot) -- the router applies the
+    identical 404/409 translation for both endpoints.
+
+    Unlike ``get_analysis_result``, a missing or failed individual
+    chart source here never raises: it degrades to an empty list/None
+    for that one field plus an entry in ``data_warnings``, so one
+    failed live yFinance call cannot take down the four other charts.
+
+    Args:
+        session: Active AsyncSession for this request.
+        job_id:  UUID path parameter from the request.
+        user_id: UUID of the authenticated requester.
+
+    Returns:
+        AnalysisChartData when job_id exists, belongs to user_id, and
+        status == 'completed'. None when job_id does not exist or
+        belongs to a different user.
+
+    Raises:
+        AnalysisNotReadyError: job_id exists and belongs to user_id,
+            but status is 'pending', 'running', or 'failed' -- or the
+            snapshot is missing the ticker a chart fetch requires.
+    """
+    result = await session.execute(_SQL_LOAD_RESULT, {"job_id": str(job_id)})
+    row: Any = result.fetchone()
+
+    if row is None:
+        logger.debug(
+            "get_analysis_chart_data: no analyses row for job_id=%s",
+            job_id,
+        )
+        return None
+
+    row_user_id = row[0]
+    if row_user_id is not None and uuid.UUID(str(row_user_id)) != user_id:
+        logger.warning(
+            "get_analysis_chart_data: job_id=%s belongs to a different user "
+            "-- returning not-found to requester",
+            job_id,
+        )
+        return None
+
+    job_status: str = str(row[1])
+    if job_status != "completed":
+        logger.info(
+            "get_analysis_chart_data: job_id=%s not ready (status=%s)",
+            job_id,
+            job_status,
+        )
+        raise AnalysisNotReadyError(status=job_status)
+
+    snapshot = _parse_state_snapshot(row[2], job_id=job_id)
+    if snapshot is None:
+        logger.error(
+            "get_analysis_chart_data: job_id=%s status=completed but "
+            "state_snapshot is missing/unparseable -- treating as not ready",
+            job_id,
+        )
+        raise AnalysisNotReadyError(status=job_status)
+
+    ticker = snapshot.get("ticker")
+    company_name = snapshot.get("company_name")
+    if not isinstance(ticker, str) or not ticker or not isinstance(company_name, str):
+        logger.error(
+            "get_analysis_chart_data: job_id=%s status=completed but snapshot "
+            "has no ticker/company_name -- treating as not ready",
+            job_id,
+        )
+        raise AnalysisNotReadyError(status=job_status)
+
+    data_warnings: list[str] = []
+
+    price_history, price_currency, price_warning = await asyncio.to_thread(
+        _fetch_price_history_sync, ticker
+    )
+    if price_warning is not None:
+        data_warnings.append(price_warning)
+
+    financials, financials_warning = await asyncio.to_thread(
+        _fetch_financial_trend_sync, ticker
+    )
+    if financials_warning is not None:
+        data_warnings.append(financials_warning)
+
+    valuation = snapshot.get("valuation")
+    if not isinstance(valuation, dict):
+        data_warnings.append("Valuation data was not available for this analysis.")
+        valuation = None
+
+    sentiment = snapshot.get("sentiment")
+    if not isinstance(sentiment, dict):
+        data_warnings.append("Sentiment data was not available for this analysis.")
+        sentiment = None
+
+    risk = snapshot.get("risk")
+    if not isinstance(risk, dict):
+        data_warnings.append("Risk data was not available for this analysis.")
+        risk = None
+
+    return AnalysisChartData(
+        job_id=job_id,
+        ticker=ticker,
+        company_name=company_name,
+        price_currency=price_currency,
+        price_history=price_history,
+        financials=financials,
+        valuation=valuation,
+        sentiment=sentiment,
+        risk=risk,
+        data_warnings=data_warnings,
+    )

@@ -1,5 +1,5 @@
 // frontend/src/api/analysis.ts
-// AIRP -- Analysis API client (T-057, extended in T-058 and T-061)
+// AIRP -- Analysis API client (T-057, extended in T-058, T-061, and T-062)
 //
 // Thin fetch wrappers around backend/routers/analysis.py and
 // backend/routers/documents.py endpoints:
@@ -7,7 +7,8 @@
 //   - POST /api/v1/analysis/start            (T-047) -- startAnalysis
 //   - POST /api/v1/documents/upload          (T-051) -- uploadDocument
 //   - GET  /api/v1/analysis/{job_id}/result  (T-050) -- fetchAnalysisResult
-// All four authenticate via a Bearer Authorization header rather than
+//   - GET  /api/v1/analysis/{job_id}/charts  (T-062) -- fetchAnalysisCharts
+// All five authenticate via a Bearer Authorization header rather than
 // the httpOnly cookie -- called with the in-memory accessToken from
 // useAuth(), the same token useAnalysisStream.ts already needs for its
 // WebSocket `?token=` parameter (see AuthProvider.tsx's docstring for
@@ -22,6 +23,7 @@
 
 import { env } from "@/config/env";
 import {
+  type AnalysisChartDataResponse,
   type AnalysisStartResponse,
   type DocumentUploadResponse,
   type HistoryResponse,
@@ -235,4 +237,43 @@ export async function fetchAnalysisResult({
     throw new AnalysisApiError(response.status, await parseErrorDetail(response));
   }
   return (await response.json()) as InvestmentDecisionResponse;
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/v1/analysis/{job_id}/charts (T-062, consumed by the charts panel)
+// ---------------------------------------------------------------------------
+
+export interface FetchAnalysisChartsParams {
+  /** Bearer token from useAuth().accessToken. Callers must not call this with a null token. */
+  accessToken: string;
+  jobId: string;
+}
+
+/**
+ * GET /api/v1/analysis/{job_id}/charts -- price history, revenue/profit
+ * trend, P/E-vs-peers valuation, sentiment gauge, and risk radar data
+ * for a completed analysis.
+ *
+ * Same "only call once the stream reports completion" contract as
+ * fetchAnalysisResult -- see that function's docstring. Unlike
+ * fetchAnalysisResult, a 200 response here can still have individual
+ * null/empty fields (valuation, sentiment, risk, price_history,
+ * financials) when the backend could not populate that one source;
+ * see the response's data_warnings for which, if any. That is a
+ * successful response, not an AnalysisApiError -- only a genuine
+ * non-2xx (404/409/5xx) throws here.
+ */
+export async function fetchAnalysisCharts({
+  accessToken,
+  jobId,
+}: FetchAnalysisChartsParams): Promise<AnalysisChartDataResponse> {
+  const response = await fetch(`${env.apiBaseUrl}/analysis/${jobId}/charts`, {
+    method: "GET",
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+
+  if (!response.ok) {
+    throw new AnalysisApiError(response.status, await parseErrorDetail(response));
+  }
+  return (await response.json()) as AnalysisChartDataResponse;
 }

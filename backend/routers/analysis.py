@@ -1,11 +1,12 @@
 # backend/routers/analysis.py
 """
-AIRP -- Analysis Trigger, Status, Result, PDF & History Router
-(T-047 / T-048 / T-050)
+AIRP -- Analysis Trigger, Status, Result, Charts & History Router
+(T-047 / T-048 / T-050 / T-062)
 
 POST /api/v1/analysis/start (T-047)
 GET  /api/v1/analysis/{job_id}/status (T-048)
 GET  /api/v1/analysis/{job_id}/result (T-050)
+GET  /api/v1/analysis/{job_id}/charts (T-062)
 GET  /api/v1/analysis/{job_id}/memo/pdf (T-050)
 GET  /api/v1/analysis/history (T-050)
 
@@ -22,6 +23,10 @@ T-050 acceptance criteria (from task spec):
   * PDF downloads correctly
   * result JSON matches InvestmentDecision schema
   * history paginates
+
+T-062 acceptance criteria (from task spec, frontend-facing but this
+endpoint is what makes it possible):
+  * All 5 chart types render with real data
 
 HTTP-layer concerns only (request validation via Pydantic schemas,
 authentication via get_current_user, translating service-layer results
@@ -82,6 +87,27 @@ waiting, not by using a different job_id. The body still names the
 job_id's current status so a client need not also call GET /status to
 explain the 409.
 
+Why GET /charts returns 200 with data_warnings rather than failing on
+a partial data source (T-062)
+------------------------------------------------------------------------
+Unlike GET /result (where a malformed decision is a genuine, log-worthy
+bug -- portfolio_manager_node's contract guarantees a complete
+InvestmentDecision whenever status='completed'), GET /charts combines
+data from very different reliability tiers in one response: three
+chart sources (valuation, sentiment, risk) are already-computed agent
+output read straight out of state_snapshot, while two (price history,
+revenue/profit trend) require a fresh, LIVE yFinance call made at
+request time -- a call that can fail for reasons that have nothing to
+do with whether the analysis itself succeeded (a transient network
+blip, a ticker yFinance has since delisted). Treating any one of the
+five sources as required would mean an otherwise-perfectly-good
+analysis occasionally can't show ANY chart because, say, revenue data
+timed out. backend.services.analysis.get_analysis_chart_data degrades
+each source independently instead: a missing/failed source becomes an
+empty list or null for that one field, plus a plain-English note in
+data_warnings, so the frontend can render the four charts that did
+come back and show a small "unavailable" state for the one that didn't.
+
 Why GET /memo/pdf returns the SAME error response shape as a missing
 analysis row when the PDF file itself is absent (T-050)
 ------------------------------------------------------------------------
@@ -128,18 +154,25 @@ from backend.db.session import get_async_session
 from backend.dependencies.auth import get_current_user
 from backend.models.orm import User
 from backend.models.schemas import (
+    AnalysisChartDataResponse,
     AnalysisStartRequest,
     AnalysisStartResponse,
     AnalysisStatusResponse,
     HistoryEntryResponse,
     HistoryResponse,
     InvestmentDecisionResponse,
+    PricePointResponse,
+    RevenueProfitPointResponse,
+    RiskRadarResponse,
+    SentimentChartResponse,
+    ValuationChartResponse,
 )
 from backend.services.analysis import (
     DEFAULT_HISTORY_PAGE_SIZE,
     MAX_HISTORY_PAGE_SIZE,
     AnalysisNotReadyError,
     create_analysis_job,
+    get_analysis_chart_data,
     get_analysis_history,
     get_analysis_result,
     get_analysis_status,
@@ -416,6 +449,110 @@ async def get_analysis_result_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Analysis result data is malformed -- please contact support",
         ) from exc
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/analysis/{job_id}/charts
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/{job_id}/charts",
+    response_model=AnalysisChartDataResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Retrieve chart-ready data for a completed analysis (T-062)",
+    description=(
+        "Returns the 1-year price series, 4-year revenue/profit trend, "
+        "P/E-vs-peers valuation data, sentiment gauge data, and risk "
+        "radar data for a completed analysis. Returns 404 if job_id "
+        "does not exist or belongs to a different user, and 409 if the "
+        "job exists but has not yet reached status='completed'. Each "
+        "of the five chart sources degrades independently -- a "
+        "missing agent output or a failed live yFinance call empties "
+        "that one field and adds a note to data_warnings rather than "
+        "failing the whole response."
+    ),
+)
+async def get_analysis_charts_endpoint(
+    job_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_async_session),
+) -> AnalysisChartDataResponse:
+    try:
+        chart_data = await get_analysis_chart_data(
+            session,
+            job_id=job_id,
+            user_id=current_user.id,
+        )
+    except AnalysisNotReadyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Analysis job_id={job_id} is not ready yet "
+                f"(status='{exc.status}'). Poll GET /status or open "
+                "WS /stream until status='completed', then retry."
+            ),
+        ) from exc
+
+    if chart_data is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No analysis job found for the given job_id",
+        )
+
+    valuation = chart_data.valuation
+    sentiment = chart_data.sentiment
+    risk = chart_data.risk
+
+    return AnalysisChartDataResponse(
+        job_id=str(chart_data.job_id),
+        ticker=chart_data.ticker,
+        company_name=chart_data.company_name,
+        price_currency=chart_data.price_currency,
+        price_history=[
+            PricePointResponse(**point) for point in chart_data.price_history
+        ],
+        financials=[
+            RevenueProfitPointResponse(**point) for point in chart_data.financials
+        ],
+        valuation=(
+            ValuationChartResponse(
+                pe_ratio=valuation.get("pe_ratio"),
+                sector_avg_pe=valuation.get("sector_avg_pe"),
+                pb_ratio=valuation.get("pb_ratio"),
+                sector_avg_pb=valuation.get("sector_avg_pb"),
+                ev_ebitda=valuation.get("ev_ebitda"),
+                sector_avg_ev_ebitda=valuation.get("sector_avg_ev_ebitda"),
+                peer_tickers=valuation.get("peer_tickers", []),
+            )
+            if valuation is not None
+            else None
+        ),
+        sentiment=(
+            SentimentChartResponse(
+                sentiment_score=sentiment.get("sentiment_score", 0.0),
+                sentiment_label=sentiment.get("sentiment_label", "neutral"),
+                articles_analysed=sentiment.get("articles_analysed", 0),
+                positive_articles=sentiment.get("positive_articles", 0),
+                negative_articles=sentiment.get("negative_articles", 0),
+                neutral_articles=sentiment.get("neutral_articles", 0),
+            )
+            if sentiment is not None
+            else None
+        ),
+        risk=(
+            RiskRadarResponse(
+                risk_score=risk.get("risk_score", 1),
+                governance_risk=risk.get("governance_risk", 1),
+                regulatory_risk=risk.get("regulatory_risk", 1),
+                financial_risk=risk.get("financial_risk", 1),
+                concentration_risk=risk.get("concentration_risk", 1),
+            )
+            if risk is not None
+            else None
+        ),
+        data_warnings=chart_data.data_warnings,
+    )
 
 
 # ---------------------------------------------------------------------------
