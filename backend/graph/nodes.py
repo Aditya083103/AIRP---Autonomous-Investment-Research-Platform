@@ -335,6 +335,10 @@ def _run_persist(job_id: str, node_name: str, merged: InvestmentState) -> None:
 #: either produce no AgentOutput-shaped dict at all or one whose
 #: "headline" field is read directly in _build_output_preview instead.
 _NODE_OUTPUT_STATE_FIELD: dict[str, str] = {
+    NODE_FUNDAMENTAL: "fundamental",
+    NODE_TECHNICAL: "technical",
+    NODE_SENTIMENT: "sentiment",
+    NODE_MACRO: "macro",
     NODE_RISK: "risk",
     NODE_CONTRARIAN: "contrarian",
     NODE_VALUATION: "valuation",
@@ -462,6 +466,23 @@ def _summarise_agent_output(node_name: str, output: dict[str, Any]) -> str:
         conviction = output.get("conviction_score")
         if verdict is not None and conviction is not None:
             return f"Final verdict: {verdict} (conviction {conviction}/10)"
+    elif node_name == NODE_FUNDAMENTAL:
+        score = output.get("score")
+        if score is not None:
+            return f"Fundamental score {score}/10"
+    elif node_name == NODE_TECHNICAL:
+        signal = output.get("signal")
+        if signal:
+            return f"Technical signal: {signal}"
+    elif node_name == NODE_SENTIMENT:
+        label = output.get("sentiment_label")
+        score = output.get("sentiment_score")
+        if label is not None and score is not None:
+            return f"Sentiment: {label} ({score:+.2f})"
+    elif node_name == NODE_MACRO:
+        environment = output.get("macro_environment")
+        if environment:
+            return f"Macro environment: {environment}"
 
     return f"{node_name} output ready"
 
@@ -790,12 +811,81 @@ def _run_research_node_safely(
         return degraded_fallback(state, f"Unhandled node error: {exc}")
 
 
+def _broadcast_research_node(
+    state: InvestmentState,
+    node_name: str,
+    partial: dict[str, Any],
+) -> None:
+    """
+    Publish a live WebSocket event for one Send-parallel research node.
+
+    Counterpart to ``_persist_after``'s broadcast call, for the 4
+    research nodes that cannot use that wrapper (see fundamental_node's
+    docstring: 4 concurrent branches cannot safely share one DB write
+    inside a Send super-step, so persistence is deferred to
+    research_join_node). The broadcast itself has no such constraint --
+    it is an in-memory pub/sub publish, not a DB write -- so there is no
+    reason a live viewer should have to wait for the join node to learn
+    that seat 1-4 finished.
+
+    Never raises: builds the same merged-state view _persist_after
+    builds (incoming state overlaid with this node's own partial dict),
+    then delegates to _run_broadcast, which already has its own
+    fire-and-forget exception handling. The extra try/except here is
+    defence in depth so a bug in state merging itself -- before
+    _run_broadcast is even reached -- still cannot escape into the
+    LangGraph pipeline.
+
+    Args:
+        state:   The state this node was invoked with.
+        node_name: This node's string name (the broadcast event's
+                   ``agent`` field -- must match a
+                   frontend/src/lib/agentProgress.ts COMMITTEE_ROSTER
+                   entry's nodeName for the seat to update).
+        partial: The partial dict this node is about to return.
+    """
+    try:
+        job_id = str(state.get("job_id", ""))
+        if not job_id:
+            logger.warning(
+                "_broadcast_research_node: no job_id in state for node=%s "
+                "-- skipping broadcast",
+                node_name,
+            )
+            return
+
+        merged_raw: dict[str, Any] = dict(state)
+        merged_raw.update(partial)
+        merged: InvestmentState = cast(InvestmentState, merged_raw)
+
+        _run_broadcast(job_id=job_id, node_name=node_name, merged=merged)
+    except Exception as exc:
+        logger.error(
+            "_broadcast_research_node: failed for node=%s job_id=%s: %s",
+            node_name,
+            state.get("job_id", ""),
+            exc,
+        )
+
+
 def fundamental_node(state: InvestmentState) -> dict[str, Any]:
     """
     LangGraph node for the Fundamental Analyst agent.
 
     NOT persistence-wrapped: runs in the Send super-step alongside
-    3 other research nodes.  Persistence happens in research_join_node.
+    3 other research nodes. Persistence happens in research_join_node,
+    deferred because 4 concurrent branches writing to the same DB
+    session inside one Send super-step is a real race condition.
+
+    The live WebSocket broadcast has no such constraint -- publishing
+    to the in-memory subscriber queue (backend.services.ws_broadcaster)
+    is safe from 4 concurrent branches -- so it fires here directly
+    rather than waiting for the join node. Without this, this seat's
+    WebSocket event never arrives at all, and the frontend
+    (frontend/src/lib/agentProgress.ts's deriveAgentCards) has no way
+    to distinguish "genuinely never ran" from "ran but nobody told me",
+    so it shows this seat as permanently "Skipped" once the stream
+    ends, even on a fully successful run.
 
     Never raises -- a timeout or unhandled error degrades to a neutral
     FundamentalAnalysis with ``error`` set (see _run_research_node_safely).
@@ -807,16 +897,20 @@ def fundamental_node(state: InvestmentState) -> dict[str, Any]:
         "fundamental_node: running for ticker=%s",
         state.get("ticker", "unknown"),
     )
-    return _run_research_node_safely(
+    partial = _run_research_node_safely(
         state, run_fundamental_analysis, NODE_FUNDAMENTAL, _degraded_fundamental
     )
+    _broadcast_research_node(state, NODE_FUNDAMENTAL, partial)
+    return partial
 
 
 def technical_node(state: InvestmentState) -> dict[str, Any]:
     """
     LangGraph node for the Technical Analyst agent.
 
-    NOT persistence-wrapped: parallel super-step constraint.
+    NOT persistence-wrapped: parallel super-step constraint (see
+    fundamental_node's docstring for the full rationale). Broadcasts
+    live directly, same reasoning.
 
     Never raises -- a timeout or unhandled error degrades to a neutral
     TechnicalAnalysis with ``error`` set (see _run_research_node_safely).
@@ -828,16 +922,20 @@ def technical_node(state: InvestmentState) -> dict[str, Any]:
         "technical_node: running for ticker=%s",
         state.get("ticker", "unknown"),
     )
-    return _run_research_node_safely(
+    partial = _run_research_node_safely(
         state, run_technical_analysis, NODE_TECHNICAL, _degraded_technical
     )
+    _broadcast_research_node(state, NODE_TECHNICAL, partial)
+    return partial
 
 
 def sentiment_node(state: InvestmentState) -> dict[str, Any]:
     """
     LangGraph node for the News Sentiment Agent.
 
-    NOT persistence-wrapped: parallel super-step constraint.
+    NOT persistence-wrapped: parallel super-step constraint (see
+    fundamental_node's docstring for the full rationale). Broadcasts
+    live directly, same reasoning.
 
     Never raises -- a timeout or unhandled error degrades to a neutral
     SentimentAnalysis with ``error`` set (see _run_research_node_safely).
@@ -852,16 +950,20 @@ def sentiment_node(state: InvestmentState) -> dict[str, Any]:
         "sentiment_node: running for ticker=%s",
         state.get("ticker", "unknown"),
     )
-    return _run_research_node_safely(
+    partial = _run_research_node_safely(
         state, run_sentiment_analysis, NODE_SENTIMENT, _degraded_sentiment
     )
+    _broadcast_research_node(state, NODE_SENTIMENT, partial)
+    return partial
 
 
 def macro_node(state: InvestmentState) -> dict[str, Any]:
     """
     LangGraph node for the Macro Economist agent.
 
-    NOT persistence-wrapped: parallel super-step constraint.
+    NOT persistence-wrapped: parallel super-step constraint (see
+    fundamental_node's docstring for the full rationale). Broadcasts
+    live directly, same reasoning.
 
     Never raises -- a timeout or unhandled error degrades to a neutral
     MacroAnalysis with ``error`` set (see _run_research_node_safely).
@@ -873,9 +975,11 @@ def macro_node(state: InvestmentState) -> dict[str, Any]:
         "macro_node: running for ticker=%s",
         state.get("ticker", "unknown"),
     )
-    return _run_research_node_safely(
+    partial = _run_research_node_safely(
         state, run_macro_analysis, NODE_MACRO, _degraded_macro
     )
+    _broadcast_research_node(state, NODE_MACRO, partial)
+    return partial
 
 
 # ---------------------------------------------------------------------------

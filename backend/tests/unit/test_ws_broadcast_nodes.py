@@ -509,3 +509,225 @@ class TestEndToEndNodeToBroadcaster:
         second = await asyncio.wait_for(queue.get(), timeout=1.0)
         assert first["agent"] == "planner"
         assert second["agent"] == "research_join"
+
+
+# ---------------------------------------------------------------------------
+# 6. Research node previews (fundamental/technical/sentiment/macro) --
+#    added alongside the _broadcast_research_node fix below. Before this,
+#    these 4 nodes were absent from both _NODE_OUTPUT_STATE_FIELD and
+#    _summarise_agent_output, so even once they started broadcasting they
+#    would have shown the generic "<node> output ready" fallback instead
+#    of a real headline.
+# ---------------------------------------------------------------------------
+
+
+class TestResearchNodePreviews:
+    def test_fundamental_success_includes_score(self) -> None:
+        from backend.graph.nodes import NODE_FUNDAMENTAL, _build_output_preview
+
+        state = _make_state(
+            fundamental={"agent_name": "fundamental_analyst", "error": None, "score": 7}
+        )
+        preview = _build_output_preview(NODE_FUNDAMENTAL, state)
+        assert "7/10" in preview
+
+    def test_technical_success_includes_signal(self) -> None:
+        from backend.graph.nodes import NODE_TECHNICAL, _build_output_preview
+
+        state = _make_state(
+            technical={
+                "agent_name": "technical_analyst",
+                "error": None,
+                "signal": "BUY",
+            }
+        )
+        preview = _build_output_preview(NODE_TECHNICAL, state)
+        assert "BUY" in preview
+
+    def test_sentiment_success_includes_label_and_score(self) -> None:
+        from backend.graph.nodes import NODE_SENTIMENT, _build_output_preview
+
+        state = _make_state(
+            sentiment={
+                "agent_name": "news_sentiment",
+                "error": None,
+                "sentiment_label": "positive",
+                "sentiment_score": 0.42,
+            }
+        )
+        preview = _build_output_preview(NODE_SENTIMENT, state)
+        assert "positive" in preview
+        assert "0.42" in preview
+
+    def test_macro_success_includes_environment(self) -> None:
+        from backend.graph.nodes import NODE_MACRO, _build_output_preview
+
+        state = _make_state(
+            macro={
+                "agent_name": "macro_economist",
+                "error": None,
+                "macro_environment": "favourable",
+            }
+        )
+        preview = _build_output_preview(NODE_MACRO, state)
+        assert "favourable" in preview
+
+    def test_fundamental_error_overrides_headline_field(self) -> None:
+        from backend.graph.nodes import NODE_FUNDAMENTAL, _build_output_preview
+
+        state = _make_state(
+            fundamental={
+                "agent_name": "fundamental_analyst",
+                "error": "yfinance rate limited",
+                "score": 0,
+            }
+        )
+        preview = _build_output_preview(NODE_FUNDAMENTAL, state)
+        assert preview.startswith("Failed:")
+        assert "yfinance rate limited" in preview
+
+    def test_fundamental_missing_score_falls_back(self) -> None:
+        from backend.graph.nodes import NODE_FUNDAMENTAL, _summarise_agent_output
+
+        result = _summarise_agent_output(NODE_FUNDAMENTAL, {})
+        assert result == f"{NODE_FUNDAMENTAL} output ready"
+
+
+# ---------------------------------------------------------------------------
+# 7. The 4 Send-parallel research nodes now broadcast live (bugfix,
+#    PERF-001 follow-up): previously fundamental_node/technical_node/
+#    sentiment_node/macro_node never called _run_broadcast at all, so
+#    frontend/src/lib/agentProgress.ts's deriveAgentCards had no event
+#    to key off and showed all 4 seats as permanently "Skipped" once the
+#    stream ended -- even on a fully successful analysis where the
+#    backend log clearly showed all 4 agents running. Persistence stays
+#    deferred to research_join_node (unchanged) since that constraint
+#    -- 4 concurrent branches cannot safely share one DB write inside a
+#    Send super-step -- is real and correct; only the broadcast, which
+#    has no such constraint, moves earlier.
+# ---------------------------------------------------------------------------
+
+
+class TestResearchNodesBroadcastLive:
+    def test_fundamental_node_calls_broadcast(self) -> None:
+        from backend.graph.nodes import NODE_FUNDAMENTAL, fundamental_node
+
+        state = _make_state()
+        with (
+            patch(
+                "backend.graph.nodes._run_research_node_safely",
+                return_value={"fundamental": {"agent_name": "fundamental_analyst"}},
+            ),
+            patch("backend.graph.nodes._run_broadcast") as mock_broadcast,
+        ):
+            result = fundamental_node(state)
+
+        mock_broadcast.assert_called_once()
+        assert mock_broadcast.call_args.kwargs["node_name"] == NODE_FUNDAMENTAL
+        assert mock_broadcast.call_args.kwargs["job_id"] == _JOB_ID
+        assert result == {"fundamental": {"agent_name": "fundamental_analyst"}}
+
+    def test_technical_node_calls_broadcast(self) -> None:
+        from backend.graph.nodes import NODE_TECHNICAL, technical_node
+
+        state = _make_state()
+        with (
+            patch(
+                "backend.graph.nodes._run_research_node_safely",
+                return_value={"technical": {"agent_name": "technical_analyst"}},
+            ),
+            patch("backend.graph.nodes._run_broadcast") as mock_broadcast,
+        ):
+            technical_node(state)
+
+        assert mock_broadcast.call_args.kwargs["node_name"] == NODE_TECHNICAL
+
+    def test_sentiment_node_calls_broadcast(self) -> None:
+        from backend.graph.nodes import NODE_SENTIMENT, sentiment_node
+
+        state = _make_state()
+        with (
+            patch(
+                "backend.graph.nodes._run_research_node_safely",
+                return_value={"sentiment": {"agent_name": "news_sentiment"}},
+            ),
+            patch("backend.graph.nodes._run_broadcast") as mock_broadcast,
+        ):
+            sentiment_node(state)
+
+        assert mock_broadcast.call_args.kwargs["node_name"] == NODE_SENTIMENT
+
+    def test_macro_node_calls_broadcast(self) -> None:
+        from backend.graph.nodes import NODE_MACRO, macro_node
+
+        state = _make_state()
+        with (
+            patch(
+                "backend.graph.nodes._run_research_node_safely",
+                return_value={"macro": {"agent_name": "macro_economist"}},
+            ),
+            patch("backend.graph.nodes._run_broadcast") as mock_broadcast,
+        ):
+            macro_node(state)
+
+        assert mock_broadcast.call_args.kwargs["node_name"] == NODE_MACRO
+
+    def test_broadcast_failure_does_not_break_node_return_value(self) -> None:
+        """A broadcast bug must never take down the pipeline it is only
+        reporting on -- this is the same fire-and-forget contract
+        _persist_after's broadcast call already has."""
+        from backend.graph.nodes import fundamental_node
+
+        state = _make_state()
+        with (
+            patch(
+                "backend.graph.nodes._run_research_node_safely",
+                return_value={"fundamental": {"agent_name": "fundamental_analyst"}},
+            ),
+            patch(
+                "backend.graph.nodes._run_broadcast",
+                side_effect=RuntimeError("broadcaster exploded"),
+            ),
+        ):
+            result = fundamental_node(state)
+
+        assert result == {"fundamental": {"agent_name": "fundamental_analyst"}}
+
+    def test_skips_broadcast_when_no_job_id(self) -> None:
+        from backend.graph.nodes import fundamental_node
+
+        empty_state: InvestmentState = cast(InvestmentState, {})
+        with (
+            patch(
+                "backend.graph.nodes._run_research_node_safely",
+                return_value={"fundamental": {"agent_name": "fundamental_analyst"}},
+            ),
+            patch("backend.graph.nodes._run_broadcast") as mock_broadcast,
+        ):
+            fundamental_node(empty_state)
+
+        mock_broadcast.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_fundamental_node_event_is_actually_delivered(self) -> None:
+        """End-to-end: a real subscriber actually receives the event --
+        not just a mock assertion that _run_broadcast was called."""
+        from backend.graph.nodes import fundamental_node
+
+        queue = await subscribe(_JOB_ID)
+        state = _make_state()
+        with patch(
+            "backend.graph.nodes._run_research_node_safely",
+            return_value={
+                "fundamental": {
+                    "agent_name": "fundamental_analyst",
+                    "error": None,
+                    "score": 6,
+                }
+            },
+        ):
+            fundamental_node(state)
+
+        event = await asyncio.wait_for(queue.get(), timeout=1.0)
+        assert event["agent"] == "fundamental_analyst"
+        assert "6/10" in event["output_preview"]

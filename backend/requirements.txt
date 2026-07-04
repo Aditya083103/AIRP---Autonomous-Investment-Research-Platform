@@ -121,7 +121,16 @@ sentence-transformers==3.0.1
 # Yahoo Finance unofficial API — stock prices, OHLCV, income statement,
 # balance sheet, cash flow. No API key required. Used by Fundamental and
 # Technical Analyst agents.
-yfinance==0.2.40
+#
+# Pinned to 1.5.1, not 0.2.40. Yahoo periodically changes its internal
+# auth/"crumb" mechanism, and older yfinance releases simply stop
+# working until the package catches up -- this presented as EVERY
+# ticker failing with "Expecting value: line 1 column 1 (char 0)" /
+# "possibly delisted; No price data found", even on the very first
+# request of a session (i.e. not genuine rate limiting -- a version
+# incompatibility masquerading as one). If this file ever gets
+# re-pinned to an older version again, that symptom is the tell.
+yfinance==1.5.1
 
 # HTTP client — used for NewsAPI, Alpha Vantage, and Screener.in scraping
 requests==2.31.0
