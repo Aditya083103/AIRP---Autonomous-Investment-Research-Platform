@@ -1,6 +1,6 @@
 // frontend/src/pages/AnalysisResultPage.tsx
 // AIRP -- Analysis Result page (T-057 placeholder, live viewer added T-059,
-// debate tab added T-060)
+// debate tab added T-060, full results panel added T-061)
 //
 // T-057 built this route purely as an honest "coming soon" placeholder
 // -- the target AnalysisPage.tsx (T-058) redirects to right after
@@ -12,15 +12,28 @@
 // full argument-by-argument transcript don't have to compete for the
 // same screen space.
 //
-// The full verdict panel, bull/bear case, and Investment Memo are still
-// T-061 -- this page shows a "what happens next" note once is_final
-// arrives rather than pretending to render the memo itself.
+// T-061 finally lands the "what happens next" note's promise: once the
+// stream reports the pipeline finished (is_final) with a non-failed
+// status, this page fetches GET /api/v1/analysis/{job_id}/result
+// (useAnalysisResult, wrapping T-050's endpoint) and renders
+// <ResultsPanel> -- the full verdict, conviction gauge, bull/bear
+// case, risks, catalysts, valuation, and every other
+// InvestmentDecisionResponse field -- below the tab switch. The fetch
+// is intentionally gated on `isComplete && !hasFailed` rather than
+// firing eagerly: a job that failed never reaches
+// status='completed' on the backend, so GET /result would only ever
+// return a 409 for it (see backend/routers/analysis.py's docstring on
+// get_analysis_result_endpoint) -- there is no decision to fetch for a
+// failed run.
 
 import { useState } from "react";
 import { useParams } from "react-router-dom";
 
 import { DebateViewer } from "@/components/debate/DebateViewer";
 import { AgentProgressBoard } from "@/components/progress/AgentProgressBoard";
+import { ResultsPanel } from "@/components/results";
+import { Spinner } from "@/components/ui";
+import { useAnalysisResult } from "@/hooks/useAnalysisResult";
 import { useAnalysisStream } from "@/hooks/useAnalysisStream";
 import { useAuth } from "@/hooks/useAuth";
 import { cn } from "@/lib/cn";
@@ -45,6 +58,17 @@ export function AnalysisResultPage(): JSX.Element {
 
   const lastEvent = events.length > 0 ? events[events.length - 1] : undefined;
   const hasFailed = lastEvent?.status === "failed";
+
+  const {
+    data: decision,
+    isPending: isResultPending,
+    isError: isResultError,
+    error: resultError,
+  } = useAnalysisResult({
+    jobId: jobId ?? "",
+    accessToken,
+    enabled: jobId !== undefined && isComplete && !hasFailed,
+  });
 
   if (jobId === undefined) {
     return (
@@ -97,24 +121,40 @@ export function AnalysisResultPage(): JSX.Element {
       </div>
 
       {isComplete ? (
-        <div className="mt-10 rounded-card border border-line bg-surface p-6">
+        <div className="mt-10">
           {hasFailed ? (
-            <>
+            <div className="rounded-card border border-line bg-surface p-6">
               <h2 className="text-lg font-semibold text-ink">This analysis did not complete.</h2>
               <p className="mt-2 text-sm leading-relaxed text-muted">
                 {lastEvent?.output_preview ||
                   "The pipeline stopped before producing a verdict. You can start a new " +
                     "analysis from the analysis page."}
               </p>
-            </>
+            </div>
           ) : (
             <>
               <h2 className="text-lg font-semibold text-ink">Analysis complete.</h2>
-              <p className="mt-2 text-sm leading-relaxed text-muted">
-                The full verdict panel, bull/bear case, and downloadable Investment Memo for this
-                analysis land here in T-061. For now, the committee&apos;s final output is shown
-                above on the Portfolio Manager&apos;s card.
-              </p>
+
+              {isResultPending ? (
+                <div className="mt-4 flex items-center gap-2 text-sm text-muted">
+                  <Spinner size="sm" aria-hidden="true" />
+                  Loading the Investment Memo…
+                </div>
+              ) : null}
+
+              {isResultError ? (
+                <p className="mt-4 text-sm text-verdict-sell">
+                  {resultError instanceof Error
+                    ? resultError.message
+                    : "Could not load the Investment Memo. Please try refreshing the page."}
+                </p>
+              ) : null}
+
+              {decision ? (
+                <div className="mt-6">
+                  <ResultsPanel decision={decision} />
+                </div>
+              ) : null}
             </>
           )}
         </div>

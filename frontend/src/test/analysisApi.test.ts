@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   AnalysisApiError,
   fetchAnalysisHistory,
+  fetchAnalysisResult,
   startAnalysis,
   uploadDocument,
 } from "@/api/analysis";
@@ -237,5 +238,98 @@ describe("uploadDocument", () => {
         exchange: "NSE",
       }),
     ).rejects.toThrow("upload is 25000000 bytes");
+  });
+});
+
+const RESULT_RESPONSE = {
+  agent_name: "portfolio_manager",
+  analysis_id: "11111111-1111-1111-1111-111111111111",
+  company_name: "Infosys",
+  ticker: "INFY.NS",
+  generated_at: "2026-06-15T10:30:00Z",
+  error: null,
+  verdict: "BUY",
+  conviction_score: 8,
+  price_target: "₹1,800 (12-month)",
+  time_horizon: "12 months",
+  executive_summary: "Infosys shows strong deal momentum.",
+  investment_thesis: "Digital transformation demand supports growth.",
+  bull_case: "Large deal wins accelerating.",
+  bear_case: "Margin pressure from wage hikes.",
+  risk_summary: "Client concentration in BFSI and manufacturing.",
+  valuation_summary: "Trading below historical average multiples.",
+  key_risks: ["Client concentration"],
+  key_catalysts: ["Large deal pipeline"],
+  contrarian_response: "Margin concern addressed by cost optimisation plan.",
+  debate_rounds_used: 2,
+  agent_weights: { fundamental_analyst: 0.3 },
+  summary: "Infosys: BUY with conviction 8/10.",
+};
+
+describe("fetchAnalysisResult", () => {
+  it("sends the Authorization header with the given token", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, RESULT_RESPONSE));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchAnalysisResult({
+      accessToken: "jwt-token",
+      jobId: "11111111-1111-1111-1111-111111111111",
+    });
+
+    const [, options] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const headers = options.headers as Record<string, string>;
+    expect(headers.Authorization).toBe("Bearer jwt-token");
+  });
+
+  it("requests GET /analysis/{job_id}/result", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, RESULT_RESPONSE));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchAnalysisResult({
+      accessToken: "jwt-token",
+      jobId: "11111111-1111-1111-1111-111111111111",
+    });
+
+    const [url, options] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain("/analysis/11111111-1111-1111-1111-111111111111/result");
+    expect(options.method).toBe("GET");
+  });
+
+  it("resolves with the parsed InvestmentDecisionResponse on success", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, RESULT_RESPONSE));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchAnalysisResult({
+      accessToken: "jwt-token",
+      jobId: "11111111-1111-1111-1111-111111111111",
+    });
+
+    expect(result).toEqual(RESULT_RESPONSE);
+  });
+
+  it("throws AnalysisApiError with the backend's detail on a 409 (not ready)", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse(409, { detail: "Analysis job_id=... is not ready yet" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      fetchAnalysisResult({ accessToken: "jwt-token", jobId: "not-ready-job" }),
+    ).rejects.toThrow("Analysis job_id=... is not ready yet");
+  });
+
+  it("throws an AnalysisApiError instance carrying the 404 status code", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse(404, { detail: "No analysis job found" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const error = await fetchAnalysisResult({
+      accessToken: "jwt-token",
+      jobId: "missing-job",
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(AnalysisApiError);
+    expect((error as AnalysisApiError).status).toBe(404);
   });
 });
