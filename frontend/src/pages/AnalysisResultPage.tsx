@@ -1,6 +1,6 @@
 // frontend/src/pages/AnalysisResultPage.tsx
 // AIRP -- Analysis Result page (T-057 placeholder, live viewer added T-059,
-// debate tab added T-060, full results panel added T-061)
+// debate tab added T-060, full results panel added T-061, charts added T-062)
 //
 // T-057 built this route purely as an honest "coming soon" placeholder
 // -- the target AnalysisPage.tsx (T-058) redirects to right after
@@ -25,14 +25,28 @@
 // return a 409 for it (see backend/routers/analysis.py's docstring on
 // get_analysis_result_endpoint) -- there is no decision to fetch for a
 // failed run.
+//
+// T-062 fetches GET /api/v1/analysis/{job_id}/charts (useAnalysisCharts)
+// under the identical gate and renders <ChartsPanel> alongside
+// <ResultsPanel> -- a second, independent query rather than folding
+// chart data into the T-061 result fetch, since the two endpoints
+// have very different failure characteristics (GET /result's decision
+// is a single already-computed dict with no partial-failure states;
+// GET /charts's own five sources can each independently come back
+// null/empty, per that endpoint's docstring) and very different
+// payload sizes (a year of daily price points vs one JSON memo) --
+// keeping them as separate queries means a slow/failed charts fetch
+// never blocks the Investment Memo from rendering, and vice versa.
 
 import { useState } from "react";
 import { useParams } from "react-router-dom";
 
+import { ChartsPanel } from "@/components/charts";
 import { DebateViewer } from "@/components/debate/DebateViewer";
 import { AgentProgressBoard } from "@/components/progress/AgentProgressBoard";
 import { ResultsPanel } from "@/components/results";
 import { Spinner } from "@/components/ui";
+import { useAnalysisCharts } from "@/hooks/useAnalysisCharts";
 import { useAnalysisResult } from "@/hooks/useAnalysisResult";
 import { useAnalysisStream } from "@/hooks/useAnalysisStream";
 import { useAuth } from "@/hooks/useAuth";
@@ -65,6 +79,17 @@ export function AnalysisResultPage(): JSX.Element {
     isError: isResultError,
     error: resultError,
   } = useAnalysisResult({
+    jobId: jobId ?? "",
+    accessToken,
+    enabled: jobId !== undefined && isComplete && !hasFailed,
+  });
+
+  const {
+    data: chartData,
+    isPending: isChartsPending,
+    isError: isChartsError,
+    error: chartsError,
+  } = useAnalysisCharts({
     jobId: jobId ?? "",
     accessToken,
     enabled: jobId !== undefined && isComplete && !hasFailed,
@@ -153,6 +178,27 @@ export function AnalysisResultPage(): JSX.Element {
               {decision ? (
                 <div className="mt-6">
                   <ResultsPanel decision={decision} />
+                </div>
+              ) : null}
+
+              {isChartsPending && !isResultPending ? (
+                <div className="mt-6 flex items-center gap-2 text-sm text-muted">
+                  <Spinner size="sm" aria-hidden="true" />
+                  Loading charts…
+                </div>
+              ) : null}
+
+              {isChartsError ? (
+                <p className="mt-6 text-sm text-verdict-sell">
+                  {chartsError instanceof Error
+                    ? chartsError.message
+                    : "Could not load the charts. Please try refreshing the page."}
+                </p>
+              ) : null}
+
+              {chartData ? (
+                <div className="mt-6">
+                  <ChartsPanel data={chartData} />
                 </div>
               ) : null}
             </>

@@ -113,3 +113,74 @@ export interface InvestmentDecisionResponse {
   /** One-sentence summary suitable for dashboard display. */
   summary: string;
 }
+
+/**
+ * Mirrors backend.models.schemas.PricePointResponse (T-062). One day
+ * of the 1-year stock price series.
+ */
+export interface PricePointResponse {
+  date: string;
+  close: number;
+  volume: number;
+}
+
+/**
+ * Mirrors backend.models.schemas.RevenueProfitPointResponse (T-062).
+ * One fiscal year of the revenue/net-income trend.
+ */
+export interface RevenueProfitPointResponse {
+  fiscal_year: string;
+  revenue_crores: number | null;
+  net_income_crores: number | null;
+}
+
+/** Mirrors backend.models.schemas.ValuationChartResponse (T-062). */
+export interface ValuationChartResponse {
+  pe_ratio: number | null;
+  sector_avg_pe: number | null;
+  pb_ratio: number | null;
+  sector_avg_pb: number | null;
+  ev_ebitda: number | null;
+  sector_avg_ev_ebitda: number | null;
+  peer_tickers: string[];
+}
+
+/** Mirrors backend.models.schemas.SentimentChartResponse (T-062). */
+export interface SentimentChartResponse {
+  sentiment_score: number;
+  sentiment_label: string;
+  articles_analysed: number;
+  positive_articles: number;
+  negative_articles: number;
+  neutral_articles: number;
+}
+
+/** Mirrors backend.models.schemas.RiskRadarResponse (T-062). */
+export interface RiskRadarResponse {
+  risk_score: number;
+  governance_risk: number;
+  regulatory_risk: number;
+  financial_risk: number;
+  concentration_risk: number;
+}
+
+/**
+ * Mirrors backend.models.schemas.AnalysisChartDataResponse (T-062).
+ * Returned by GET /api/v1/analysis/{job_id}/charts. ``valuation``/
+ * ``sentiment``/``risk`` are null, and ``price_history``/``financials``
+ * can be empty arrays, when that source could not be populated --
+ * every chart source degrades independently rather than the whole
+ * request failing; see ``data_warnings`` for which source(s), if any.
+ */
+export interface AnalysisChartDataResponse {
+  job_id: string;
+  ticker: string;
+  company_name: string;
+  price_currency: string;
+  price_history: PricePointResponse[];
+  financials: RevenueProfitPointResponse[];
+  valuation: ValuationChartResponse | null;
+  sentiment: SentimentChartResponse | null;
+  risk: RiskRadarResponse | null;
+  data_warnings: string[];
+}

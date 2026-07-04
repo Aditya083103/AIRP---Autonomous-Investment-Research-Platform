@@ -1,15 +1,15 @@
 # AIRP -- Investment Pipeline Graph Diagram
 
 > **Auto-generated** by `backend/graph/graph_visualisation.py`
-> on every `build_graph()` call. **Do not edit manually** -- your
+> on every `build_graph()` call.  **Do not edit manually** -- your
 > changes will be overwritten on the next graph compile.
 >
-> Generated: 2026-07-04 08:04:27 UTC
+> Generated: 2026-07-04 09:24:16 UTC
 
 ## Overview
 
 The diagram below shows the complete AIRP LangGraph StateGraph topology
-as of the most recent graph compilation. All 12 nodes and their edges
+as of the most recent graph compilation.  All 12 nodes and their edges
 are shown including the parallel research fan-out, the conditional routing
 join, the debate loop, and the sequential tail.
 
