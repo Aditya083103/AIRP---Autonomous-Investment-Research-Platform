@@ -139,8 +139,30 @@ export function useAnalysisStream(options: UseAnalysisStreamOptions): UseAnalysi
   // one has already started receiving events, corrupting ordering.
   const isCurrentEffectRef = useRef(true);
 
+  // Tracks whether an event with is_final: true has already been
+  // received, independent of React's render cycle. onclose needs this
+  // check but cannot rely on the `events` state variable directly --
+  // that would be a stale closure captured when the effect first ran,
+  // not the live value as messages arrive. A ref updated synchronously
+  // in onmessage is the correct tool here, not a dependency-array trick.
+  //
+  // Why this matters: Vite's dev server proxy (vite.config.ts's /api
+  // rule, ws: true) does not reliably relay the backend's clean
+  // WebSocket close(code=1000) through to the browser -- in practice
+  // this has been observed to surface to the browser as an abnormal
+  // closure (code 1006), a known limitation of the http-proxy library
+  // Vite's dev proxy uses for WebSocket teardown, not a bug in the
+  // backend (backend/routers/websocket.py does call
+  // websocket.close(code=1000) on every is_final event) or in this
+  // hook's close-handling logic itself. Once the terminal event has
+  // already been delivered and rendered, any close that follows -- of
+  // whatever code -- is not an "unexpected" disconnect from the user's
+  // point of view; the analysis is already complete on screen.
+  const receivedFinalEventRef = useRef(false);
+
   useEffect(() => {
     isCurrentEffectRef.current = true;
+    receivedFinalEventRef.current = false;
 
     if (!enabled || jobId === "" || token === "") {
       return undefined;
@@ -178,6 +200,10 @@ export function useAnalysisStream(options: UseAnalysisStreamOptions): UseAnalysi
         return;
       }
 
+      if (parsed.is_final) {
+        receivedFinalEventRef.current = true;
+      }
+
       // Append, never replace -- preserves arrival order for every
       // consumer of `events`, which is the literal acceptance criterion
       // ("frontend receives and displays in order").
@@ -200,7 +226,13 @@ export function useAnalysisStream(options: UseAnalysisStreamOptions): UseAnalysi
         setError("Not authorized to view this analysis (invalid or expired token).");
       } else if (closeEvent.code === 4404) {
         setError("Analysis job not found, or it does not belong to you.");
-      } else if (closeEvent.code !== 1000) {
+      } else if (closeEvent.code !== 1000 && !receivedFinalEventRef.current) {
+        // Only surface this as an error if the stream ended before the
+        // pipeline actually finished. If the terminal event already
+        // arrived, whatever code the browser reports here (commonly
+        // 1006 through Vite's dev proxy -- see receivedFinalEventRef's
+        // declaration above) is just normal teardown after a completed
+        // analysis, not a disconnect the user needs to know about.
         setError(`Connection closed unexpectedly (code ${closeEvent.code}).`);
       }
     };

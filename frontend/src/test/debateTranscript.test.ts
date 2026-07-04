@@ -115,6 +115,49 @@ describe("messagesForRound", () => {
   });
 });
 
+describe("buildDebateTranscript status derivation (bugfix)", () => {
+  it("shows 'completed' for a past turn even when the wire status is still 'running'", () => {
+    // Regression test: backend/graph/nodes.py's _run_broadcast sets each
+    // event's `status` field from the overall pipeline's InvestmentState
+    // status, which stays "running" for virtually the whole analysis --
+    // only the very last event ever carries "completed". Before this
+    // fix, every past turn's badge showed "running" even though that
+    // agent had clearly already finished speaking.
+    const [message] = buildDebateTranscript([
+      makeEvent({
+        agent: "fundamental_analyst",
+        status: "running",
+        output_preview: "Fundamental score 7/10",
+      }),
+    ]);
+
+    expect(message?.status).toBe("completed");
+  });
+
+  it("shows 'failed' when this agent's own output_preview is prefixed 'Failed:'", () => {
+    const [message] = buildDebateTranscript([
+      makeEvent({
+        agent: "technical_analyst",
+        status: "running",
+        output_preview: "Failed: yfinance rate limited",
+      }),
+    ]);
+
+    expect(message?.status).toBe("failed");
+  });
+
+  it("does not mistake 'failed' appearing mid-sentence for the Failed: prefix", () => {
+    const [message] = buildDebateTranscript([
+      makeEvent({
+        agent: "risk_officer",
+        output_preview: "Risk score 4/10 -- 2 flag(s) raised, none failed audits",
+      }),
+    ]);
+
+    expect(message?.status).toBe("completed");
+  });
+});
+
 describe("DEBATE_ROUND_LABELS", () => {
   it("provides a label for all three rounds", () => {
     expect(DEBATE_ROUND_LABELS[1]).toMatch(/research/i);

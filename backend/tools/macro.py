@@ -103,13 +103,34 @@ MACRO_CACHE_KEY = "airp:macro:india"
 _DEFAULT_CACHE_TTL_MACRO = 86400  # 24h
 
 # Shared HTTP settings
-_HTTP_TIMEOUT = 15  # seconds
+#
+# _HTTP_TIMEOUT and _RETRY_ATTEMPTS were 15s / 3 attempts with exponential
+# backoff up to 30s between retries -- worst case for ONE source alone:
+# 15 (attempt 1) + 2 (wait) + 15 (attempt 2) + 4 (wait) + 15 (attempt 3)
+# = 51 seconds. This node calls up to 3 sources sequentially (RBI-ish,
+# MOSPI, World Bank -- see the three _http_get call sites below), so a
+# single slow/unresponsive source could alone exceed the entire 30s node
+# timeout (backend.graph.node_profiler.NODE_TIMEOUT_S) before even
+# reaching this agent's LLM synthesis call at the end -- exactly what was
+# observed in production: World Bank alone pushed macro_economist to
+# 53.1s. Retrying a government/international API that just timed out at
+# a shortened budget rarely helps within one request cycle, and every
+# field this node produces from these sources already degrades
+# gracefully to None with a warning on failure (ScrapeBlockedError et
+# al.) -- so a fast, single-attempt failure is strictly better here than
+# a slow one that still ends in the same degraded result. New worst case
+# for all 3 sources combined: 3 x 5s = 15s, leaving real headroom for the
+# LLM call that follows.
+_HTTP_TIMEOUT = 5  # seconds
 _USER_AGENT = "AIRP/1.0 (Autonomous Investment Research Platform)"
 
-# Retry policy: 3 attempts, exponential back-off 2s -> 30s, on transient errors
-_RETRY_ATTEMPTS = 3
-_RETRY_WAIT_MIN = 2
-_RETRY_WAIT_MAX = 30
+# Retry policy: 1 attempt (no retry) on transient errors -- see the
+# rationale in the _HTTP_TIMEOUT comment above for why a retry here does
+# more harm (budget consumed) than good (a source that just timed out
+# essentially never succeeds on an immediate second attempt).
+_RETRY_ATTEMPTS = 1
+_RETRY_WAIT_MIN = 1
+_RETRY_WAIT_MAX = 2
 
 # HTTP status codes that mean "the scraper was blocked / throttled" — these are
 # surfaced as ScrapeBlockedError so the field degrades to None with a warning.

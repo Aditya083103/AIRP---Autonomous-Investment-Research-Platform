@@ -34,8 +34,22 @@ export interface DebateTranscriptMessage {
   displayName: string;
   seat: number;
   round: 1 | 2 | 3;
-  /** Raw status string off the wire (e.g. "running", "completed", "failed"). */
-  status: string;
+  /**
+   * Derived per-message status: "failed" if this agent's own turn
+   * errored, otherwise "completed". Deliberately NOT event.status --
+   * that field carries the overall InvestmentState's pipeline-wide
+   * status (backend/graph/nodes.py's _run_broadcast reads
+   * merged["status"]), which stays "running" for essentially the
+   * entire analysis and only flips once, at the very last event. Using
+   * it directly here made every past turn's badge show "running" even
+   * though that agent had clearly already finished speaking -- only
+   * the final Portfolio Manager message ever showed "completed". Each
+   * message already having arrived means that node's own execution is
+   * done; "failed" vs "completed" should describe *that* agent's own
+   * outcome, which _build_output_preview already signals reliably via
+   * its "Failed: <message>" prefix on a failed agent's output_preview.
+   */
+  status: "completed" | "failed";
   /** The message body -- AgentStreamEvent.output_preview, unmodified. */
   content: string;
   /** 1-based position of this message among ALL agent messages, in arrival order. */
@@ -79,7 +93,7 @@ export function buildDebateTranscript(
       displayName: roster.displayName,
       seat: roster.seat,
       round: roster.round,
-      status: event.status,
+      status: event.output_preview.startsWith("Failed:") ? "failed" : "completed",
       content: event.output_preview,
       turn: messages.length + 1,
     });

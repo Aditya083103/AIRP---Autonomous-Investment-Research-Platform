@@ -171,4 +171,64 @@ describe("useAnalysisStream", () => {
 
     expect(socket.closed).toBe(true);
   });
+
+  it("surfaces an error for a non-1000 close before the pipeline finished", async () => {
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+
+    const { result } = renderHook(() => useAnalysisStream({ jobId: "job-1", token: "jwt-token" }));
+
+    act(() => {
+      lastSocket().emitClose(1006);
+    });
+
+    await waitFor(() =>
+      expect(result.current.error).toBe("Connection closed unexpectedly (code 1006)."),
+    );
+  });
+
+  it("does not surface an error for a non-1000 close after is_final already arrived", async () => {
+    // Regression test: Vite's dev server proxy (vite.config.ts's /api
+    // rule) does not reliably relay the backend's clean
+    // websocket.close(code=1000) through to the browser once
+    // backend/routers/websocket.py sends the terminal event -- this has
+    // been observed surfacing to the browser as an abnormal closure
+    // (code 1006) on a fully successful analysis. Once the terminal
+    // event has already been rendered, that should never read as an
+    // error to the user.
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+
+    const { result } = renderHook(() => useAnalysisStream({ jobId: "job-1", token: "jwt-token" }));
+
+    act(() => {
+      lastSocket().emitMessage(EVENT_2); // is_final: true
+    });
+    await waitFor(() => expect(result.current.isComplete).toBe(true));
+
+    act(() => {
+      lastSocket().emitClose(1006);
+    });
+
+    // Give any (incorrect) error-setting state update a chance to land
+    // before asserting its absence.
+    await waitFor(() => expect(result.current.error).toBeNull());
+  });
+
+  it("still surfaces 4401/4404 even after is_final (edge case, defensive)", async () => {
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+
+    const { result } = renderHook(() => useAnalysisStream({ jobId: "job-1", token: "jwt-token" }));
+
+    act(() => {
+      lastSocket().emitMessage(EVENT_2);
+    });
+    await waitFor(() => expect(result.current.isComplete).toBe(true));
+
+    act(() => {
+      lastSocket().emitClose(4404);
+    });
+
+    await waitFor(() =>
+      expect(result.current.error).toBe("Analysis job not found, or it does not belong to you."),
+    );
+  });
 });
