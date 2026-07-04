@@ -62,3 +62,54 @@ export interface DocumentUploadResponse {
   doc_type: string;
   chunks_ingested: number;
 }
+
+/**
+ * Mirrors backend.models.schemas.InvestmentDecisionResponse (T-050
+ * backend / T-061 frontend). Returned by GET
+ * /api/v1/analysis/{job_id}/result -- field-for-field identical to the
+ * Portfolio Manager agent's InvestmentDecision output, round-tripped
+ * through analyses.state_snapshot with no further computation on the
+ * backend, so this type does not add any field the backend router
+ * doesn't already guarantee.
+ */
+export interface InvestmentDecisionResponse {
+  /** Always "portfolio_manager" -- the agent that produced this decision. */
+  agent_name: string;
+  /** UUID of the parent Analysis job, as a string -- same value as the route's job_id. */
+  analysis_id: string;
+  company_name: string;
+  ticker: string;
+  /** ISO-8601 UTC timestamp string. */
+  generated_at: string;
+  /** Always null for a result this endpoint returns; kept for schema parity. */
+  error: string | null;
+
+  verdict: Verdict;
+  /** Portfolio Manager confidence in the verdict, 1-10. */
+  conviction_score: number;
+  /** Implied price target (e.g. "₹4,200 (12-month)"), or null if inconclusive. */
+  price_target: string | null;
+  /** Suggested holding period for this verdict, e.g. "12 months". */
+  time_horizon: string;
+
+  executive_summary: string;
+  investment_thesis: string;
+  bull_case: string;
+  bear_case: string;
+  risk_summary: string;
+  valuation_summary: string;
+
+  /** Structured top risks, critical Risk Officer flags first, capped at 6. */
+  key_risks: string[];
+  /** Structured factors that could move the thesis forward, capped at 5. */
+  key_catalysts: string[];
+
+  /** How the Portfolio Manager addressed the Contrarian's strongest argument. */
+  contrarian_response: string;
+  /** Number of agent debate rounds completed before this decision. */
+  debate_rounds_used: number;
+  /** Weight (0.0-1.0) assigned to each agent's output, keyed by agent_name. */
+  agent_weights: Record<string, number>;
+  /** One-sentence summary suitable for dashboard display. */
+  summary: string;
+}

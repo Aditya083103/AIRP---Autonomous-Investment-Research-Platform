@@ -1,12 +1,13 @@
 // frontend/src/api/analysis.ts
-// AIRP -- Analysis API client (T-057, extended in T-058)
+// AIRP -- Analysis API client (T-057, extended in T-058 and T-061)
 //
-// Thin fetch wrappers around three backend/routers/analysis.py and
+// Thin fetch wrappers around backend/routers/analysis.py and
 // backend/routers/documents.py endpoints:
-//   - GET  /api/v1/analysis/history  (T-050) -- fetchAnalysisHistory
-//   - POST /api/v1/analysis/start    (T-047) -- startAnalysis
-//   - POST /api/v1/documents/upload  (T-051) -- uploadDocument
-// All three authenticate via a Bearer Authorization header rather than
+//   - GET  /api/v1/analysis/history          (T-050) -- fetchAnalysisHistory
+//   - POST /api/v1/analysis/start            (T-047) -- startAnalysis
+//   - POST /api/v1/documents/upload          (T-051) -- uploadDocument
+//   - GET  /api/v1/analysis/{job_id}/result  (T-050) -- fetchAnalysisResult
+// All four authenticate via a Bearer Authorization header rather than
 // the httpOnly cookie -- called with the in-memory accessToken from
 // useAuth(), the same token useAnalysisStream.ts already needs for its
 // WebSocket `?token=` parameter (see AuthProvider.tsx's docstring for
@@ -24,6 +25,7 @@ import {
   type AnalysisStartResponse,
   type DocumentUploadResponse,
   type HistoryResponse,
+  type InvestmentDecisionResponse,
 } from "@/types/analysis";
 
 export class AnalysisApiError extends Error {
@@ -197,4 +199,40 @@ export async function uploadDocument({
     throw new AnalysisApiError(response.status, await parseErrorDetail(response));
   }
   return (await response.json()) as DocumentUploadResponse;
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/v1/analysis/{job_id}/result (T-050, consumed by the T-061 results page)
+// ---------------------------------------------------------------------------
+
+export interface FetchAnalysisResultParams {
+  /** Bearer token from useAuth().accessToken. Callers must not call this with a null token. */
+  accessToken: string;
+  jobId: string;
+}
+
+/**
+ * GET /api/v1/analysis/{job_id}/result -- the full InvestmentDecision
+ * produced by the Portfolio Manager agent.
+ *
+ * Callers should only invoke this once the analysis stream (T-049) has
+ * reported `is_final: true` with a non-failed status; the backend
+ * returns 409 for a job that exists but has not reached
+ * status='completed' yet (see backend/routers/analysis.py's docstring
+ * on get_analysis_result_endpoint), which surfaces here as an
+ * AnalysisApiError the same way any other non-2xx response does.
+ */
+export async function fetchAnalysisResult({
+  accessToken,
+  jobId,
+}: FetchAnalysisResultParams): Promise<InvestmentDecisionResponse> {
+  const response = await fetch(`${env.apiBaseUrl}/analysis/${jobId}/result`, {
+    method: "GET",
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+
+  if (!response.ok) {
+    throw new AnalysisApiError(response.status, await parseErrorDetail(response));
+  }
+  return (await response.json()) as InvestmentDecisionResponse;
 }
