@@ -16,13 +16,13 @@ creates all tables and Enum types from scratch.
 
 **Five tables created:**
 
-| Table | Purpose |
-|-------|---------|
-| `users` | Local user record per Clerk-authenticated user |
-| `companies` | Normalised company/ticker registry (NSE + BSE) |
-| `analyses` | One row per analysis job; full lifecycle tracking |
-| `agent_outputs` | Raw JSONB output per agent per analysis (up to 8 rows) |
-| `investment_memos` | Final BUY/HOLD/SELL verdict + PDF memo path |
+| Table              | Purpose                                                |
+| ------------------ | ------------------------------------------------------ |
+| `users`            | Local user record per Clerk-authenticated user         |
+| `companies`        | Normalised company/ticker registry (NSE + BSE)         |
+| `analyses`         | One row per analysis job; full lifecycle tracking      |
+| `agent_outputs`    | Raw JSONB output per agent per analysis (up to 8 rows) |
+| `investment_memos` | Final BUY/HOLD/SELL verdict + PDF memo path            |
 
 **Key design decisions:**
 
@@ -46,18 +46,18 @@ creates all tables and Enum types from scratch.
 
 ## Files Created in This Task
 
-| File | Action | Purpose |
-|------|--------|---------|
-| `backend/models/orm.py` | **CREATE** | SQLAlchemy ORM models for all 5 tables, 4 Enum types, relationships |
-| `backend/models/__init__.py` | **CREATE** | Package marker; exports `Base` + all model classes |
-| `backend/db/session.py` | **CREATE** | Async engine factory, `AsyncSessionLocal`, `get_async_session` dependency |
-| `backend/db/__init__.py` | **CREATE** | Package marker |
-| `backend/migrations/env.py` | **CREATE** | Alembic env wired to async engine + AIRP metadata |
-| `backend/migrations/script.py.mako` | **CREATE** | Migration file template |
-| `backend/migrations/versions/20240101_0000_a1b2c3d4e5f6_initial_schema.py` | **CREATE** | Initial migration — creates all 5 tables + 4 Enum types |
-| `backend/alembic.ini` | **CREATE** | Alembic configuration (URL resolved from settings, not hardcoded) |
-| `backend/tests/unit/test_orm_models.py` | **CREATE** | 76 unit tests — metadata inspection, column nullability, FKs, relationships, repr |
-| `docs/week-03/T-016-setup-postgres-schema.md` | **CREATE** | This file |
+| File                                                                       | Action     | Purpose                                                                           |
+| -------------------------------------------------------------------------- | ---------- | --------------------------------------------------------------------------------- |
+| `backend/models/orm.py`                                                    | **CREATE** | SQLAlchemy ORM models for all 5 tables, 4 Enum types, relationships               |
+| `backend/models/__init__.py`                                               | **CREATE** | Package marker; exports `Base` + all model classes                                |
+| `backend/db/session.py`                                                    | **CREATE** | Async engine factory, `AsyncSessionLocal`, `get_async_session` dependency         |
+| `backend/db/__init__.py`                                                   | **CREATE** | Package marker                                                                    |
+| `backend/migrations/env.py`                                                | **CREATE** | Alembic env wired to async engine + AIRP metadata                                 |
+| `backend/migrations/script.py.mako`                                        | **CREATE** | Migration file template                                                           |
+| `backend/migrations/versions/20240101_0000_a1b2c3d4e5f6_initial_schema.py` | **CREATE** | Initial migration — creates all 5 tables + 4 Enum types                           |
+| `backend/alembic.ini`                                                      | **CREATE** | Alembic configuration (URL resolved from settings, not hardcoded)                 |
+| `backend/tests/unit/test_orm_models.py`                                    | **CREATE** | 76 unit tests — metadata inspection, column nullability, FKs, relationships, repr |
+| `docs/week-03/T-016-setup-postgres-schema.md`                              | **CREATE** | This file                                                                         |
 
 ---
 
@@ -177,6 +177,7 @@ ENVIRONMENT=test python -m pytest backend/tests/unit/test_orm_models.py -v
 ```
 
 Expected output:
+
 ```
 backend/tests/unit/test_orm_models.py::TestModelsImport::test_base_importable PASSED
 ...
@@ -186,6 +187,7 @@ backend/tests/unit/test_orm_models.py::TestSession::test_build_database_url_uses
 ```
 
 Full suite regression check:
+
 ```bash
 python -m pytest --tb=short
 # → all passed (T-010 through T-016 tests)
@@ -242,6 +244,7 @@ git commit -m "feat(db): PostgreSQL schema — 5 tables, Alembic migration, asyn
 ```
 
 If pre-commit auto-fixes formatting (black / isort), the commit aborts. Run:
+
 ```bash
 git add .
 git commit -m "feat(db): PostgreSQL schema — 5 tables, Alembic migration, async session"
@@ -262,13 +265,14 @@ CI will run automatically.
 ### Step 7 — Open Pull Request on GitHub
 
 **PR Title:**
+
 ```
 feat(db): PostgreSQL schema — 5 tables, Alembic migration, async session
 ```
 
 **PR Description:**
 
-```markdown
+````markdown
 ## Summary
 
 Implements T-016: the complete AIRP PostgreSQL schema as SQLAlchemy ORM models
@@ -302,6 +306,7 @@ python -m pytest backend/tests/unit/test_orm_models.py -v
 python -m pytest --tb=short
 # → all passed, 0 regressions
 ```
+````
 
 ## LangSmith Trace
 
@@ -314,6 +319,7 @@ Not applicable — database schema task, no LLM calls.
 ## Related Issues
 
 Closes #16
+
 ```
 
 ---
@@ -360,12 +366,16 @@ that appears when pytest exits with a live pool.
 ## EOD Update Template
 
 ```
+
 EOD Update [DATE]:
 Completed: T-016
 Merged to main: feat/data-postgres-schema
 Current week: 3 | Current phase: 1
 Blocker: None
 Next session: T-017 — Setup ChromaDB + embed earnings transcripts
-  (chunk TranscriptResult.transcript_text → sentence-transformers embeddings
-   → store in ChromaDB collection for RAG retrieval by News Sentiment Agent)
+(chunk TranscriptResult.transcript_text → sentence-transformers embeddings
+→ store in ChromaDB collection for RAG retrieval by News Sentiment Agent)
+
+```
+
 ```

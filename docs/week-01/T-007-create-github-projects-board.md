@@ -1,17 +1,17 @@
 # T-007 — Create GitHub Projects Board
 
-| Field           | Detail                                   |
-|-----------------|------------------------------------------|
-| **Task ID**     | T-007                                    |
-| **Phase**       | 0 — Project Setup & Standards            |
-| **Week**        | 1                                        |
-| **Branch**      | `setup/project-board`                    |
-| **Commit prefix** | `chore: setup project board`           |
-| **PR Title**    | `chore: initialise GitHub Projects kanban board` |
-| **Priority**    | 🟡 High                                  |
-| **Est. Hours**  | 1                                        |
-| **Status**      | 🔲 To Do                                 |
-| **Depends on**  | T-001 (repo exists), T-002 (folder structure merged) |
+| Field             | Detail                                               |
+| ----------------- | ---------------------------------------------------- |
+| **Task ID**       | T-007                                                |
+| **Phase**         | 0 — Project Setup & Standards                        |
+| **Week**          | 1                                                    |
+| **Branch**        | `setup/project-board`                                |
+| **Commit prefix** | `chore: setup project board`                         |
+| **PR Title**      | `chore: initialise GitHub Projects kanban board`     |
+| **Priority**      | 🟡 High                                              |
+| **Est. Hours**    | 1                                                    |
+| **Status**        | 🔲 To Do                                             |
+| **Depends on**    | T-001 (repo exists), T-002 (folder structure merged) |
 
 ---
 
@@ -31,13 +31,13 @@ Project Overview: _every change goes through a PR that closes at least one GitHu
 ## Acceptance Criteria
 
 | Criteria                                                                   | Status |
-|----------------------------------------------------------------------------|--------|
+| -------------------------------------------------------------------------- | ------ |
 | GitHub Projects (v2) board created and linked to the `airp` repository     | 🔲     |
 | Board has exactly 4 columns: Backlog / In Progress / In Review / Done      | 🔲     |
 | All 9 phase milestones created with titles, descriptions, and no due dates | 🔲     |
 | All 80 tasks (T-001 to T-080) exist as GitHub Issues                       | 🔲     |
 | Each issue is labelled with its phase, type, and priority                  | 🔲     |
-| Each issue is assigned to its correct milestone                             | 🔲     |
+| Each issue is assigned to its correct milestone                            | 🔲     |
 | All issues are added to the Project board                                  | 🔲     |
 | Completed tasks T-001 to T-006 are in the **Done** column                  | 🔲     |
 | T-007 itself is in **In Progress** while this task runs                    | 🔲     |
@@ -78,35 +78,38 @@ Labels must exist before issues are created. Create these labels via
 **GitHub → Repository → Issues → Labels → New Label**.
 
 #### Priority labels
-| Label name        | Colour  | Description                          |
-|-------------------|---------|--------------------------------------|
+
+| Label name           | Colour             | Description                       |
+| -------------------- | ------------------ | --------------------------------- |
 | `priority: critical` | `#d73a4a` (red)    | Blocking — must be done first     |
 | `priority: high`     | `#e4e669` (yellow) | Important, schedule this sprint   |
 | `priority: medium`   | `#0075ca` (blue)   | Nice to have, schedule when ready |
 
 #### Type labels
-| Label name      | Colour    | Description                             |
-|-----------------|-----------|-----------------------------------------|
-| `type: feature` | `#0e8a16` | New functionality                       |
-| `type: setup`   | `#5319e7` | Project scaffolding and configuration   |
-| `type: devops`  | `#b60205` | CI/CD, Docker, deployment               |
-| `type: testing` | `#c5def5` | Tests and coverage                      |
-| `type: docs`    | `#bfd4f2` | Documentation only                      |
-| `type: perf`    | `#fbca04` | Performance improvements                |
-| `type: quality` | `#fef2c0` | Code quality, refactoring, cleanup      |
+
+| Label name      | Colour    | Description                           |
+| --------------- | --------- | ------------------------------------- |
+| `type: feature` | `#0e8a16` | New functionality                     |
+| `type: setup`   | `#5319e7` | Project scaffolding and configuration |
+| `type: devops`  | `#b60205` | CI/CD, Docker, deployment             |
+| `type: testing` | `#c5def5` | Tests and coverage                    |
+| `type: docs`    | `#bfd4f2` | Documentation only                    |
+| `type: perf`    | `#fbca04` | Performance improvements              |
+| `type: quality` | `#fef2c0` | Code quality, refactoring, cleanup    |
 
 #### Phase labels
-| Label name    | Colour    | Description                             |
-|---------------|-----------|-----------------------------------------|
-| `phase: 0`    | `#ededed` | Project Setup & Standards               |
-| `phase: 1`    | `#ededed` | Data Layer & APIs                       |
-| `phase: 2`    | `#ededed` | Research Agents                         |
-| `phase: 3`    | `#ededed` | LangGraph Orchestration                 |
-| `phase: 4`    | `#ededed` | Debate Engine & Advanced Agents         |
-| `phase: 5`    | `#ededed` | FastAPI Backend                         |
-| `phase: 6`    | `#ededed` | React Frontend                          |
-| `phase: 7`    | `#ededed` | Evaluation Framework                    |
-| `phase: 8`    | `#ededed` | Polish, Deploy & Launch                 |
+
+| Label name | Colour    | Description                     |
+| ---------- | --------- | ------------------------------- |
+| `phase: 0` | `#ededed` | Project Setup & Standards       |
+| `phase: 1` | `#ededed` | Data Layer & APIs               |
+| `phase: 2` | `#ededed` | Research Agents                 |
+| `phase: 3` | `#ededed` | LangGraph Orchestration         |
+| `phase: 4` | `#ededed` | Debate Engine & Advanced Agents |
+| `phase: 5` | `#ededed` | FastAPI Backend                 |
+| `phase: 6` | `#ededed` | React Frontend                  |
+| `phase: 7` | `#ededed` | Evaluation Framework            |
+| `phase: 8` | `#ededed` | Polish, Deploy & Launch         |
 
 ---
 
@@ -123,6 +126,7 @@ Create each milestone below. Leave due dates blank — AIRP runs on a flexible
 **Title:** `Phase 0 — Project Setup & Standards`
 
 **Description:**
+
 ```
 Establish the engineering foundation for AIRP. By the end of this phase, the
 repository is fully configured with CI/CD, pre-commit hooks, documented
@@ -139,6 +143,7 @@ Tasks: T-001 to T-008 | Week: 1 | Deliverable: Repo live, CI passing, all accoun
 **Title:** `Phase 1 — Data Layer & APIs`
 
 **Description:**
+
 ```
 Build and test all LangChain data tools that agents will use to gather
 financial, news, and macroeconomic data. Set up PostgreSQL on Neon, ChromaDB
@@ -155,6 +160,7 @@ Tasks: T-009 to T-020 | Weeks: 2–4 | Deliverable: All data tools tested and do
 **Title:** `Phase 2 — Research Agents`
 
 **Description:**
+
 ```
 Build the four parallel research agents: Fundamental Analyst, Technical Analyst,
 News Sentiment Agent, and Macro Economist. Each agent must return a validated
@@ -171,6 +177,7 @@ Tasks: T-021 to T-028 | Weeks: 5–7 | Deliverable: 4 agents live with LangSmith
 **Title:** `Phase 3 — LangGraph Orchestration`
 
 **Description:**
+
 ```
 Wire all four research agents into a LangGraph StateGraph with the
 InvestmentState TypedDict. Implement parallel execution via the Send API,
@@ -187,6 +194,7 @@ Tasks: T-029 to T-036 | Weeks: 8–10 | Deliverable: Full StateGraph with parall
 **Title:** `Phase 4 — Debate Engine & Advanced Agents`
 
 **Description:**
+
 ```
 Build the four advanced agents (Risk Officer, Contrarian Investor, Valuation
 Agent, Portfolio Manager) and implement the adversarial multi-round debate loop.
@@ -203,6 +211,7 @@ Tasks: T-037 to T-044 | Weeks: 11–13 | Deliverable: Full debate loop and downl
 **Title:** `Phase 5 — FastAPI Backend`
 
 **Description:**
+
 ```
 Build the FastAPI backend that exposes the agent pipeline to the frontend.
 Includes JWT authentication, the analysis trigger endpoint, status polling,
@@ -219,6 +228,7 @@ Tasks: T-045 to T-052 | Weeks: 14–16 | Deliverable: All API endpoints live wit
 **Title:** `Phase 6 — React Frontend`
 
 **Description:**
+
 ```
 Build the complete React 18 + TypeScript frontend. Includes the design system,
 landing page, auth pages, dashboard, live agent progress viewer (WebSocket),
@@ -235,6 +245,7 @@ Tasks: T-053 to T-066 | Weeks: 17–20 | Deliverable: Full UI end-to-end on desk
 **Title:** `Phase 7 — Evaluation Framework`
 
 **Description:**
+
 ```
 Build LangSmith evaluation suites for the Fundamental Analyst, Sentiment Agent,
 and debate loop. Run end-to-end latency benchmarks with a p50 target of under
@@ -251,6 +262,7 @@ Tasks: T-067 to T-072 | Weeks: 21–22 | Deliverable: Eval suites passing, EVALU
 **Title:** `Phase 8 — Polish, Deploy & Launch`
 
 **Description:**
+
 ```
 Dockerise the full stack, deploy backend to Render and frontend to Vercel,
 write the production README with demo GIF, record the 3-minute demo video,
@@ -276,12 +288,12 @@ Tasks: T-073 to T-080 | Weeks: 23–24 | Deliverable: Live public URL, demo vide
 
 Delete any default columns and create exactly these four, in this order:
 
-| Column name   | Description (add as column note)                         |
-|---------------|----------------------------------------------------------|
-| **Backlog**   | All tasks not yet started. Ordered by phase then task ID |
-| **In Progress** | Task currently being worked on. Max 1–2 items at a time |
-| **In Review** | PR is open; waiting for CI to pass                       |
-| **Done**      | PR merged to main; issue closed                          |
+| Column name     | Description (add as column note)                         |
+| --------------- | -------------------------------------------------------- |
+| **Backlog**     | All tasks not yet started. Ordered by phase then task ID |
+| **In Progress** | Task currently being worked on. Max 1–2 items at a time  |
+| **In Review**   | PR is open; waiting for CI to pass                       |
+| **Done**        | PR merged to main; issue closed                          |
 
 ---
 
@@ -295,31 +307,40 @@ Create one GitHub Issue per task. Use this template for every issue title and bo
 
 ```markdown
 ## Task ID
+
 T-XXX
 
 ## Phase & Week
+
 Phase N — Phase Name | Week N
 
 ## Description
+
 [Paste task description from the Master Task List]
 
 ## Acceptance Criteria
+
 [Paste acceptance criteria from the Master Task List]
 
 ## Branch
+
 `branch-name-from-plan`
 
 ## Commit Prefix
+
 `type(scope): description`
 
 ## PR Title
+
 `type(scope): full pr title`
 
 ## Estimated Hours
+
 N hours
 ```
 
 **Assign labels to each issue:**
+
 - Phase label: `phase: N`
 - Type label matching the task type column
 - Priority label matching the priority column
@@ -332,16 +353,16 @@ N hours
 
 Create these 8 issues and assign them to **Milestone: Phase 0 — Project Setup & Standards**.
 
-| Issue title                                              | Labels                                            |
-|----------------------------------------------------------|---------------------------------------------------|
-| `[T-001] Initialise GitHub repository`                   | `phase: 0` `type: setup` `priority: critical`     |
-| `[T-002] Define folder structure`                        | `phase: 0` `type: setup` `priority: critical`     |
-| `[T-003] Configure pre-commit hooks`                     | `phase: 0` `type: devops` `priority: critical`    |
-| `[T-004] Setup GitHub Actions CI`                        | `phase: 0` `type: devops` `priority: critical`    |
-| `[T-005] Create .env.example`                            | `phase: 0` `type: setup` `priority: critical`     |
-| `[T-006] Register all free API accounts`                 | `phase: 0` `type: setup` `priority: critical`     |
-| `[T-007] Create GitHub Projects board`                   | `phase: 0` `type: setup` `priority: high`         |
-| `[T-008] Write initial documentation`                    | `phase: 0` `type: docs` `priority: high`          |
+| Issue title                              | Labels                                         |
+| ---------------------------------------- | ---------------------------------------------- |
+| `[T-001] Initialise GitHub repository`   | `phase: 0` `type: setup` `priority: critical`  |
+| `[T-002] Define folder structure`        | `phase: 0` `type: setup` `priority: critical`  |
+| `[T-003] Configure pre-commit hooks`     | `phase: 0` `type: devops` `priority: critical` |
+| `[T-004] Setup GitHub Actions CI`        | `phase: 0` `type: devops` `priority: critical` |
+| `[T-005] Create .env.example`            | `phase: 0` `type: setup` `priority: critical`  |
+| `[T-006] Register all free API accounts` | `phase: 0` `type: setup` `priority: critical`  |
+| `[T-007] Create GitHub Projects board`   | `phase: 0` `type: setup` `priority: high`      |
+| `[T-008] Write initial documentation`    | `phase: 0` `type: docs` `priority: high`       |
 
 ---
 
@@ -349,20 +370,20 @@ Create these 8 issues and assign them to **Milestone: Phase 0 — Project Setup 
 
 Assign to **Milestone: Phase 1 — Data Layer & APIs**.
 
-| Issue title                                              | Labels                                            |
-|----------------------------------------------------------|---------------------------------------------------|
-| `[T-009] Setup Python backend environment`               | `phase: 1` `type: setup` `priority: critical`     |
-| `[T-010] Build fetch_stock_price tool`                   | `phase: 1` `type: feature` `priority: critical`   |
-| `[T-011] Build fetch_financials tool`                    | `phase: 1` `type: feature` `priority: critical`   |
-| `[T-012] Build fetch_news tool`                          | `phase: 1` `type: feature` `priority: critical`   |
-| `[T-013] Build fetch_ratios tool`                        | `phase: 1` `type: feature` `priority: critical`   |
-| `[T-014] Build fetch_macro_data tool`                    | `phase: 1` `type: feature` `priority: high`       |
-| `[T-015] Build fetch_earnings_transcript tool`           | `phase: 1` `type: feature` `priority: high`       |
-| `[T-016] Setup PostgreSQL schema on Neon DB`             | `phase: 1` `type: setup` `priority: critical`     |
-| `[T-017] Setup ChromaDB and embedding pipeline`          | `phase: 1` `type: setup` `priority: critical`     |
-| `[T-018] Setup Redis caching layer`                      | `phase: 1` `type: setup` `priority: high`         |
-| `[T-019] Write data layer integration tests`             | `phase: 1` `type: testing` `priority: high`       |
-| `[T-020] Document data layer`                            | `phase: 1` `type: docs` `priority: medium`        |
+| Issue title                                     | Labels                                          |
+| ----------------------------------------------- | ----------------------------------------------- |
+| `[T-009] Setup Python backend environment`      | `phase: 1` `type: setup` `priority: critical`   |
+| `[T-010] Build fetch_stock_price tool`          | `phase: 1` `type: feature` `priority: critical` |
+| `[T-011] Build fetch_financials tool`           | `phase: 1` `type: feature` `priority: critical` |
+| `[T-012] Build fetch_news tool`                 | `phase: 1` `type: feature` `priority: critical` |
+| `[T-013] Build fetch_ratios tool`               | `phase: 1` `type: feature` `priority: critical` |
+| `[T-014] Build fetch_macro_data tool`           | `phase: 1` `type: feature` `priority: high`     |
+| `[T-015] Build fetch_earnings_transcript tool`  | `phase: 1` `type: feature` `priority: high`     |
+| `[T-016] Setup PostgreSQL schema on Neon DB`    | `phase: 1` `type: setup` `priority: critical`   |
+| `[T-017] Setup ChromaDB and embedding pipeline` | `phase: 1` `type: setup` `priority: critical`   |
+| `[T-018] Setup Redis caching layer`             | `phase: 1` `type: setup` `priority: high`       |
+| `[T-019] Write data layer integration tests`    | `phase: 1` `type: testing` `priority: high`     |
+| `[T-020] Document data layer`                   | `phase: 1` `type: docs` `priority: medium`      |
 
 ---
 
@@ -370,16 +391,16 @@ Assign to **Milestone: Phase 1 — Data Layer & APIs**.
 
 Assign to **Milestone: Phase 2 — Research Agents**.
 
-| Issue title                                              | Labels                                            |
-|----------------------------------------------------------|---------------------------------------------------|
-| `[T-021] Define Pydantic output models for all agents`   | `phase: 2` `type: feature` `priority: critical`   |
-| `[T-022] Build Fundamental Analyst agent`                | `phase: 2` `type: feature` `priority: critical`   |
-| `[T-023] Build Technical Analyst agent`                  | `phase: 2` `type: feature` `priority: critical`   |
-| `[T-024] Build News Sentiment agent`                     | `phase: 2` `type: feature` `priority: critical`   |
-| `[T-025] Build Macro Economist agent`                    | `phase: 2` `type: feature` `priority: high`       |
-| `[T-026] Connect LangSmith tracing to all agents`        | `phase: 2` `type: devops` `priority: critical`    |
-| `[T-027] Write unit tests for all 4 research agents`     | `phase: 2` `type: testing` `priority: critical`   |
-| `[T-028] Document agent system prompts and design`       | `phase: 2` `type: docs` `priority: high`          |
+| Issue title                                            | Labels                                          |
+| ------------------------------------------------------ | ----------------------------------------------- |
+| `[T-021] Define Pydantic output models for all agents` | `phase: 2` `type: feature` `priority: critical` |
+| `[T-022] Build Fundamental Analyst agent`              | `phase: 2` `type: feature` `priority: critical` |
+| `[T-023] Build Technical Analyst agent`                | `phase: 2` `type: feature` `priority: critical` |
+| `[T-024] Build News Sentiment agent`                   | `phase: 2` `type: feature` `priority: critical` |
+| `[T-025] Build Macro Economist agent`                  | `phase: 2` `type: feature` `priority: high`     |
+| `[T-026] Connect LangSmith tracing to all agents`      | `phase: 2` `type: devops` `priority: critical`  |
+| `[T-027] Write unit tests for all 4 research agents`   | `phase: 2` `type: testing` `priority: critical` |
+| `[T-028] Document agent system prompts and design`     | `phase: 2` `type: docs` `priority: high`        |
 
 ---
 
@@ -387,16 +408,16 @@ Assign to **Milestone: Phase 2 — Research Agents**.
 
 Assign to **Milestone: Phase 3 — LangGraph Orchestration**.
 
-| Issue title                                              | Labels                                            |
-|----------------------------------------------------------|---------------------------------------------------|
-| `[T-029] Define InvestmentState TypedDict`               | `phase: 3` `type: feature` `priority: critical`   |
-| `[T-030] Build LangGraph StateGraph skeleton`            | `phase: 3` `type: feature` `priority: critical`   |
-| `[T-031] Implement parallel research agent execution`    | `phase: 3` `type: feature` `priority: critical`   |
-| `[T-032] Implement conditional routing logic`            | `phase: 3` `type: feature` `priority: critical`   |
-| `[T-033] Implement state persistence`                    | `phase: 3` `type: feature` `priority: high`       |
-| `[T-034] Add graph visualisation export`                 | `phase: 3` `type: feature` `priority: medium`     |
-| `[T-035] Write LangGraph integration tests`              | `phase: 3` `type: testing` `priority: critical`   |
-| `[T-036] Performance profile the pipeline`               | `phase: 3` `type: perf` `priority: high`          |
+| Issue title                                           | Labels                                          |
+| ----------------------------------------------------- | ----------------------------------------------- |
+| `[T-029] Define InvestmentState TypedDict`            | `phase: 3` `type: feature` `priority: critical` |
+| `[T-030] Build LangGraph StateGraph skeleton`         | `phase: 3` `type: feature` `priority: critical` |
+| `[T-031] Implement parallel research agent execution` | `phase: 3` `type: feature` `priority: critical` |
+| `[T-032] Implement conditional routing logic`         | `phase: 3` `type: feature` `priority: critical` |
+| `[T-033] Implement state persistence`                 | `phase: 3` `type: feature` `priority: high`     |
+| `[T-034] Add graph visualisation export`              | `phase: 3` `type: feature` `priority: medium`   |
+| `[T-035] Write LangGraph integration tests`           | `phase: 3` `type: testing` `priority: critical` |
+| `[T-036] Performance profile the pipeline`            | `phase: 3` `type: perf` `priority: high`        |
 
 ---
 
@@ -404,16 +425,16 @@ Assign to **Milestone: Phase 3 — LangGraph Orchestration**.
 
 Assign to **Milestone: Phase 4 — Debate Engine & Advanced Agents**.
 
-| Issue title                                              | Labels                                            |
-|----------------------------------------------------------|---------------------------------------------------|
-| `[T-037] Build Risk Officer agent`                       | `phase: 4` `type: feature` `priority: critical`   |
-| `[T-038] Build Contrarian Investor agent`                | `phase: 4` `type: feature` `priority: critical`   |
-| `[T-039] Build Valuation Agent`                          | `phase: 4` `type: feature` `priority: critical`   |
-| `[T-040] Implement multi-round debate loop`              | `phase: 4` `type: feature` `priority: critical`   |
-| `[T-041] Build Portfolio Manager agent`                  | `phase: 4` `type: feature` `priority: critical`   |
-| `[T-042] Build Investment Memo generator`                | `phase: 4` `type: feature` `priority: critical`   |
-| `[T-043] Add PDF export for Investment Memo`             | `phase: 4` `type: feature` `priority: high`       |
-| `[T-044] Write tests for debate engine`                  | `phase: 4` `type: testing` `priority: critical`   |
+| Issue title                                  | Labels                                          |
+| -------------------------------------------- | ----------------------------------------------- |
+| `[T-037] Build Risk Officer agent`           | `phase: 4` `type: feature` `priority: critical` |
+| `[T-038] Build Contrarian Investor agent`    | `phase: 4` `type: feature` `priority: critical` |
+| `[T-039] Build Valuation Agent`              | `phase: 4` `type: feature` `priority: critical` |
+| `[T-040] Implement multi-round debate loop`  | `phase: 4` `type: feature` `priority: critical` |
+| `[T-041] Build Portfolio Manager agent`      | `phase: 4` `type: feature` `priority: critical` |
+| `[T-042] Build Investment Memo generator`    | `phase: 4` `type: feature` `priority: critical` |
+| `[T-043] Add PDF export for Investment Memo` | `phase: 4` `type: feature` `priority: high`     |
+| `[T-044] Write tests for debate engine`      | `phase: 4` `type: testing` `priority: critical` |
 
 ---
 
@@ -421,16 +442,16 @@ Assign to **Milestone: Phase 4 — Debate Engine & Advanced Agents**.
 
 Assign to **Milestone: Phase 5 — FastAPI Backend**.
 
-| Issue title                                              | Labels                                            |
-|----------------------------------------------------------|---------------------------------------------------|
-| `[T-045] Setup FastAPI project structure`                | `phase: 5` `type: setup` `priority: critical`     |
-| `[T-046] Implement auth with JWT`                        | `phase: 5` `type: feature` `priority: critical`   |
-| `[T-047] Build analysis trigger endpoint`                | `phase: 5` `type: feature` `priority: critical`   |
-| `[T-048] Build analysis status endpoint`                 | `phase: 5` `type: feature` `priority: critical`   |
-| `[T-049] Implement WebSocket for live streaming`         | `phase: 5` `type: feature` `priority: critical`   |
-| `[T-050] Build result and PDF endpoints`                 | `phase: 5` `type: feature` `priority: high`       |
-| `[T-051] Add document upload endpoint`                   | `phase: 5` `type: feature` `priority: high`       |
-| `[T-052] Write API tests with pytest`                    | `phase: 5` `type: testing` `priority: critical`   |
+| Issue title                                      | Labels                                          |
+| ------------------------------------------------ | ----------------------------------------------- |
+| `[T-045] Setup FastAPI project structure`        | `phase: 5` `type: setup` `priority: critical`   |
+| `[T-046] Implement auth with JWT`                | `phase: 5` `type: feature` `priority: critical` |
+| `[T-047] Build analysis trigger endpoint`        | `phase: 5` `type: feature` `priority: critical` |
+| `[T-048] Build analysis status endpoint`         | `phase: 5` `type: feature` `priority: critical` |
+| `[T-049] Implement WebSocket for live streaming` | `phase: 5` `type: feature` `priority: critical` |
+| `[T-050] Build result and PDF endpoints`         | `phase: 5` `type: feature` `priority: high`     |
+| `[T-051] Add document upload endpoint`           | `phase: 5` `type: feature` `priority: high`     |
+| `[T-052] Write API tests with pytest`            | `phase: 5` `type: testing` `priority: critical` |
 
 ---
 
@@ -438,22 +459,22 @@ Assign to **Milestone: Phase 5 — FastAPI Backend**.
 
 Assign to **Milestone: Phase 6 — React Frontend**.
 
-| Issue title                                              | Labels                                            |
-|----------------------------------------------------------|---------------------------------------------------|
-| `[T-053] Setup React project`                            | `phase: 6` `type: setup` `priority: critical`     |
-| `[T-054] Build design system and components`             | `phase: 6` `type: feature` `priority: high`       |
-| `[T-055] Build Landing Page`                             | `phase: 6` `type: feature` `priority: high`       |
-| `[T-056] Build Auth pages`                               | `phase: 6` `type: feature` `priority: critical`   |
-| `[T-057] Build Dashboard page`                           | `phase: 6` `type: feature` `priority: high`       |
-| `[T-058] Build Analysis Input page`                      | `phase: 6` `type: feature` `priority: critical`   |
-| `[T-059] Build live Agent Progress viewer`               | `phase: 6` `type: feature` `priority: critical`   |
-| `[T-060] Build Debate Viewer`                            | `phase: 6` `type: feature` `priority: critical`   |
-| `[T-061] Build Analysis Results page`                    | `phase: 6` `type: feature` `priority: critical`   |
-| `[T-062] Build charts and visualisations`                | `phase: 6` `type: feature` `priority: high`       |
-| `[T-063] Build Investment Memo page`                     | `phase: 6` `type: feature` `priority: high`       |
-| `[T-064] Build Company Compare page`                     | `phase: 6` `type: feature` `priority: medium`     |
-| `[T-065] Responsive design and mobile pass`              | `phase: 6` `type: quality` `priority: high`       |
-| `[T-066] Frontend error handling and loading states`     | `phase: 6` `type: quality` `priority: high`       |
+| Issue title                                          | Labels                                          |
+| ---------------------------------------------------- | ----------------------------------------------- |
+| `[T-053] Setup React project`                        | `phase: 6` `type: setup` `priority: critical`   |
+| `[T-054] Build design system and components`         | `phase: 6` `type: feature` `priority: high`     |
+| `[T-055] Build Landing Page`                         | `phase: 6` `type: feature` `priority: high`     |
+| `[T-056] Build Auth pages`                           | `phase: 6` `type: feature` `priority: critical` |
+| `[T-057] Build Dashboard page`                       | `phase: 6` `type: feature` `priority: high`     |
+| `[T-058] Build Analysis Input page`                  | `phase: 6` `type: feature` `priority: critical` |
+| `[T-059] Build live Agent Progress viewer`           | `phase: 6` `type: feature` `priority: critical` |
+| `[T-060] Build Debate Viewer`                        | `phase: 6` `type: feature` `priority: critical` |
+| `[T-061] Build Analysis Results page`                | `phase: 6` `type: feature` `priority: critical` |
+| `[T-062] Build charts and visualisations`            | `phase: 6` `type: feature` `priority: high`     |
+| `[T-063] Build Investment Memo page`                 | `phase: 6` `type: feature` `priority: high`     |
+| `[T-064] Build Company Compare page`                 | `phase: 6` `type: feature` `priority: medium`   |
+| `[T-065] Responsive design and mobile pass`          | `phase: 6` `type: quality` `priority: high`     |
+| `[T-066] Frontend error handling and loading states` | `phase: 6` `type: quality` `priority: high`     |
 
 ---
 
@@ -461,14 +482,14 @@ Assign to **Milestone: Phase 6 — React Frontend**.
 
 Assign to **Milestone: Phase 7 — Evaluation Framework**.
 
-| Issue title                                              | Labels                                            |
-|----------------------------------------------------------|---------------------------------------------------|
-| `[T-067] Design LangSmith eval framework`                | `phase: 7` `type: setup` `priority: critical`     |
-| `[T-068] Build fundamental analyst eval`                 | `phase: 7` `type: testing` `priority: critical`   |
-| `[T-069] Build sentiment eval`                           | `phase: 7` `type: testing` `priority: critical`   |
-| `[T-070] Build debate quality eval`                      | `phase: 7` `type: testing` `priority: high`       |
-| `[T-071] Build end-to-end latency eval`                  | `phase: 7` `type: perf` `priority: high`          |
-| `[T-072] Write EVALUATION.md`                            | `phase: 7` `type: docs` `priority: high`          |
+| Issue title                               | Labels                                          |
+| ----------------------------------------- | ----------------------------------------------- |
+| `[T-067] Design LangSmith eval framework` | `phase: 7` `type: setup` `priority: critical`   |
+| `[T-068] Build fundamental analyst eval`  | `phase: 7` `type: testing` `priority: critical` |
+| `[T-069] Build sentiment eval`            | `phase: 7` `type: testing` `priority: critical` |
+| `[T-070] Build debate quality eval`       | `phase: 7` `type: testing` `priority: high`     |
+| `[T-071] Build end-to-end latency eval`   | `phase: 7` `type: perf` `priority: high`        |
+| `[T-072] Write EVALUATION.md`             | `phase: 7` `type: docs` `priority: high`        |
 
 ---
 
@@ -476,16 +497,16 @@ Assign to **Milestone: Phase 7 — Evaluation Framework**.
 
 Assign to **Milestone: Phase 8 — Polish, Deploy & Launch**.
 
-| Issue title                                              | Labels                                            |
-|----------------------------------------------------------|---------------------------------------------------|
-| `[T-073] Dockerize the full stack`                       | `phase: 8` `type: devops` `priority: critical`    |
-| `[T-074] Deploy backend to Render`                       | `phase: 8` `type: devops` `priority: critical`    |
-| `[T-075] Deploy frontend to Vercel`                      | `phase: 8` `type: devops` `priority: critical`    |
-| `[T-076] Write comprehensive README`                     | `phase: 8` `type: docs` `priority: critical`      |
-| `[T-077] Record demo video`                              | `phase: 8` `type: docs` `priority: high`          |
-| `[T-078] LinkedIn launch campaign`                       | `phase: 8` `type: docs` `priority: high`          |
-| `[T-079] Final code quality pass`                        | `phase: 8` `type: quality` `priority: high`       |
-| `[T-080] Update resume and portfolio`                    | `phase: 8` `type: docs` `priority: medium`        |
+| Issue title                           | Labels                                         |
+| ------------------------------------- | ---------------------------------------------- |
+| `[T-073] Dockerize the full stack`    | `phase: 8` `type: devops` `priority: critical` |
+| `[T-074] Deploy backend to Render`    | `phase: 8` `type: devops` `priority: critical` |
+| `[T-075] Deploy frontend to Vercel`   | `phase: 8` `type: devops` `priority: critical` |
+| `[T-076] Write comprehensive README`  | `phase: 8` `type: docs` `priority: critical`   |
+| `[T-077] Record demo video`           | `phase: 8` `type: docs` `priority: high`       |
+| `[T-078] LinkedIn launch campaign`    | `phase: 8` `type: docs` `priority: high`       |
+| `[T-079] Final code quality pass`     | `phase: 8` `type: quality` `priority: high`    |
+| `[T-080] Update resume and portfolio` | `phase: 8` `type: docs` `priority: medium`     |
 
 ---
 
@@ -498,11 +519,11 @@ Assign to **Milestone: Phase 8 — Polish, Deploy & Launch**.
 
 #### Set initial column placements
 
-| Column        | Issues                                   |
-|---------------|------------------------------------------|
-| **Done**      | T-001, T-002, T-003, T-004, T-005, T-006 |
-| **In Progress** | T-007 (this task, right now)           |
-| **Backlog**   | T-008 to T-080                           |
+| Column          | Issues                                   |
+| --------------- | ---------------------------------------- |
+| **Done**        | T-001, T-002, T-003, T-004, T-005, T-006 |
+| **In Progress** | T-007 (this task, right now)             |
+| **Backlog**     | T-008 to T-080                           |
 
 ---
 
@@ -537,6 +558,7 @@ Then open a PR on GitHub with the following details.
 ## Pull Request
 
 ### Title
+
 ```
 chore: initialise GitHub Projects kanban board
 ```
@@ -564,6 +586,7 @@ board columns (Backlog / In Progress / In Review / Done).
 ## Testing
 
 This task is configuration-only — no code changes. Verified by:
+
 - Board visible at github.com/[username]/airp/projects
 - All 9 milestones visible at github.com/[username]/airp/milestones
 - All 80 issues visible and labelled under Issues tab
@@ -584,6 +607,7 @@ Closes #7
 ```
 
 ### Merge strategy
+
 Squash and merge. Delete branch after merge.
 
 ---
@@ -609,4 +633,4 @@ After the PR is merged:
 
 ---
 
-*End of T-007 — AIRP Project Documentation | Phase 0, Week 1*
+_End of T-007 — AIRP Project Documentation | Phase 0, Week 1_

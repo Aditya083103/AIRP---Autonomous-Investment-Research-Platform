@@ -11,18 +11,18 @@
 ## Overview
 
 Implements T-017: the vector store infrastructure that powers AIRP's
-Retrieval-Augmented Generation (RAG) pipeline.  News articles, earnings
+Retrieval-Augmented Generation (RAG) pipeline. News articles, earnings
 transcripts, and uploaded annual reports are embedded locally using the
 `all-MiniLM-L6-v2` sentence-transformer model and persisted in ChromaDB
 for semantic similarity search during agent analysis.
 
 **Three collections provisioned:**
 
-| Collection | Document type | Used by |
-|------------|--------------|---------|
-| `airp_news` | News articles from `fetch_news` | News Sentiment Agent (T-024) |
-| `airp_transcripts` | Earnings call transcripts | Fundamental Analyst (T-022) |
-| `airp_documents` | Uploaded annual reports / PDFs | Document upload endpoint (T-051) |
+| Collection         | Document type                   | Used by                          |
+| ------------------ | ------------------------------- | -------------------------------- |
+| `airp_news`        | News articles from `fetch_news` | News Sentiment Agent (T-024)     |
+| `airp_transcripts` | Earnings call transcripts       | Fundamental Analyst (T-022)      |
+| `airp_documents`   | Uploaded annual reports / PDFs  | Document upload endpoint (T-051) |
 
 **Key production features:**
 
@@ -48,11 +48,11 @@ for semantic similarity search during agent analysis.
 
 ## Files Created in This Task
 
-| File | Action | Purpose |
-|------|--------|---------|
-| `backend/db/__init__.py` | **CREATE** | Package init for db layer |
-| `backend/db/chroma_client.py` | **CREATE** | ChromaDB client, embedding pipeline, ingestion helpers |
-| `backend/tests/unit/test_chroma_client.py` | **CREATE** | 50+ unit tests, all mocked, offline-safe |
+| File                                       | Action     | Purpose                                                |
+| ------------------------------------------ | ---------- | ------------------------------------------------------ |
+| `backend/db/__init__.py`                   | **CREATE** | Package init for db layer                              |
+| `backend/db/chroma_client.py`              | **CREATE** | ChromaDB client, embedding pipeline, ingestion helpers |
+| `backend/tests/unit/test_chroma_client.py` | **CREATE** | 50+ unit tests, all mocked, offline-safe               |
 
 ---
 
@@ -196,17 +196,20 @@ git push -u origin feat/data-chromadb
 Implements T-017: vector store infrastructure for AIRP's RAG pipeline.
 `ChromaClient` manages three ChromaDB collections (news, transcripts,
 documents) using `all-MiniLM-L6-v2` embeddings generated locally via
-sentence-transformers.  Provides `ingest_news_articles()`,
+sentence-transformers. Provides `ingest_news_articles()`,
 `ingest_transcript()`, and `semantic_search()` as the primary interfaces
-agents will call from Phase 2 onwards.  All tests use `EphemeralClient`
-+ a mock embedding function — no model download in CI.
+agents will call from Phase 2 onwards. All tests use `EphemeralClient`
+
+- a mock embedding function — no model download in CI.
 
 ### Changes
 
 **`backend/db/__init__.py`**
+
 - Package init for the db layer
 
 **`backend/db/chroma_client.py`**
+
 - `DocumentType` enum: `news | transcript | annual_report`
 - `ChromaClientError` — raised on setup/config failures
 - `get_embedding_function(model_name)` — wraps
@@ -226,6 +229,7 @@ agents will call from Phase 2 onwards.  All tests use `EphemeralClient`
 - `_chunk_text()` — deterministic chunking with overlap guard
 
 **`backend/tests/unit/test_chroma_client.py`**
+
 - 50+ unit tests, all offline (EphemeralClient + mock EF)
 - `TestDocumentType` — enum values
 - `TestChunkText` — empty, short, long, overlap, guard
@@ -260,7 +264,7 @@ python -m pytest --tb=short
 
 ### LangSmith Trace
 
-_Not applicable — infrastructure module with no LLM calls.  Traces
+_Not applicable — infrastructure module with no LLM calls. Traces
 appear when the News Sentiment Agent calls `semantic_search()` in
 T-024 (Phase 2)._
 
@@ -278,11 +282,11 @@ Closes #17
 
 ### Environment routing decision
 
-| Environment | Client | Rationale |
-|------------|--------|-----------|
-| `test` | `EphemeralClient` | In-process memory; no Docker/disk needed in CI |
-| `development` | `PersistentClient` | Survives process restarts during dev iteration |
-| `production` | `HttpClient` | Separate Docker container; survives API restarts |
+| Environment   | Client             | Rationale                                        |
+| ------------- | ------------------ | ------------------------------------------------ |
+| `test`        | `EphemeralClient`  | In-process memory; no Docker/disk needed in CI   |
+| `development` | `PersistentClient` | Survives process restarts during dev iteration   |
+| `production`  | `HttpClient`       | Separate Docker container; survives API restarts |
 
 This means no code change is needed when promoting from dev to prod —
 just change the `ENVIRONMENT` variable.
@@ -290,9 +294,9 @@ just change the `ENVIRONMENT` variable.
 ### Why inject the embedding function?
 
 `SentenceTransformerEmbeddingFunction` downloads the `all-MiniLM-L6-v2`
-model (~90 MB) on first call and keeps it in memory.  If the EF were
+model (~90 MB) on first call and keeps it in memory. If the EF were
 created inside `ChromaClient.__init__`, every test that constructs a
-client would trigger a model download in CI.  By injecting it:
+client would trigger a model download in CI. By injecting it:
 
 ```python
 # production

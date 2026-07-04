@@ -18,12 +18,14 @@ a script or a test. After this task, an authenticated user can trigger
 a full analysis with a single HTTP request.
 
 **Acceptance criteria (all must pass):**
+
 - Endpoint returns `job_id` in <200ms
 - Pipeline starts in background
 - Job record in DB
 
 **Explicitly out of scope for this task** (separate Phase 5 tasks, per
 the master task list):
+
 - `GET /api/v1/analysis/{job_id}/status` -> **T-048**
 - `WS /api/v1/analysis/{job_id}/stream` -> **T-049**
 - Document upload endpoint -> later T-05x
@@ -59,7 +61,7 @@ it stays independently testable without an ASGI app.
   first use, so repeat analyses of the same company reuse one `Company`
   row instead of re-resolving and re-inserting every time.
 - **`create_analysis_job()`** -- inserts the `analyses` row with
-  `status='pending'`. This plus the company lookup above is the *only*
+  `status='pending'`. This plus the company lookup above is the _only_
   database work on the request's synchronous path -- what keeps the
   endpoint comfortably under the <200ms acceptance criterion.
 - **`run_analysis_pipeline()`** -- the background-task entry point.
@@ -85,7 +87,7 @@ HTTP-layer concerns only: validates the request body
 T-046 `get_current_user` dependency, calls the three service functions
 above in sequence, schedules `run_analysis_pipeline` via FastAPI's
 `BackgroundTasks.add_task`, and returns `AnalysisStartResponse` with
-`202 Accepted` (the request has been *accepted for processing*, not
+`202 Accepted` (the request has been _accepted for processing_, not
 completed -- the semantically correct status for an endpoint that
 returns before the underlying work is done).
 
@@ -140,16 +142,16 @@ Package docstring updated to list `analysis.py` as a current router
 
 ## Files Changed
 
-| File | Change |
-|------|--------|
-| `backend/services/analysis.py` | **New** -- ticker resolution, Company/Analysis persistence, background pipeline invocation |
-| `backend/routers/analysis.py` | **New** -- `POST /api/v1/analysis/start` |
-| `backend/models/schemas.py` | **Modified** -- added `AnalysisStartRequest` / `AnalysisStartResponse` |
-| `backend/main.py` | **Modified** -- registered the analysis router |
-| `backend/routers/__init__.py` | **Modified** -- package docstring updated |
-| `backend/tests/unit/test_analysis_service.py` | **New** -- service-layer unit tests |
-| `backend/tests/unit/test_analysis_router.py` | **New** -- router/HTTP-layer unit tests |
-| `docs/week-13/T-047-build-analysis-trigger-endpoint.md` | **New** -- this document |
+| File                                                    | Change                                                                                     |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `backend/services/analysis.py`                          | **New** -- ticker resolution, Company/Analysis persistence, background pipeline invocation |
+| `backend/routers/analysis.py`                           | **New** -- `POST /api/v1/analysis/start`                                                   |
+| `backend/models/schemas.py`                             | **Modified** -- added `AnalysisStartRequest` / `AnalysisStartResponse`                     |
+| `backend/main.py`                                       | **Modified** -- registered the analysis router                                             |
+| `backend/routers/__init__.py`                           | **Modified** -- package docstring updated                                                  |
+| `backend/tests/unit/test_analysis_service.py`           | **New** -- service-layer unit tests                                                        |
+| `backend/tests/unit/test_analysis_router.py`            | **New** -- router/HTTP-layer unit tests                                                    |
+| `docs/week-13/T-047-build-analysis-trigger-endpoint.md` | **New** -- this document                                                                   |
 
 No other files were modified. `backend/services/state_persistence.py`
 (T-033) and `backend/graph/graph.py` / `backend/graph/state.py` (T-029,
@@ -171,7 +173,7 @@ layer.
 
 **Why `BackgroundTasks` instead of `asyncio.create_task` directly?**
 Starlette's `BackgroundTasks` (the FastAPI-native mechanism) guarantees
-the task runs *after* the response has already been sent to the client
+the task runs _after_ the response has already been sent to the client
 -- which is exactly the "returns job_id in <200ms" / "pipeline starts in
 background" contract this task's acceptance criteria describe. Calling
 `asyncio.create_task` directly inside the handler would schedule the
@@ -182,7 +184,7 @@ already understand for `BackgroundTasks`.
 
 **Why `asyncio.to_thread` inside `run_analysis_pipeline` instead of
 calling `compiled.invoke(state)` directly?** `compiled.invoke()` is a
-*blocking* call -- LangGraph nodes in this codebase are synchronous by
+_blocking_ call -- LangGraph nodes in this codebase are synchronous by
 design (T-029), and the full 15-node pipeline takes up to ~90 seconds
 (documented in `backend/graph/node_profiler.py`'s 30-second per-node
 timeout x several sequential stages). If `run_analysis_pipeline`
@@ -211,7 +213,7 @@ cheaper than that coupling.
 
 **Why does `get_or_create_company` skip the `IntegrityError` race
 handling that `backend.routers.auth.register` has for duplicate
-emails?** Two concurrent *first-time* analyses of the exact same
+emails?** Two concurrent _first-time_ analyses of the exact same
 brand-new company is a vanishingly rare race for a portfolio project
 (unlike duplicate signups, which are common and security-relevant for
 auth). Adding the extra retry-on-conflict logic here would be defending
@@ -405,6 +407,7 @@ Open a PR on GitHub targeting `main`.
 ## PR Details
 
 **PR title:**
+
 ```
 feat(api): implement POST /analysis/start with background pipeline trigger
 ```
@@ -499,4 +502,4 @@ Branch: `feat/api-analysis-status`.
 
 ---
 
-*End of Document | T-047 Workflow | AIRP Week 13*
+_End of Document | T-047 Workflow | AIRP Week 13_

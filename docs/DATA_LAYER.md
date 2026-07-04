@@ -48,11 +48,11 @@ def _fetch_stock_cached(ticker: str, period: str) -> dict[str, Any]:
 
 ### Cache behaviour by environment
 
-| Environment | Redis connection | Cache reads | Cache writes |
-|---|---|---|---|
-| `ENVIRONMENT=test` | Disabled (`_FORCE_DISABLE=True`) | No-op | No-op |
-| `ENVIRONMENT=development` | Lazy connect on first call | Active | Active |
-| `ENVIRONMENT=production` | HttpClient to Upstash | Active | Active |
+| Environment               | Redis connection                 | Cache reads | Cache writes |
+| ------------------------- | -------------------------------- | ----------- | ------------ |
+| `ENVIRONMENT=test`        | Disabled (`_FORCE_DISABLE=True`) | No-op       | No-op        |
+| `ENVIRONMENT=development` | Lazy connect on first call       | Active      | Active       |
+| `ENVIRONMENT=production`  | HttpClient to Upstash            | Active      | Active       |
 
 **Error results are never cached.** A dict containing `"error"` is returned to the caller but not written to Redis — transient failures resolve on the next call.
 
@@ -85,10 +85,10 @@ fetch_stock_price(ticker: str, period: str = "1y") -> dict[str, Any]
 fetch_ohlcv(ticker: str, period: str = "1y") -> dict[str, Any]
 ```
 
-| Parameter | Type | Required | Values | Description |
-|---|---|---|---|---|
-| `ticker` | `str` | Yes | e.g. `"TCS.NS"` | Exchange ticker with suffix |
-| `period` | `str` | No | `"1y"` `"3y"` `"5y"` | Data lookback period (default `"1y"`) |
+| Parameter | Type  | Required | Values               | Description                           |
+| --------- | ----- | -------- | -------------------- | ------------------------------------- |
+| `ticker`  | `str` | Yes      | e.g. `"TCS.NS"`      | Exchange ticker with suffix           |
+| `period`  | `str` | No       | `"1y"` `"3y"` `"5y"` | Data lookback period (default `"1y"`) |
 
 ### Example invocation
 
@@ -110,27 +110,27 @@ ohlcv  = fetch_ohlcv.invoke({"ticker": "INFY.NS", "period": "3y"})
   "period": "1y",
   "data_points": 252,
   "first_date": "2023-06-10",
-  "last_date":  "2024-06-10",
+  "last_date": "2024-06-10",
   "stats": {
-    "current_price": 3845.20,
-    "price_52w_high": 4255.00,
-    "price_52w_low":  3056.70,
+    "current_price": 3845.2,
+    "price_52w_high": 4255.0,
+    "price_52w_low": 3056.7,
     "avg_volume_30d": 2847300,
-    "pct_change_1m":  2.4,
-    "pct_change_3m":  8.1,
-    "pct_change_1y":  18.3,
-    "ma_50d":         3712.40,
-    "ma_200d":        3541.80,
-    "above_ma_50d":   true,
-    "above_ma_200d":  true
+    "pct_change_1m": 2.4,
+    "pct_change_3m": 8.1,
+    "pct_change_1y": 18.3,
+    "ma_50d": 3712.4,
+    "ma_200d": 3541.8,
+    "above_ma_50d": true,
+    "above_ma_200d": true
   },
   "ohlcv": [
     {
-      "date":   "2023-06-12",
-      "open":   3056.70,
-      "high":   3089.00,
-      "low":    3041.50,
-      "close":  3072.30,
+      "date": "2023-06-12",
+      "open": 3056.7,
+      "high": 3089.0,
+      "low": 3041.5,
+      "close": 3072.3,
       "volume": 1823400
     }
   ],
@@ -155,15 +155,18 @@ ohlcv  = fetch_ohlcv.invoke({"ticker": "INFY.NS", "period": "3y"})
 
 ### Error outputs
 
-| `error` code | Trigger | Additional fields |
-|---|---|---|
-| `ticker_not_found` | yFinance returns no data for the ticker | `ticker`, `message` |
-| `invalid_parameter` | `period` not in `{"1y", "3y", "5y"}` | `ticker`, `message` |
-| `unexpected_error` | Unhandled exception | `ticker`, `message` |
+| `error` code        | Trigger                                 | Additional fields   |
+| ------------------- | --------------------------------------- | ------------------- |
+| `ticker_not_found`  | yFinance returns no data for the ticker | `ticker`, `message` |
+| `invalid_parameter` | `period` not in `{"1y", "3y", "5y"}`    | `ticker`, `message` |
+| `unexpected_error`  | Unhandled exception                     | `ticker`, `message` |
 
 ```json
-{ "error": "ticker_not_found", "ticker": "XYZINVALID.NS",
-  "message": "No price data found for ticker 'XYZINVALID.NS'..." }
+{
+  "error": "ticker_not_found",
+  "ticker": "XYZINVALID.NS",
+  "message": "No price data found for ticker 'XYZINVALID.NS'..."
+}
 ```
 
 ### Notes
@@ -190,9 +193,9 @@ fetch_balance_sheet(ticker: str)    -> dict[str, Any]  # balance sheet only
 fetch_cash_flow(ticker: str)        -> dict[str, Any]  # cash flow only
 ```
 
-| Parameter | Type | Required | Description |
-|---|---|---|---|
-| `ticker` | `str` | Yes | Exchange ticker, e.g. `"TCS.NS"`, `"RELIANCE.NS"` |
+| Parameter | Type  | Required | Description                                       |
+| --------- | ----- | -------- | ------------------------------------------------- |
+| `ticker`  | `str` | Yes      | Exchange ticker, e.g. `"TCS.NS"`, `"RELIANCE.NS"` |
 
 ### Example invocation
 
@@ -220,7 +223,7 @@ revenue = result["income_statement"][0]["revenue_crores"]   # most recent year
       "operating_income_crores": 59040.0,
       "ebitda_crores": 65230.0,
       "net_income_crores": 46110.0,
-      "basic_eps": 125.70,
+      "basic_eps": 125.7,
       "gross_margin_pct": 30.1,
       "operating_margin_pct": 24.5,
       "net_margin_pct": 19.1
@@ -260,10 +263,10 @@ All `*_crores` fields are `float | null` — `null` means yFinance did not repor
 
 ### Error outputs
 
-| `error` code | Trigger |
-|---|---|
+| `error` code           | Trigger                                       |
+| ---------------------- | --------------------------------------------- |
 | `financials_not_found` | yFinance returns no statements for the ticker |
-| `unexpected_error` | Unhandled exception |
+| `unexpected_error`     | Unhandled exception                           |
 
 ---
 
@@ -276,14 +279,14 @@ All `*_crores` fields are `float | null` — `null` means yFinance did not repor
 
 ### Ratios computed
 
-| Ratio | Formula | Unit |
-|---|---|---|
-| PE | Price ÷ Trailing EPS | × |
-| PB | Price ÷ Book Value per Share | × |
-| ROE | Net Income ÷ Shareholders' Equity | % |
-| ROCE | EBIT ÷ (Total Assets − Current Liabilities) | % |
-| D/E | Total Debt ÷ Shareholders' Equity | × |
-| EV/EBITDA | Enterprise Value ÷ EBITDA | × |
+| Ratio     | Formula                                     | Unit |
+| --------- | ------------------------------------------- | ---- |
+| PE        | Price ÷ Trailing EPS                        | ×    |
+| PB        | Price ÷ Book Value per Share                | ×    |
+| ROE       | Net Income ÷ Shareholders' Equity           | %    |
+| ROCE      | EBIT ÷ (Total Assets − Current Liabilities) | %    |
+| D/E       | Total Debt ÷ Shareholders' Equity           | ×    |
+| EV/EBITDA | Enterprise Value ÷ EBITDA                   | ×    |
 
 Enterprise Value = Market Cap + Total Debt − Cash
 
@@ -319,9 +322,9 @@ pe      = full["pe_ratio"]
   "ev_to_ebitda": 22.6,
   "enterprise_value": 1432000000000.0,
   "inputs": {
-    "price": 3845.20,
-    "eps": 130.80,
-    "book_value_per_share": 293.50,
+    "price": 3845.2,
+    "eps": 130.8,
+    "book_value_per_share": 293.5,
     "shares_outstanding": 3673000000.0,
     "net_income": 46110000000.0,
     "total_equity": 113130000000.0,
@@ -368,10 +371,10 @@ pe      = full["pe_ratio"]
 
 ### Error outputs
 
-| `error` code | Trigger |
-|---|---|
+| `error` code       | Trigger                                 |
+| ------------------ | --------------------------------------- |
 | `ratios_not_found` | yFinance returns no data for the ticker |
-| `unexpected_error` | Unhandled exception |
+| `unexpected_error` | Unhandled exception                     |
 
 ---
 
@@ -400,11 +403,11 @@ fetch_news_summary(
 ) -> dict[str, Any]
 ```
 
-| Parameter | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `company_name` | `str` | **Yes** | — | Full company name for the search query, e.g. `"Tata Consultancy Services"` |
-| `ticker` | `str` | No | `""` | Ticker appended to query for precision (base only: `TCS.NS` → `TCS`) |
-| `max_articles` | `int` | No | `20` | Max articles to return (hard cap: 100) |
+| Parameter      | Type  | Required | Default | Description                                                                |
+| -------------- | ----- | -------- | ------- | -------------------------------------------------------------------------- |
+| `company_name` | `str` | **Yes**  | —       | Full company name for the search query, e.g. `"Tata Consultancy Services"` |
+| `ticker`       | `str` | No       | `""`    | Ticker appended to query for precision (base only: `TCS.NS` → `TCS`)       |
+| `max_articles` | `int` | No       | `20`    | Max articles to return (hard cap: 100)                                     |
 
 ### Example invocation
 
@@ -430,7 +433,7 @@ headlines = summary["headlines"]
   "ticker": "TCS.NS",
   "query_used": "\"Tata Consultancy Services\" OR TCS",
   "from_date": "2024-05-11",
-  "to_date":   "2024-06-10",
+  "to_date": "2024-06-10",
   "total_results": 47,
   "articles_returned": 10,
   "articles": [
@@ -461,19 +464,19 @@ headlines = summary["headlines"]
     "TCS wins $2bn deal from a European bank"
   ],
   "from_date": "2024-05-11",
-  "to_date":   "2024-06-10",
+  "to_date": "2024-06-10",
   "warnings": []
 }
 ```
 
 ### Error outputs
 
-| `error` code | Trigger |
-|---|---|
-| `configuration_error` | `NEWS_API_KEY` not set in environment |
-| `newsapi_error` | HTTP 401 (invalid key) or HTTP 400 (bad request) |
-| `rate_limit_exhausted` | HTTP 429 persists after all 3 retry attempts |
-| `unexpected_error` | Unhandled exception |
+| `error` code           | Trigger                                          |
+| ---------------------- | ------------------------------------------------ |
+| `configuration_error`  | `NEWS_API_KEY` not set in environment            |
+| `newsapi_error`        | HTTP 401 (invalid key) or HTTP 400 (bad request) |
+| `rate_limit_exhausted` | HTTP 429 persists after all 3 retry attempts     |
+| `unexpected_error`     | Unhandled exception                              |
 
 ### Rate limit protection
 
@@ -486,11 +489,11 @@ With Redis caching (TTL 1 h), a busy 8-agent analysis run needs at most 8 NewsAP
 **Module:** `backend/tools/macro.py`  
 **Data sources:**
 
-| Field | Source | Method |
-|---|---|---|
-| `repo_rate` | RBI website (`settings.rbi_base_url`) | HTML scrape |
-| `cpi_inflation` | MOSPI website | HTML scrape |
-| `gdp_growth` | World Bank Indicators API | JSON GET (no key) |
+| Field           | Source                                | Method            |
+| --------------- | ------------------------------------- | ----------------- |
+| `repo_rate`     | RBI website (`settings.rbi_base_url`) | HTML scrape       |
+| `cpi_inflation` | MOSPI website                         | HTML scrape       |
+| `gdp_growth`    | World Bank Indicators API             | JSON GET (no key) |
 
 **Cache TTL:** 86 400 s (24 h) · Key: `airp:macro:india` (fixed — India only)  
 **API key required:** None  
@@ -503,9 +506,9 @@ fetch_macro_data(force_refresh: bool = False) -> dict[str, Any]
 fetch_macro_summary() -> dict[str, Any]
 ```
 
-| Parameter | Type | Required | Description |
-|---|---|---|---|
-| `force_refresh` | `bool` | No | When `True`, bypass the 24h Redis cache and fetch live data |
+| Parameter       | Type   | Required | Description                                                 |
+| --------------- | ------ | -------- | ----------------------------------------------------------- |
+| `force_refresh` | `bool` | No       | When `True`, bypass the 24h Redis cache and fetch live data |
 
 ### Example invocation
 
@@ -535,9 +538,9 @@ fresh = fetch_macro_data.invoke({"force_refresh": True})
   "cpi_as_of": "April 2024",
   "gdp_as_of": "2023",
   "sources": {
-    "repo_rate":    "rbi",
-    "cpi_inflation":"mospi",
-    "gdp_growth":   "worldbank"
+    "repo_rate": "rbi",
+    "cpi_inflation": "mospi",
+    "gdp_growth": "worldbank"
   },
   "warnings": [],
   "fetched_at": "2024-06-10T05:30:00Z",
@@ -572,8 +575,8 @@ When a source fails, its field is `null` and a warning is added:
 
 ### Error outputs
 
-| `error` code | Trigger |
-|---|---|
+| `error` code       | Trigger                                                                           |
+| ------------------ | --------------------------------------------------------------------------------- |
 | `unexpected_error` | Unhandled exception (scrape failures are NOT errors — they produce `null` fields) |
 
 > **Important:** A result where all three fields are `null` is NOT cached. The next call will retry the live sources. This prevents 24 hours of empty data being served after a temporary outage.
@@ -608,14 +611,14 @@ fetch_transcript_chunk(
 ) -> dict[str, Any]
 ```
 
-| Parameter | Type | Required | Description |
-|---|---|---|---|
-| `company_name` | `str` | **Yes** | Human-readable company name, e.g. `"Infosys"` |
-| `ticker` | `str` | No | Used to derive the Screener.in URL slug (e.g. `"INFY.NS"` → slug `"INFY"`) |
-| `pdf_bytes` | `bytes\|None` | No | Raw bytes of an uploaded PDF; bypasses web scraping |
-| `pdf_path` | `str\|None` | No | Absolute path to a PDF on disk; bypasses web scraping |
-| `max_chunk_chars` | `int` | No | Characters in `transcript_chunk` (default 4 000) |
-| `force_refresh` | `bool` | No | Bypass Redis cache and re-fetch from Screener |
+| Parameter         | Type          | Required | Description                                                                |
+| ----------------- | ------------- | -------- | -------------------------------------------------------------------------- |
+| `company_name`    | `str`         | **Yes**  | Human-readable company name, e.g. `"Infosys"`                              |
+| `ticker`          | `str`         | No       | Used to derive the Screener.in URL slug (e.g. `"INFY.NS"` → slug `"INFY"`) |
+| `pdf_bytes`       | `bytes\|None` | No       | Raw bytes of an uploaded PDF; bypasses web scraping                        |
+| `pdf_path`        | `str\|None`   | No       | Absolute path to a PDF on disk; bypasses web scraping                      |
+| `max_chunk_chars` | `int`         | No       | Characters in `transcript_chunk` (default 4 000)                           |
+| `force_refresh`   | `bool`        | No       | Bypass Redis cache and re-fetch from Screener                              |
 
 > `company_name` is **required**. Passing only `ticker` raises a Pydantic `ValidationError` before the tool body runs.
 
@@ -690,27 +693,27 @@ chunk_result = fetch_transcript_chunk.invoke({
 
 ### Error outputs
 
-| `error` code | Trigger |
-|---|---|
-| `scrape_blocked` | Screener.in returned HTTP 403/429 or bot-detection |
-| `scrape_error` | Screener.in returned unexpected HTTP status |
-| `pdf_not_found` | `pdf_path` does not exist on disk |
-| `pdf_extraction_error` | pdfminer.six raised an exception |
-| `pdf_empty` | PDF parsed successfully but text is empty |
-| `unexpected_error` | Unhandled exception |
+| `error` code           | Trigger                                            |
+| ---------------------- | -------------------------------------------------- |
+| `scrape_blocked`       | Screener.in returned HTTP 403/429 or bot-detection |
+| `scrape_error`         | Screener.in returned unexpected HTTP status        |
+| `pdf_not_found`        | `pdf_path` does not exist on disk                  |
+| `pdf_extraction_error` | pdfminer.six raised an exception                   |
+| `pdf_empty`            | PDF parsed successfully but text is empty          |
+| `unexpected_error`     | Unhandled exception                                |
 
 ---
 
 ## 8. Redis Cache Keys & TTLs
 
-| Tool | Redis key | TTL | Notes |
-|---|---|---|---|
-| `fetch_stock_price` | `airp:stock:{ticker}:{period}` | 900 s (15 min) | Per ticker+period pair |
-| `fetch_ohlcv` | `airp:stock:{ticker}:{period}` | 900 s (15 min) | Shares key with fetch_stock_price |
-| `fetch_ratios` | `airp:ratios:{ticker}` | 3 600 s (1 h) | Both full and summary variants |
-| `fetch_news` | `airp:news:{company_name}` | 3 600 s (1 h) | Keyed on company name |
-| `fetch_earnings_transcript` | `airp:transcript:{slug}` | 3 600 s (1 h) | slug = NSE ticker without suffix |
-| `fetch_macro_data` | `airp:macro:india` | 86 400 s (24 h) | Fixed key — India-wide snapshot |
+| Tool                        | Redis key                      | TTL             | Notes                             |
+| --------------------------- | ------------------------------ | --------------- | --------------------------------- |
+| `fetch_stock_price`         | `airp:stock:{ticker}:{period}` | 900 s (15 min)  | Per ticker+period pair            |
+| `fetch_ohlcv`               | `airp:stock:{ticker}:{period}` | 900 s (15 min)  | Shares key with fetch_stock_price |
+| `fetch_ratios`              | `airp:ratios:{ticker}`         | 3 600 s (1 h)   | Both full and summary variants    |
+| `fetch_news`                | `airp:news:{company_name}`     | 3 600 s (1 h)   | Keyed on company name             |
+| `fetch_earnings_transcript` | `airp:transcript:{slug}`       | 3 600 s (1 h)   | slug = NSE ticker without suffix  |
+| `fetch_macro_data`          | `airp:macro:india`             | 86 400 s (24 h) | Fixed key — India-wide snapshot   |
 
 TTL constants are defined in `backend/db/redis_client.py` and re-exported from `backend/tools/cache.py`:
 
@@ -726,16 +729,16 @@ from backend.tools.cache import STOCK_TTL, NEWS_TTL, RATIOS_TTL, MACRO_TTL
 
 ## 9. API Rate Limits & Free Tier Summary
 
-| Service | Free limit | Env variable | Caching mitigates? |
-|---|---|---|---|
-| yFinance | Unofficial; ~100–200 req/min before 429 | None required | Partially (STOCK_TTL=15 min) |
-| Alpha Vantage | 25 requests/day | `ALPHA_VANTAGE_KEY` | Yes (RATIOS_TTL=1 h) |
-| NewsAPI | 100 requests/day | `NEWS_API_KEY` | Yes (NEWS_TTL=1 h) |
-| World Bank API | Unlimited (public) | None required | Yes (MACRO_TTL=24 h) |
-| RBI scrape | Unlimited (public) | `RBI_BASE_URL` | Yes (MACRO_TTL=24 h) |
-| MOSPI scrape | Unlimited (public) | None | Yes (MACRO_TTL=24 h) |
-| Screener.in | Unlimited (public, bot-detection risk) | `SCREENER_BASE_URL` | Yes (1 h per company) |
-| Upstash Redis | 10 000 commands/day (free) | `REDIS_URL`, `REDIS_TOKEN` | N/A — is the cache |
+| Service        | Free limit                              | Env variable               | Caching mitigates?           |
+| -------------- | --------------------------------------- | -------------------------- | ---------------------------- |
+| yFinance       | Unofficial; ~100–200 req/min before 429 | None required              | Partially (STOCK_TTL=15 min) |
+| Alpha Vantage  | 25 requests/day                         | `ALPHA_VANTAGE_KEY`        | Yes (RATIOS_TTL=1 h)         |
+| NewsAPI        | 100 requests/day                        | `NEWS_API_KEY`             | Yes (NEWS_TTL=1 h)           |
+| World Bank API | Unlimited (public)                      | None required              | Yes (MACRO_TTL=24 h)         |
+| RBI scrape     | Unlimited (public)                      | `RBI_BASE_URL`             | Yes (MACRO_TTL=24 h)         |
+| MOSPI scrape   | Unlimited (public)                      | None                       | Yes (MACRO_TTL=24 h)         |
+| Screener.in    | Unlimited (public, bot-detection risk)  | `SCREENER_BASE_URL`        | Yes (1 h per company)        |
+| Upstash Redis  | 10 000 commands/day (free)              | `REDIS_URL`, `REDIS_TOKEN` | N/A — is the cache           |
 
 ### `.env` configuration
 
@@ -754,21 +757,21 @@ RBI_BASE_URL=https://www.rbi.org.in
 
 All tools return `{"error": "<code>", "message": "<detail>", ...}` on failure. Agents route on `result["error"]`.
 
-| Error code | Tool(s) | Meaning | Agent action |
-|---|---|---|---|
-| `ticker_not_found` | stock_price, financials, ratios | Ticker not in Yahoo Finance | Try alternate ticker format (`.BO` vs `.NS`) |
-| `invalid_parameter` | stock_price | `period` not in `{"1y","3y","5y"}` | Fix the period string |
-| `financials_not_found` | financials | No financial statements in yFinance | Note as data gap in analysis |
-| `ratios_not_found` | ratios | No ratio primitives available | Note as data gap |
-| `configuration_error` | news | `NEWS_API_KEY` not set | Skip news analysis; flag in memo |
-| `newsapi_error` | news | Invalid key or bad API request | Log and skip news section |
-| `rate_limit_exhausted` | news | 429 persists after 3 retries | Wait and retry; use cached data |
-| `scrape_blocked` | earnings_transcript | Screener.in returned 403/429 | Try `pdf_bytes` / `pdf_path` upload |
-| `scrape_error` | earnings_transcript | Unexpected HTTP from Screener | Degrade gracefully; note in memo |
-| `pdf_not_found` | earnings_transcript | `pdf_path` doesn't exist | Check path; prompt user to re-upload |
-| `pdf_extraction_error` | earnings_transcript | pdfminer failed to parse | Try different PDF or scrape path |
-| `pdf_empty` | earnings_transcript | PDF parsed but no text found | Likely a scanned PDF; needs OCR |
-| `unexpected_error` | all | Unhandled exception | Log trace; skip this tool in analysis |
+| Error code             | Tool(s)                         | Meaning                             | Agent action                                 |
+| ---------------------- | ------------------------------- | ----------------------------------- | -------------------------------------------- |
+| `ticker_not_found`     | stock_price, financials, ratios | Ticker not in Yahoo Finance         | Try alternate ticker format (`.BO` vs `.NS`) |
+| `invalid_parameter`    | stock_price                     | `period` not in `{"1y","3y","5y"}`  | Fix the period string                        |
+| `financials_not_found` | financials                      | No financial statements in yFinance | Note as data gap in analysis                 |
+| `ratios_not_found`     | ratios                          | No ratio primitives available       | Note as data gap                             |
+| `configuration_error`  | news                            | `NEWS_API_KEY` not set              | Skip news analysis; flag in memo             |
+| `newsapi_error`        | news                            | Invalid key or bad API request      | Log and skip news section                    |
+| `rate_limit_exhausted` | news                            | 429 persists after 3 retries        | Wait and retry; use cached data              |
+| `scrape_blocked`       | earnings_transcript             | Screener.in returned 403/429        | Try `pdf_bytes` / `pdf_path` upload          |
+| `scrape_error`         | earnings_transcript             | Unexpected HTTP from Screener       | Degrade gracefully; note in memo             |
+| `pdf_not_found`        | earnings_transcript             | `pdf_path` doesn't exist            | Check path; prompt user to re-upload         |
+| `pdf_extraction_error` | earnings_transcript             | pdfminer failed to parse            | Try different PDF or scrape path             |
+| `pdf_empty`            | earnings_transcript             | PDF parsed but no text found        | Likely a scanned PDF; needs OCR              |
+| `unexpected_error`     | all                             | Unhandled exception                 | Log trace; skip this tool in analysis        |
 
 ---
 
@@ -776,12 +779,12 @@ All tools return `{"error": "<code>", "message": "<detail>", ...}` on failure. A
 
 All data tools that accept a `ticker` parameter follow Yahoo Finance's exchange suffix convention:
 
-| Exchange | Suffix | Example |
-|---|---|---|
-| NSE (National Stock Exchange of India) | `.NS` | `TCS.NS`, `INFY.NS`, `RELIANCE.NS` |
-| BSE (Bombay Stock Exchange) | `.BO` | `532540.BO`, `500325.BO` |
-| NASDAQ / NYSE (US) | *(none)* | `AAPL`, `MSFT` |
-| London Stock Exchange | `.L` | `SHEL.L` |
+| Exchange                               | Suffix   | Example                            |
+| -------------------------------------- | -------- | ---------------------------------- |
+| NSE (National Stock Exchange of India) | `.NS`    | `TCS.NS`, `INFY.NS`, `RELIANCE.NS` |
+| BSE (Bombay Stock Exchange)            | `.BO`    | `532540.BO`, `500325.BO`           |
+| NASDAQ / NYSE (US)                     | _(none)_ | `AAPL`, `MSFT`                     |
+| London Stock Exchange                  | `.L`     | `SHEL.L`                           |
 
 **Recommendation:** Always use `.NS` for Indian stocks — NSE data is more complete in yFinance than BSE.
 

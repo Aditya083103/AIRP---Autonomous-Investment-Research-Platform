@@ -15,6 +15,7 @@ validation, a call through to the existing `POST /auth/register` /
 `/dashboard` placeholder on success.
 
 **Acceptance criteria (both must pass):**
+
 - Register -> login -> redirect to dashboard works end-to-end
 - Form errors display correctly
 
@@ -30,6 +31,7 @@ by definition, invisible to JavaScript. Both requirements can't be
 satisfied by "put the token only in an httpOnly cookie and nowhere else."
 
 What this task actually does, and why:
+
 - **`backend/routers/auth.py` now sets a real httpOnly cookie** on
   `register()` and `login()` (see its updated docstring) -- genuinely
   `httponly=True`, `samesite="lax"`, `secure` in production. A new
@@ -62,6 +64,7 @@ an auth-aware header in `RootLayout`, the additive backend cookie change
 described above, and tests for all of it.
 
 **Explicitly out of scope:**
+
 - The real Dashboard (analysis history, search/filter) -- T-057.
   `/dashboard` here is a small, honest placeholder that greets the
   logged-in user by name/email, the same pattern `AnalysisPage`
@@ -97,11 +100,13 @@ described above, and tests for all of it.
 ### Frontend
 
 #### `src/types/auth.ts` (new)
+
 `UserResponse` / `TokenResponse` mirroring `backend.models.schemas`
 exactly (snake_case field names), the same convention
 `useAnalysisStream.ts`'s `AgentStreamEvent` already established.
 
 #### `src/api/auth.ts` (new)
+
 `registerUser` / `loginUser` / `logoutUser` -- thin `fetch` wrappers
 against `POST /auth/register|login|logout`, always sent with
 `credentials: "include"` so the cookie round-trips. `AuthApiError`
@@ -110,6 +115,7 @@ shape (`{"detail": "string"}` or a Pydantic 422 `{"detail": [...]}`
 array).
 
 #### `src/context/AuthContext.ts`, `src/providers/AuthProvider.tsx`, `src/hooks/useAuth.ts` (new, deliberately 3 files)
+
 Split into three files specifically so `AuthProvider.tsx` exports only
 the `AuthProvider` component and `useAuth.ts` exports only the `useAuth`
 hook -- a file that exports both a component and other values trips
@@ -121,6 +127,7 @@ above for the full reasoning on why this is in-memory rather than
 purely cookie-based.
 
 #### `src/lib/validation/authSchemas.ts` (new)
+
 `loginSchema` (email + non-empty password) and `registerSchema` (adds
 `displayName` optional, `confirmPassword` with a `.refine()` cross-field
 match). Password bounds (8-72 characters) are copied from
@@ -128,15 +135,18 @@ match). Password bounds (8-72 characters) are copied from
 so a violation surfaces before a round trip to the backend.
 
 #### `src/components/auth/AuthCard.tsx` (new)
+
 Shared centred-card shell (title, subtitle, form slot, optional footer
 prompt+link) so Login/Register differ only in their fields and submit
 handler.
 
 #### `src/components/auth/ProtectedRoute.tsx` (new)
+
 Redirects to `/login` (preserving the attempted location in router
 state) when `useAuth().isAuthenticated` is false. Wraps `/dashboard`.
 
 #### `src/pages/LoginPage.tsx`, `src/pages/RegisterPage.tsx` (new)
+
 react-hook-form + `zodResolver`. Field-level errors render through
 `Input`'s existing `error` prop; a failed submit (bad credentials /
 duplicate email) shows the backend's message in a form-level banner.
@@ -146,26 +156,31 @@ always goes straight to `/dashboard` (register also authenticates
 immediately, per `backend/routers/auth.py`'s own docstring).
 
 #### `src/pages/DashboardPage.tsx` (new, placeholder)
+
 Wrapped in `ProtectedRoute`. Greets the user by `display_name` (falling
 back to `email`) specifically so the redirect is visibly confirmable in
 a screenshot or a manual test, not just a blank "coming soon" notice.
 Has a working "Log out" button.
 
 #### `src/routes/AppRoutes.tsx` (modified)
+
 Adds `path="login"`, `path="register"`, and a `ProtectedRoute`-wrapped
 `path="dashboard"`.
 
 #### `src/providers/AppProviders.tsx` (modified)
+
 Mounts `AuthProvider` inside `BrowserRouter` (its consumers use
 `useNavigate`/`useLocation`).
 
 #### `src/components/layout/RootLayout.tsx` (modified)
+
 The static "Phase 6 - Frontend" header badge (a T-053 placeholder) is
 replaced with a real auth-aware area: "Log in" + "Get started" links
 when signed out, the user's email + a working "Log out" button when
 signed in.
 
 #### `src/config/env.ts`, `src/vite-env.d.ts`, `frontend/vite.config.ts`, `frontend/.env.example` (modified)
+
 `backend/routers/auth.py` mounts at `/auth/*`, not under `/api/v1` (see
 `backend/main.py`'s router registration) -- so a new `env.authBaseUrl`
 (default `/auth`) was added alongside `env.apiBaseUrl`, with a matching
@@ -175,6 +190,7 @@ signed in.
 ### Testing
 
 `frontend/src/test/`:
+
 - **`authSchemas.test.ts`** -- pure zod logic: valid/invalid email,
   password length bounds, whitespace-only rejection, mismatched
   passwords attributed to `confirmPassword`.
@@ -204,9 +220,10 @@ No workflow changes. Both gates already cover the new/changed files with
 zero modification: the frontend job's five checks
 (`type-check`/`lint`/`format:check`/`test:run`/`build`) and the backend
 job's (`black`/`isort`/`flake8`/`mypy --strict`/`pytest` with coverage
->= 85%). No new dependency was added on either side -- `react-hook-form`,
-`zod`, and `@hookform/resolvers` were already in `package.json` from
-T-053.
+
+> = 85%). No new dependency was added on either side -- `react-hook-form`,
+> `zod`, and `@hookform/resolvers` were already in `package.json` from
+> T-053.
 
 ---
 
@@ -336,18 +353,22 @@ git push -u origin feat/ui-auth
 ```
 
 **Commit message:**
+
 ```
 feat(auth): build login/register pages with httpOnly cookie issuance
 ```
 
 **PR title:**
+
 ```
 feat(auth): implement Login/Register pages, in-memory session, and httpOnly cookie issuance
 ```
 
 **PR description:**
+
 ```markdown
 ## Summary
+
 Adds Login and Register pages (react-hook-form + zod), an AuthProvider
 holding the session in memory, a protected /dashboard placeholder, and
 an auth-aware header. Additively extends backend/routers/auth.py to set
@@ -359,6 +380,7 @@ useAnalysisStream's WebSocket auth, and why GET /auth/me deliberately
 does not consume the cookie yet.
 
 ## Changes
+
 - Backend: `backend/routers/auth.py` sets an httpOnly cookie in
   register()/login(), adds POST /auth/logout; `get_current_user`
   unchanged. New `backend/tests/unit/test_auth_cookies.py`.
@@ -378,30 +400,34 @@ does not consume the cookie yet.
   already present from T-053
 
 ## Testing
+
 - [x] Unit tests added / updated -- 8 new frontend test files, 1 new
-  backend test file (test_auth_cookies.py); all existing T-046 tests
-  untouched and still passing
+      backend test file (test_auth_cookies.py); all existing T-046 tests
+      untouched and still passing
 - [x] Integration tests pass (`test_auth_router.py` unaffected by the
-  additive cookie change)
+      additive cookie change)
 - [x] Manual smoke test performed -- register -> dashboard -> logout ->
-  login -> dashboard, verified the HttpOnly flag in DevTools' cookie
-  inspector, verified empty-field and wrong-password form errors,
-  verified an unauthenticated /dashboard visit redirects to /login
+      login -> dashboard, verified the HttpOnly flag in DevTools' cookie
+      inspector, verified empty-field and wrong-password form errors,
+      verified an unauthenticated /dashboard visit redirects to /login
 
 `npm run type-check`, `npm run lint`, `npm run format:check`,
 `npm run test:run`, `npm run build`, and the backend's
 black/isort/flake8/mypy --strict/pytest (coverage >= 85%) all pass.
 
 ## LangSmith Trace
+
 n/a -- no agent code touched.
 
 ## Screenshots
+
 <paste terminal output of the passing checks, a screenshot of the
 DevTools cookie inspector showing airp_access_token with HttpOnly
 checked, and screenshots of the register/login forms showing a
 validation error and a backend error banner>
 
 ## Related Issues
+
 Closes #<issue-number>
 ```
 

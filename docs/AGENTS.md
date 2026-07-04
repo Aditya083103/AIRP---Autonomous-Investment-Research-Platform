@@ -35,21 +35,21 @@ agents and the Portfolio Manager consume.
 
 **Phase 2 agents (built and tested):**
 
-| # | Agent | `agent_name` | State key | LangGraph node |
-|---|-------|--------------|-----------|----------------|
-| 1 | Fundamental Analyst | `fundamental_analyst` | `fundamental` | `run_fundamental_analysis` |
-| 2 | Technical Analyst | `technical_analyst` | `technical` | `run_technical_analysis` |
-| 3 | News Sentiment Agent | `news_sentiment` | `sentiment` | `run_sentiment_analysis` |
-| 4 | Macro Economist | `macro_economist` | `macro` | `run_macro_analysis` |
+| #   | Agent                | `agent_name`          | State key     | LangGraph node             |
+| --- | -------------------- | --------------------- | ------------- | -------------------------- |
+| 1   | Fundamental Analyst  | `fundamental_analyst` | `fundamental` | `run_fundamental_analysis` |
+| 2   | Technical Analyst    | `technical_analyst`   | `technical`   | `run_technical_analysis`   |
+| 3   | News Sentiment Agent | `news_sentiment`      | `sentiment`   | `run_sentiment_analysis`   |
+| 4   | Macro Economist      | `macro_economist`     | `macro`       | `run_macro_analysis`       |
 
 **Phase 4 agents (stubs — built in T-037 to T-044):**
 
-| # | Agent | `agent_name` |
-|---|-------|--------------|
-| 5 | Risk Officer | `risk_officer` |
-| 6 | Contrarian Investor | `contrarian_investor` |
-| 7 | Valuation Agent | `valuation_agent` |
-| 8 | Portfolio Manager | `portfolio_manager` |
+| #   | Agent               | `agent_name`          |
+| --- | ------------------- | --------------------- |
+| 5   | Risk Officer        | `risk_officer`        |
+| 6   | Contrarian Investor | `contrarian_investor` |
+| 7   | Valuation Agent     | `valuation_agent`     |
+| 8   | Portfolio Manager   | `portfolio_manager`   |
 
 Agents 1–4 run in **parallel** via LangGraph's `Send` API. Agents 5–8
 run **sequentially** after the debate round.
@@ -63,14 +63,14 @@ Every agent output model inherits from `AgentOutput` in
 
 ### Base fields (all agents)
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `agent_name` | `str` | Canonical identifier (frozen, set by agent) |
-| `analysis_id` | `str` | UUID of the parent Analysis job |
-| `company_name` | `str` | Human-readable company name |
-| `ticker` | `str` | Yahoo Finance ticker (e.g. `TCS.NS`) |
-| `generated_at` | `datetime` | UTC timestamp of output production |
-| `error` | `str \| None` | Non-null when the agent encountered an error |
+| Field          | Type          | Description                                  |
+| -------------- | ------------- | -------------------------------------------- |
+| `agent_name`   | `str`         | Canonical identifier (frozen, set by agent)  |
+| `analysis_id`  | `str`         | UUID of the parent Analysis job              |
+| `company_name` | `str`         | Human-readable company name                  |
+| `ticker`       | `str`         | Yahoo Finance ticker (e.g. `TCS.NS`)         |
+| `generated_at` | `datetime`    | UTC timestamp of output production           |
+| `error`        | `str \| None` | Non-null when the agent encountered an error |
 
 ### Error convention
 
@@ -90,10 +90,10 @@ becomes an ISO-8601 string only when `mode="json"` is specified.
 
 ### Persona
 
-> *"You are a seasoned buy-side fundamental analyst with 20 years of
+> _"You are a seasoned buy-side fundamental analyst with 20 years of
 > experience covering Indian equities on NSE and BSE. You specialise in
 > quality-of-earnings analysis, balance-sheet stress-testing, and free
-> cash flow decomposition."*
+> cash flow decomposition."_
 
 ### Mandate
 
@@ -103,10 +103,10 @@ that the Portfolio Manager uses as one input to the final verdict.
 
 ### Tools
 
-| Tool | Source | Cache TTL | Purpose |
-|------|--------|-----------|---------|
-| `fetch_financials` | yFinance | 15 min | Income statement, balance sheet, cash flow (4 years) |
-| `fetch_ratios` | Alpha Vantage | 60 min | PE, PB, ROE, ROCE, D/E, EV/EBITDA |
+| Tool               | Source        | Cache TTL | Purpose                                              |
+| ------------------ | ------------- | --------- | ---------------------------------------------------- |
+| `fetch_financials` | yFinance      | 15 min    | Income statement, balance sheet, cash flow (4 years) |
+| `fetch_ratios`     | Alpha Vantage | 60 min    | PE, PB, ROE, ROCE, D/E, EV/EBITDA                    |
 
 ### Scoring logic
 
@@ -114,36 +114,36 @@ The overall `score` (1–10) is a weighted average across four dimensions.
 All scoring is done in deterministic Python before the LLM call. The LLM
 synthesises `strengths`, `weaknesses`, and `summary` only.
 
-| Dimension | Weight | Key metrics |
-|-----------|--------|-------------|
-| Revenue growth | 25% | 3Y CAGR, YoY growth |
-| Margin quality | 25% | Gross, operating, net margins + trends |
-| Cash generation | 25% | FCF, FCF margin, FCF yield |
-| Balance sheet | 25% | D/E, current ratio, interest coverage, ROE, ROCE |
+| Dimension       | Weight | Key metrics                                      |
+| --------------- | ------ | ------------------------------------------------ |
+| Revenue growth  | 25%    | 3Y CAGR, YoY growth                              |
+| Margin quality  | 25%    | Gross, operating, net margins + trends           |
+| Cash generation | 25%    | FCF, FCF margin, FCF yield                       |
+| Balance sheet   | 25%    | D/E, current ratio, interest coverage, ROE, ROCE |
 
 Each dimension sub-score is on a 1–10 scale. Missing data defaults to the
 minimum contribution for that dimension.
 
 ### Output schema — `FundamentalAnalysis`
 
-| Field | Type | Constraints | Description |
-|-------|------|-------------|-------------|
-| `score` | `int` | `ge=1, le=10` | Overall fundamental quality score |
-| `revenue_growth_pct` | `float \| None` | — | YoY revenue growth (%) |
-| `revenue_cagr_3y_pct` | `float \| None` | — | 3-year revenue CAGR (%) |
-| `gross_margin_pct` | `float \| None` | — | Gross margin (%) |
-| `operating_margin_pct` | `float \| None` | — | Operating margin (%) |
-| `net_margin_pct` | `float \| None` | — | Net profit margin (%) |
-| `free_cash_flow_cr` | `float \| None` | — | FCF in ₹ crore (TTM) |
-| `fcf_yield_pct` | `float \| None` | — | FCF yield (%) |
-| `debt_to_equity` | `float \| None` | — | D/E ratio |
-| `current_ratio` | `float \| None` | — | Liquidity indicator |
-| `interest_coverage` | `float \| None` | — | EBIT / interest expense |
-| `roe_pct` | `float \| None` | — | Return on equity (%) |
-| `roce_pct` | `float \| None` | — | Return on capital employed (%) |
-| `strengths` | `list[str]` | default `[]` | Top 3–5 fundamental strengths |
-| `weaknesses` | `list[str]` | default `[]` | Top 3–5 weaknesses / risks |
-| `summary` | `str` | default `""` | 2–3 sentence PM-ready summary |
+| Field                  | Type            | Constraints   | Description                       |
+| ---------------------- | --------------- | ------------- | --------------------------------- |
+| `score`                | `int`           | `ge=1, le=10` | Overall fundamental quality score |
+| `revenue_growth_pct`   | `float \| None` | —             | YoY revenue growth (%)            |
+| `revenue_cagr_3y_pct`  | `float \| None` | —             | 3-year revenue CAGR (%)           |
+| `gross_margin_pct`     | `float \| None` | —             | Gross margin (%)                  |
+| `operating_margin_pct` | `float \| None` | —             | Operating margin (%)              |
+| `net_margin_pct`       | `float \| None` | —             | Net profit margin (%)             |
+| `free_cash_flow_cr`    | `float \| None` | —             | FCF in ₹ crore (TTM)              |
+| `fcf_yield_pct`        | `float \| None` | —             | FCF yield (%)                     |
+| `debt_to_equity`       | `float \| None` | —             | D/E ratio                         |
+| `current_ratio`        | `float \| None` | —             | Liquidity indicator               |
+| `interest_coverage`    | `float \| None` | —             | EBIT / interest expense           |
+| `roe_pct`              | `float \| None` | —             | Return on equity (%)              |
+| `roce_pct`             | `float \| None` | —             | Return on capital employed (%)    |
+| `strengths`            | `list[str]`     | default `[]`  | Top 3–5 fundamental strengths     |
+| `weaknesses`           | `list[str]`     | default `[]`  | Top 3–5 weaknesses / risks        |
+| `summary`              | `str`           | default `""`  | 2–3 sentence PM-ready summary     |
 
 ### Example JSON output
 
@@ -207,10 +207,10 @@ minimum contribution for that dimension.
 
 ### Persona
 
-> *"You are a seasoned technical chart analyst with 15 years of experience
+> _"You are a seasoned technical chart analyst with 15 years of experience
 > reading price action on Indian equity markets (NSE and BSE). You
 > specialise in trend identification, momentum analysis, and identifying
-> key support and resistance levels."*
+> key support and resistance levels."_
 
 ### Mandate
 
@@ -220,23 +220,23 @@ with a conviction score (1–10).
 
 ### Tools
 
-| Tool | Source | Cache TTL | Purpose |
-|------|--------|-----------|---------|
-| `fetch_stock_price` | yFinance OHLCV | 15 min | 1-year daily OHLCV data (~260 candles) |
+| Tool                | Source         | Cache TTL | Purpose                                |
+| ------------------- | -------------- | --------- | -------------------------------------- |
+| `fetch_stock_price` | yFinance OHLCV | 15 min    | 1-year daily OHLCV data (~260 candles) |
 
 ### Indicator computation
 
 All indicator computation is pure Python (no TA-Lib dependency):
 
-| Indicator | Formula | Minimum candles |
-|-----------|---------|----------------|
-| MA-50 | Simple moving average of last 50 closes | 50 |
-| MA-200 | Simple moving average of last 200 closes | 200 |
-| RSI-14 | Wilder's RSI on 14-period gains/losses | 15 |
-| Golden Cross | MA-50 > MA-200 | 200 |
-| Momentum 1M/3M/6M | `(P_now / P_n_periods_ago - 1) × 100` | 22 / 66 / 130 |
-| Volume trend | Average volume last 30d vs prior 30d | 60 |
-| 52-week high/low | Max/min close over trailing 252 candles | 1 |
+| Indicator         | Formula                                  | Minimum candles |
+| ----------------- | ---------------------------------------- | --------------- |
+| MA-50             | Simple moving average of last 50 closes  | 50              |
+| MA-200            | Simple moving average of last 200 closes | 200             |
+| RSI-14            | Wilder's RSI on 14-period gains/losses   | 15              |
+| Golden Cross      | MA-50 > MA-200                           | 200             |
+| Momentum 1M/3M/6M | `(P_now / P_n_periods_ago - 1) × 100`    | 22 / 66 / 130   |
+| Volume trend      | Average volume last 30d vs prior 30d     | 60              |
+| 52-week high/low  | Max/min close over trailing 252 candles  | 1               |
 
 When fewer than the minimum candles are available, the indicator is
 returned as `None` (not an error). The LLM receives the available
@@ -256,27 +256,27 @@ instructed to follow standard technical interpretation conventions:
 
 ### Output schema — `TechnicalAnalysis`
 
-| Field | Type | Constraints | Description |
-|-------|------|-------------|-------------|
-| `signal` | `str` | — | `"BUY"`, `"HOLD"`, or `"SELL"` |
-| `signal_strength` | `int` | `ge=1, le=10` | Conviction level |
-| `current_price` | `float \| None` | — | Latest close price (₹) |
-| `week_52_high` | `float \| None` | — | 52-week high (₹) |
-| `week_52_low` | `float \| None` | — | 52-week low (₹) |
-| `price_vs_52w_high_pct` | `float \| None` | — | Current price as % of 52w high |
-| `ma_50d` | `float \| None` | — | 50-day SMA (₹) |
-| `ma_200d` | `float \| None` | — | 200-day SMA (₹) |
-| `price_above_ma50` | `bool \| None` | — | Price above MA-50 |
-| `price_above_ma200` | `bool \| None` | — | Price above MA-200 |
-| `golden_cross` | `bool \| None` | — | MA-50 > MA-200 |
-| `rsi_14` | `float \| None` | — | 14-period RSI |
-| `momentum_1m_pct` | `float \| None` | — | 1-month return (%) |
-| `momentum_3m_pct` | `float \| None` | — | 3-month return (%) |
-| `momentum_6m_pct` | `float \| None` | — | 6-month return (%) |
-| `volume_trend` | `str \| None` | — | `"increasing"`, `"decreasing"`, `"stable"` |
-| `support_levels` | `list[float]` | default `[]` | Key support levels (₹) |
-| `resistance_levels` | `list[float]` | default `[]` | Key resistance levels (₹) |
-| `summary` | `str` | default `""` | 2–3 sentence PM-ready summary |
+| Field                   | Type            | Constraints   | Description                                |
+| ----------------------- | --------------- | ------------- | ------------------------------------------ |
+| `signal`                | `str`           | —             | `"BUY"`, `"HOLD"`, or `"SELL"`             |
+| `signal_strength`       | `int`           | `ge=1, le=10` | Conviction level                           |
+| `current_price`         | `float \| None` | —             | Latest close price (₹)                     |
+| `week_52_high`          | `float \| None` | —             | 52-week high (₹)                           |
+| `week_52_low`           | `float \| None` | —             | 52-week low (₹)                            |
+| `price_vs_52w_high_pct` | `float \| None` | —             | Current price as % of 52w high             |
+| `ma_50d`                | `float \| None` | —             | 50-day SMA (₹)                             |
+| `ma_200d`               | `float \| None` | —             | 200-day SMA (₹)                            |
+| `price_above_ma50`      | `bool \| None`  | —             | Price above MA-50                          |
+| `price_above_ma200`     | `bool \| None`  | —             | Price above MA-200                         |
+| `golden_cross`          | `bool \| None`  | —             | MA-50 > MA-200                             |
+| `rsi_14`                | `float \| None` | —             | 14-period RSI                              |
+| `momentum_1m_pct`       | `float \| None` | —             | 1-month return (%)                         |
+| `momentum_3m_pct`       | `float \| None` | —             | 3-month return (%)                         |
+| `momentum_6m_pct`       | `float \| None` | —             | 6-month return (%)                         |
+| `volume_trend`          | `str \| None`   | —             | `"increasing"`, `"decreasing"`, `"stable"` |
+| `support_levels`        | `list[float]`   | default `[]`  | Key support levels (₹)                     |
+| `resistance_levels`     | `list[float]`   | default `[]`  | Key resistance levels (₹)                  |
+| `summary`               | `str`           | default `""`  | 2–3 sentence PM-ready summary              |
 
 ### Example JSON output
 
@@ -290,11 +290,11 @@ instructed to follow standard technical interpretation conventions:
   "error": null,
   "signal": "BUY",
   "signal_strength": 7,
-  "current_price": 3859.50,
+  "current_price": 3859.5,
   "week_52_high": 4255.85,
   "week_52_low": 3056.05,
   "price_vs_52w_high_pct": 90.7,
-  "ma_50d": 3782.30,
+  "ma_50d": 3782.3,
   "ma_200d": 3541.65,
   "price_above_ma50": true,
   "price_above_ma200": true,
@@ -304,8 +304,8 @@ instructed to follow standard technical interpretation conventions:
   "momentum_3m_pct": 8.7,
   "momentum_6m_pct": 14.1,
   "volume_trend": "increasing",
-  "support_levels": [3782.30, 3650.00, 3541.65],
-  "resistance_levels": [4000.00, 4255.85],
+  "support_levels": [3782.3, 3650.0, 3541.65],
+  "resistance_levels": [4000.0, 4255.85],
   "summary": "TCS is in a confirmed uptrend with both MA crossovers bullish (golden cross present) and RSI at 62 — strong momentum without being overbought. Price is within 10% of 52-week highs and volume is expanding, which supports the BUY signal with high conviction."
 }
 ```
@@ -335,11 +335,11 @@ instructed to follow standard technical interpretation conventions:
 
 ### Persona
 
-> *"You are a sharp financial journalist who has covered Indian equities
+> _"You are a sharp financial journalist who has covered Indian equities
 > for 15 years. You read market news the way a seasoned reporter does —
 > looking for the story behind the story, spotting management credibility
 > gaps, regulatory smoke signals, and momentum shifts before they become
-> consensus."*
+> consensus."_
 
 ### Mandate
 
@@ -350,10 +350,10 @@ misconduct, and earnings restatements.
 
 ### Tools
 
-| Tool | Source | Cache TTL | Purpose |
-|------|--------|-----------|---------|
-| `fetch_news` | NewsAPI | 60 min | Last 30 days of headlines and snippets (max 20 articles) |
-| `semantic_search` | ChromaDB (`airp_news`) | — | Similarity search on previously ingested news embeddings |
+| Tool              | Source                 | Cache TTL | Purpose                                                  |
+| ----------------- | ---------------------- | --------- | -------------------------------------------------------- |
+| `fetch_news`      | NewsAPI                | 60 min    | Last 30 days of headlines and snippets (max 20 articles) |
+| `semantic_search` | ChromaDB (`airp_news`) | —         | Similarity search on previously ingested news embeddings |
 
 ChromaDB search is non-fatal — if it fails, the agent continues with
 NewsAPI data alone.
@@ -382,13 +382,13 @@ Layer 3 — Merge:
 
 **Score bands:**
 
-| Score range | Label |
-|-------------|-------|
-| > 0.3 | `very_positive` |
-| 0.1 to 0.3 | `positive` |
-| -0.1 to 0.1 | `neutral` |
-| -0.3 to -0.1 | `negative` |
-| < -0.3 | `very_negative` |
+| Score range  | Label           |
+| ------------ | --------------- |
+| > 0.3        | `very_positive` |
+| 0.1 to 0.3   | `positive`      |
+| -0.1 to 0.1  | `neutral`       |
+| -0.3 to -0.1 | `negative`      |
+| < -0.3       | `very_negative` |
 
 **Red flag triggers (deterministic):** `sebi`, `fraud`, `investigation`,
 `probe`, `insider trading`, `accounting restatement`, `whistleblower`,
@@ -398,20 +398,20 @@ Layer 3 — Merge:
 
 ### Output schema — `SentimentAnalysis`
 
-| Field | Type | Constraints | Description |
-|-------|------|-------------|-------------|
-| `sentiment_score` | `float` | `ge=-1.0, le=1.0` | Aggregate score |
-| `sentiment_label` | `str` | — | Human-readable band label |
-| `articles_analysed` | `int` | `ge=0` | Number of articles processed |
-| `positive_articles` | `int` | `ge=0` | Articles with score > 0.1 |
-| `negative_articles` | `int` | `ge=0` | Articles with score < -0.1 |
-| `neutral_articles` | `int` | `ge=0` | Articles with \|score\| ≤ 0.1 |
-| `red_flags` | `list[str]` | default `[]` | Specific red flag descriptions |
-| `red_flag_count` | `int` | `ge=0` | len(red_flags) |
-| `top_positive_headlines` | `list[str]` | default `[]` | Up to 3 top positive headlines |
-| `top_negative_headlines` | `list[str]` | default `[]` | Up to 3 top negative headlines |
-| `dominant_topics` | `list[str]` | default `[]` | 3–5 dominant news themes |
-| `summary` | `str` | default `""` | 2–3 sentence PM-ready summary |
+| Field                    | Type        | Constraints       | Description                    |
+| ------------------------ | ----------- | ----------------- | ------------------------------ |
+| `sentiment_score`        | `float`     | `ge=-1.0, le=1.0` | Aggregate score                |
+| `sentiment_label`        | `str`       | —                 | Human-readable band label      |
+| `articles_analysed`      | `int`       | `ge=0`            | Number of articles processed   |
+| `positive_articles`      | `int`       | `ge=0`            | Articles with score > 0.1      |
+| `negative_articles`      | `int`       | `ge=0`            | Articles with score < -0.1     |
+| `neutral_articles`       | `int`       | `ge=0`            | Articles with \|score\| ≤ 0.1  |
+| `red_flags`              | `list[str]` | default `[]`      | Specific red flag descriptions |
+| `red_flag_count`         | `int`       | `ge=0`            | len(red_flags)                 |
+| `top_positive_headlines` | `list[str]` | default `[]`      | Up to 3 top positive headlines |
+| `top_negative_headlines` | `list[str]` | default `[]`      | Up to 3 top negative headlines |
+| `dominant_topics`        | `list[str]` | default `[]`      | 3–5 dominant news themes       |
+| `summary`                | `str`       | default `""`      | 2–3 sentence PM-ready summary  |
 
 ### Example JSON output
 
@@ -476,10 +476,10 @@ Layer 3 — Merge:
 
 ### Persona
 
-> *"You are a macro economist with 20 years of experience covering Indian
+> _"You are a macro economist with 20 years of experience covering Indian
 > equity markets. You cut through noise to identify the macro forces that
 > actually move stock prices — RBI rate cycles, inflation trajectories,
-> GDP momentum, and currency trends."*
+> GDP momentum, and currency trends."_
 
 ### Mandate
 
@@ -489,10 +489,10 @@ impact (tailwind / neutral / headwind) for the company under analysis.
 
 ### Tools
 
-| Tool | Source | Cache TTL | Purpose |
-|------|--------|-----------|---------|
-| `fetch_macro_data` | RBI website, MOSPI, World Bank | 24 hrs | Repo rate, CPI inflation, GDP growth |
-| `semantic_search` | ChromaDB (`airp_news`) | — | Sector macro news context (non-fatal) |
+| Tool               | Source                         | Cache TTL | Purpose                               |
+| ------------------ | ------------------------------ | --------- | ------------------------------------- |
+| `fetch_macro_data` | RBI website, MOSPI, World Bank | 24 hrs    | Repo rate, CPI inflation, GDP growth  |
+| `semantic_search`  | ChromaDB (`airp_news`)         | —         | Sector macro news context (non-fatal) |
 
 ### Classification logic
 
@@ -500,40 +500,40 @@ All classifications are deterministic before the LLM call:
 
 **Rate stance** (from RBI repo rate):
 
-| Repo rate | Stance |
-|-----------|--------|
-| < 5.0% | `accommodative` |
-| 5.0 – 5.99% | `neutral` |
+| Repo rate   | Stance                  |
+| ----------- | ----------------------- |
+| < 5.0%      | `accommodative`         |
+| 5.0 – 5.99% | `neutral`               |
 | 6.0 – 6.99% | `calibrated_tightening` |
-| ≥ 7.0% | `tightening` |
+| ≥ 7.0%      | `tightening`            |
 
 **Rate direction** (vs neutral midpoint 6.0%):
 
 | Repo rate vs 6.0% | Direction |
-|-------------------|-----------|
-| Below | `cutting` |
-| Equal | `holding` |
-| Above | `hiking` |
+| ----------------- | --------- |
+| Below             | `cutting` |
+| Equal             | `holding` |
+| Above             | `hiking`  |
 
 **Inflation trend** (from CPI):
 
-| CPI | Trend |
-|-----|-------|
-| < 4.0% | `falling` |
-| 4.0 – 5.99% | `stable` |
-| ≥ 6.0% | `rising` |
+| CPI         | Trend     |
+| ----------- | --------- |
+| < 4.0%      | `falling` |
+| 4.0 – 5.99% | `stable`  |
+| ≥ 6.0%      | `rising`  |
 
 **Sector impact** is looked up from a 9-sector × 4-stance rule table.
 Key rules relevant to the acceptance criteria:
 
-| Sector | Rate stance | Impact |
-|--------|-------------|--------|
-| `banking` | `tightening` | **headwind** (NIM compression, higher cost of funds) |
-| `banking` | `accommodative` | **tailwind** (loan demand surge, mark-to-market gains) |
-| `nbfc` | `tightening` | **headwind** (spread compression, liquidity tightening) |
-| `auto` | `tightening` | **headwind** (EMI affordability, dealer inventory costs) |
-| `it_services` | `tightening` | **neutral** (USD-denominated revenue, insulated from domestic rates) |
-| `pharma_healthcare` | any | **neutral** (inelastic demand) |
+| Sector              | Rate stance     | Impact                                                               |
+| ------------------- | --------------- | -------------------------------------------------------------------- |
+| `banking`           | `tightening`    | **headwind** (NIM compression, higher cost of funds)                 |
+| `banking`           | `accommodative` | **tailwind** (loan demand surge, mark-to-market gains)               |
+| `nbfc`              | `tightening`    | **headwind** (spread compression, liquidity tightening)              |
+| `auto`              | `tightening`    | **headwind** (EMI affordability, dealer inventory costs)             |
+| `it_services`       | `tightening`    | **neutral** (USD-denominated revenue, insulated from domestic rates) |
+| `pharma_healthcare` | any             | **neutral** (inelastic demand)                                       |
 
 **Sector detection** uses keyword matching on `company_name`. Sectors:
 `banking`, `nbfc`, `it_services`, `energy`, `pharma_healthcare`, `auto`,
@@ -541,23 +541,23 @@ Key rules relevant to the acceptance criteria:
 
 ### Output schema — `MacroAnalysis`
 
-| Field | Type | Constraints | Description |
-|-------|------|-------------|-------------|
-| `macro_environment` | `str` | required | `"favourable"`, `"neutral"`, or `"unfavourable"` |
-| `sector_impact` | `str` | required | `"tailwind"`, `"neutral"`, or `"headwind"` |
-| `rbi_repo_rate_pct` | `float \| None` | — | RBI repo rate (%) |
-| `rate_stance` | `str \| None` | — | `"accommodative"` / `"neutral"` / `"calibrated_tightening"` / `"tightening"` |
-| `rate_direction` | `str \| None` | — | `"cutting"` / `"holding"` / `"hiking"` |
-| `cpi_inflation_pct` | `float \| None` | — | CPI (%) |
-| `wpi_inflation_pct` | `float \| None` | — | WPI (%) |
-| `inflation_trend` | `str \| None` | — | `"rising"` / `"stable"` / `"falling"` |
-| `gdp_growth_pct` | `float \| None` | — | GDP growth (%) |
-| `gdp_forecast_pct` | `float \| None` | — | IMF/World Bank GDP forecast (%) |
-| `tailwinds` | `list[str]` | default `[]` | Sector-specific macro tailwinds |
-| `headwinds` | `list[str]` | default `[]` | Sector-specific macro headwinds |
-| `usd_inr_rate` | `float \| None` | — | USD/INR rate (Phase 4 enrichment) |
-| `inr_trend` | `str \| None` | — | `"appreciating"` / `"stable"` / `"depreciating"` |
-| `summary` | `str` | default `""` | 2–3 sentence PM-ready summary |
+| Field               | Type            | Constraints  | Description                                                                  |
+| ------------------- | --------------- | ------------ | ---------------------------------------------------------------------------- |
+| `macro_environment` | `str`           | required     | `"favourable"`, `"neutral"`, or `"unfavourable"`                             |
+| `sector_impact`     | `str`           | required     | `"tailwind"`, `"neutral"`, or `"headwind"`                                   |
+| `rbi_repo_rate_pct` | `float \| None` | —            | RBI repo rate (%)                                                            |
+| `rate_stance`       | `str \| None`   | —            | `"accommodative"` / `"neutral"` / `"calibrated_tightening"` / `"tightening"` |
+| `rate_direction`    | `str \| None`   | —            | `"cutting"` / `"holding"` / `"hiking"`                                       |
+| `cpi_inflation_pct` | `float \| None` | —            | CPI (%)                                                                      |
+| `wpi_inflation_pct` | `float \| None` | —            | WPI (%)                                                                      |
+| `inflation_trend`   | `str \| None`   | —            | `"rising"` / `"stable"` / `"falling"`                                        |
+| `gdp_growth_pct`    | `float \| None` | —            | GDP growth (%)                                                               |
+| `gdp_forecast_pct`  | `float \| None` | —            | IMF/World Bank GDP forecast (%)                                              |
+| `tailwinds`         | `list[str]`     | default `[]` | Sector-specific macro tailwinds                                              |
+| `headwinds`         | `list[str]`     | default `[]` | Sector-specific macro headwinds                                              |
+| `usd_inr_rate`      | `float \| None` | —            | USD/INR rate (Phase 4 enrichment)                                            |
+| `inr_trend`         | `str \| None`   | —            | `"appreciating"` / `"stable"` / `"depreciating"`                             |
+| `summary`           | `str`           | default `""` | 2–3 sentence PM-ready summary                                                |
 
 ### Example JSON output
 
@@ -723,16 +723,16 @@ Planner (T-029)
 
 State key written by each agent:
 
-| Agent | State key written |
-|-------|------------------|
-| Fundamental Analyst | `state["fundamental"]` |
-| Technical Analyst | `state["technical"]` |
-| News Sentiment Agent | `state["sentiment"]` |
-| Macro Economist | `state["macro"]` |
-| Risk Officer | `state["risk"]` |
-| Contrarian Investor | `state["contrarian"]` |
-| Valuation Agent | `state["valuation"]` |
-| Portfolio Manager | `state["decision"]` |
+| Agent                | State key written      |
+| -------------------- | ---------------------- |
+| Fundamental Analyst  | `state["fundamental"]` |
+| Technical Analyst    | `state["technical"]`   |
+| News Sentiment Agent | `state["sentiment"]`   |
+| Macro Economist      | `state["macro"]`       |
+| Risk Officer         | `state["risk"]`        |
+| Contrarian Investor  | `state["contrarian"]`  |
+| Valuation Agent      | `state["valuation"]`   |
+| Portfolio Manager    | `state["decision"]`    |
 
 ---
 
@@ -761,12 +761,12 @@ Every agent node is wrapped with `@traced_agent(agent_name)` from
 
 Each LangSmith run entry includes:
 
-| Field | Value |
-|-------|-------|
-| Run name | `agent_name` (e.g. `fundamental_analyst`) |
-| Run type | `chain` |
-| Tags | `[agent_name, company_name]` |
-| Metadata | `{agent_name, analysis_id, company_name}` |
+| Field      | Value                                            |
+| ---------- | ------------------------------------------------ |
+| Run name   | `agent_name` (e.g. `fundamental_analyst`)        |
+| Run type   | `chain`                                          |
+| Tags       | `[agent_name, company_name]`                     |
+| Metadata   | `{agent_name, analysis_id, company_name}`        |
 | Child runs | Tool calls + LLM call (auto-traced by LangChain) |
 
 To enable tracing, set in `.env`:

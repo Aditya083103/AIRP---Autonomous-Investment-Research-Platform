@@ -19,6 +19,7 @@ its own file under `src/components/landing/` so `HomePage.tsx` stays pure
 composition.
 
 **Acceptance criteria (all must pass):**
+
 - Page renders on mobile and desktop
 - CTA links to analysis page
 - No layout bugs
@@ -30,6 +31,7 @@ one test file per section plus an integration test for `HomePage`.
 
 **Explicitly out of scope** (separate Phase 6 tasks, per the master task
 list):
+
 - The real Analysis Input page (company autocomplete, PDF upload,
   validation) -- that is T-058. `/analysis` is a small, honest
   placeholder here, not a fake form.
@@ -53,6 +55,7 @@ list):
 ### Landing sections (`frontend/src/components/landing/`)
 
 #### `HeroSection.tsx` (new)
+
 Headline, subhead, and two CTAs: a primary "Run a live analysis" button
 (`Link` to `/analysis`) and a secondary "See how it works" anchor
 (`<a href="#how-it-works">` -- a plain anchor, not a router `Link`, so
@@ -64,6 +67,7 @@ score -- instead of a generic stat block. Labelled "Example output" in
 two places so it never reads as a live recommendation.
 
 #### `CommitteeSection.tsx` (new)
+
 The "8 agents diagram" acceptance criterion. Deliberately mirrors
 `docs/AIRP_Architecture.drawio`'s colour legend instead of inventing a new
 one: research agents (`Fundamental Analyst`, `Technical Analyst`,
@@ -76,6 +80,7 @@ seat number, mandate, tools, and Pydantic output type straight from
 `AIRP_Project_Overview_Updated.docx` section 3.
 
 #### `HowItWorksSection.tsx` (new)
+
 The "how-it-works steps" acceptance criterion. A genuinely ordered
 5-step `<ol>` (numbered `01`-`05`) condensed from the overview doc's
 section 4.2 "Request Flow" -- numbering is justified here (unlike the
@@ -83,6 +88,7 @@ committee section, which is grouped by round, not sequence) because this
 content really is a pipeline a user's request passes through.
 
 #### `DemoCtaSection.tsx` (new)
+
 The "live demo CTA" acceptance criterion as its own dedicated,
 high-contrast band (dark `bg-ink` card) further down the page, separate
 from the hero's CTA -- so a reader who scrolled past the hero to read the
@@ -90,16 +96,18 @@ committee and how-it-works sections first still has an obvious next step.
 Links to `/analysis`.
 
 #### `TechStackSection.tsx` (new)
+
 The "tech stack logos" acceptance criterion, rendered as text wordmark
 chips (React 18, TypeScript, Tailwind CSS, FastAPI, LangGraph, LangChain,
 PostgreSQL, ChromaDB, Redis, Groq Llama 3.3) instead of fetched brand-logo
 image assets -- no `<img>` in this section at all (covered by its test).
 
 #### `LandingFooter.tsx` (new)
+
 The "footer" acceptance criterion: a rich content footer (an AIRP blurb,
 a Product link column, a Project link column with the GitHub repo) plus a
 plain-language disclaimer ("Educational portfolio project ... not
-investment advice"). This is the page's *content* footer, rendered inside
+investment advice"). This is the page's _content_ footer, rendered inside
 `<main>` as the landing page's last section -- it is intentionally
 separate from `RootLayout`'s existing slim chrome footer ("Built as a
 portfolio project...") which still renders below it on every route. That
@@ -110,24 +118,28 @@ footer. Internal links use a router `Link`, the hash anchors use plain
 link opens with `target="_blank" rel="noreferrer"`.
 
 #### `index.ts` (new)
+
 Barrel export for the six sections, mirroring
 `src/components/ui/index.ts`'s pattern from T-054.
 
 ### Pages
 
 #### `src/pages/HomePage.tsx` (rewritten)
+
 T-053's small foundation page is replaced with the real composition: the
 six landing sections in reading order, nothing else. HomePage owns no
 content of its own now -- every section is independently testable and
 independently owned by its own file.
 
 #### `src/pages/AnalysisPage.tsx` (new)
+
 A small, honest placeholder at `/analysis` -- the target of both CTAs.
 States plainly that the real form lands in T-058/T-059 and links back to
 `#how-it-works`. Not linked from the header nav or footer as a finished
 feature; it exists purely so the CTAs are not dead links.
 
 #### `src/routes/AppRoutes.tsx` (modified)
+
 Adds `<Route path="analysis" element={<AnalysisPage />} />` between the
 home index and the `/dev/components` preview route.
 
@@ -261,18 +273,22 @@ git push -u origin feat/ui-landing
 ```
 
 **Commit message:**
+
 ```
 feat(ui): build AIRP marketing landing page
 ```
 
 **PR title:**
+
 ```
 feat(ui): implement marketing landing page with 8-agent committee diagram
 ```
 
 **PR description:**
+
 ```markdown
 ## Summary
+
 Replaces the T-053 foundation home page with AIRP's real marketing
 landing page: a hero with a static example-output preview, an 8-agent
 committee diagram colour-matched to the architecture doc, a 5-step
@@ -282,37 +298,42 @@ a placeholder `/analysis` route so both CTAs resolve to a real page ahead
 of the full Analysis Input page in T-058.
 
 ## Changes
+
 - Add `src/components/landing/{HeroSection,CommitteeSection,
-  HowItWorksSection,DemoCtaSection,TechStackSection,LandingFooter}.tsx`
+HowItWorksSection,DemoCtaSection,TechStackSection,LandingFooter}.tsx`
   plus a barrel `index.ts`, composed entirely from existing
   `@/components/ui` primitives (T-054) -- zero new dependencies
 - Rewrite `src/pages/HomePage.tsx` to compose the six sections
 - Add `src/pages/AnalysisPage.tsx` (placeholder; real form is T-058) and
   wire `path="analysis"` into `src/routes/AppRoutes.tsx`
 - Add `src/test/{HeroSection,CommitteeSection,HowItWorksSection,
-  DemoCtaSection,TechStackSection,LandingFooter,HomePage,
-  AnalysisPage}.test.tsx`
+DemoCtaSection,TechStackSection,LandingFooter,HomePage,
+AnalysisPage}.test.tsx`
 
 ## Testing
+
 - [x] Unit tests added / updated -- one `*.test.tsx` per landing section
-  plus integration tests for `HomePage` (all sections compose, exactly
-  one `<h1>`) and `AnalysisPage`
+      plus integration tests for `HomePage` (all sections compose, exactly
+      one `<h1>`) and `AnalysisPage`
 - [x] Integration tests pass (backend untouched; backend gate unaffected)
 - [x] Manual smoke test performed (`npm run dev`, `/` -- hero CTAs
-  verified, hash-anchor scroll confirmed, responsive reflow checked at
-  375px width, no horizontal scrollbar or overlapping text)
+      verified, hash-anchor scroll confirmed, responsive reflow checked at
+      375px width, no horizontal scrollbar or overlapping text)
 
 `npm run type-check`, `npm run lint`, `npm run format:check`,
 `npm run test:run`, and `npm run build` all pass locally.
 
 ## LangSmith Trace
+
 n/a -- no agent code touched.
 
 ## Screenshots
+
 <paste terminal output of the five passing npm checks, plus desktop and
 375px-wide mobile screenshots of the landing page>
 
 ## Related Issues
+
 Closes #<issue-number>
 ```
 

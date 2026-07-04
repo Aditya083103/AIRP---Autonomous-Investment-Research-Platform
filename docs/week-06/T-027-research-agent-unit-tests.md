@@ -14,25 +14,27 @@ T-027 produces a single consolidated test file —
 left by the individual agent test files written in T-022 through T-025.
 
 **Acceptance criteria:**
-- >85% coverage across all 4 research agent modules
+
+- > 85% coverage across all 4 research agent modules
 - All schema validations tested (Pydantic ValidationError paths)
 - Error paths covered when tools return empty data
 - All tool calls mocked — no network, no LLM quota
 
 **What the individual files already cover (do NOT duplicate):**
+
 - Pure function unit tests (`compute_rsi`, `_score_article`, etc.)
 - Happy-path `_run_*_core` and `run_*` node tests
 - LLM mock and fallback summary tests
 
 **What T-027 adds (gap coverage):**
 
-| Gap | Test classes |
-|-----|-------------|
-| Pydantic field constraints (ValidationError) | `TestFundamentalAnalystSchemaValidation`, `TestTechnicalAnalystSchemaValidation`, `TestSentimentAnalystSchemaValidation`, `TestMacroAnalystSchemaValidation` |
-| Tools returning `{}` / sparse / minimal data | `TestFundamentalAnalystEmptyData`, `TestTechnicalAnalystEmptyData`, `TestSentimentAnalystEmptyData`, `TestMacroAnalystEmptyData` |
-| `tool.invoke()` raises exception (not error dict) | `TestFundamentalAnalystErrorPaths`, `TestTechnicalAnalystErrorPaths`, `TestSentimentAnalystErrorPaths`, `TestMacroAnalystErrorPaths` |
-| State dict key + JSON-safe contract (all agents) | `TestAllAgentsNodeContract` |
-| `@traced_agent` structural check | `TestAllAgentsTracingIntegration` |
+| Gap                                               | Test classes                                                                                                                                                 |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Pydantic field constraints (ValidationError)      | `TestFundamentalAnalystSchemaValidation`, `TestTechnicalAnalystSchemaValidation`, `TestSentimentAnalystSchemaValidation`, `TestMacroAnalystSchemaValidation` |
+| Tools returning `{}` / sparse / minimal data      | `TestFundamentalAnalystEmptyData`, `TestTechnicalAnalystEmptyData`, `TestSentimentAnalystEmptyData`, `TestMacroAnalystEmptyData`                             |
+| `tool.invoke()` raises exception (not error dict) | `TestFundamentalAnalystErrorPaths`, `TestTechnicalAnalystErrorPaths`, `TestSentimentAnalystErrorPaths`, `TestMacroAnalystErrorPaths`                         |
+| State dict key + JSON-safe contract (all agents)  | `TestAllAgentsNodeContract`                                                                                                                                  |
+| `@traced_agent` structural check                  | `TestAllAgentsTracingIntegration`                                                                                                                            |
 
 ---
 
@@ -56,10 +58,10 @@ git checkout -b feat/agent-research-tests
 
 ## 3. File to Create
 
-| File | Path |
-|------|------|
-| Tests | `backend/tests/unit/test_research_agents.py` |
-| Docs | `docs/week-05/T-027-research-agent-unit-tests.md` |
+| File  | Path                                              |
+| ----- | ------------------------------------------------- |
+| Tests | `backend/tests/unit/test_research_agents.py`      |
+| Docs  | `docs/week-05/T-027-research-agent-unit-tests.md` |
 
 Only one new Python file. The four existing individual test files are
 **not modified** — T-027 adds to coverage, not replaces existing tests.
@@ -188,8 +190,11 @@ tests and structural verification that @traced_agent was applied to all nodes.
 ## Testing
 
 ```
+
 python -m pytest backend/tests/unit/test_research_agents.py -v
+
 # 117 passed
+
 ```
 
 All schema validations tested:
@@ -236,17 +241,17 @@ git branch -d feat/agent-research-tests
 
 ## 12. Acceptance Criteria Mapping
 
-| Criterion | How verified | Test count |
-|-----------|-------------|-----------|
-| >85% coverage | `--cov-fail-under=85` on `backend/agents` | Full suite |
-| All schema validations tested | 4 × SchemaValidation classes | 42 tests |
-| Error paths covered (empty data) | 4 × EmptyData classes | 40 tests |
-| Error paths covered (tool raises) | 4 × ErrorPaths classes | 20 tests |
-| All tool calls mocked | `patch()` on every tool import | All 117 |
-| JSON-safe output | `model_dump(mode="json")` + `json.dumps()` | 4 tests |
-| Tracing applied | `__wrapped__` attribute check | 5 tests |
+| Criterion                         | How verified                               | Test count |
+| --------------------------------- | ------------------------------------------ | ---------- |
+| >85% coverage                     | `--cov-fail-under=85` on `backend/agents`  | Full suite |
+| All schema validations tested     | 4 × SchemaValidation classes               | 42 tests   |
+| Error paths covered (empty data)  | 4 × EmptyData classes                      | 40 tests   |
+| Error paths covered (tool raises) | 4 × ErrorPaths classes                     | 20 tests   |
+| All tool calls mocked             | `patch()` on every tool import             | All 117    |
+| JSON-safe output                  | `model_dump(mode="json")` + `json.dumps()` | 4 tests    |
+| Tracing applied                   | `__wrapped__` attribute check              | 5 tests    |
 
 ---
 
-*T-027 complete. Phase 2 research agents fully tested.*
-*Next: T-028 (data layer documentation) or T-029 (LangGraph Planner node).*
+_T-027 complete. Phase 2 research agents fully tested._
+_Next: T-028 (data layer documentation) or T-029 (LangGraph Planner node)._

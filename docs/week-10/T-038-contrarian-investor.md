@@ -10,12 +10,13 @@
 ## Overview
 
 T-038 builds the **Contrarian Investor agent** -- the sixth of eight investment
-committee agents.  The Contrarian's only job is to disagree: it reads all five
+committee agents. The Contrarian's only job is to disagree: it reads all five
 prior agent outputs (Fundamental, Technical, Sentiment, Macro, Risk) and
 produces a `ContrarianReport` with named counter-arguments, overlooked risks,
 and a bear conviction score that drives the debate loop routing.
 
 **Acceptance criteria (all must pass):**
+
 - Agent produces at least 3 distinct counter-arguments for any bullish stock
 - Validated on TCS profile (fund score 9/10, BUY signal) and
   Infosys profile (fund score 8/10, overbought RSI)
@@ -32,12 +33,12 @@ Also in this PR: **T-037 CI fix** -- removes `type: ignore[misc]` on
 
 ## Files Changed
 
-| File | Change |
-|------|--------|
-| `backend/agents/contrarian_investor.py` | **New** -- full Contrarian Investor agent |
-| `backend/tests/unit/test_contrarian_investor.py` | **New** -- 83 unit tests |
-| `backend/graph/nodes.py` | **Modified** -- replaced stub `_contrarian_impl` with real delegate; added import |
-| `backend/tests/unit/test_risk_officer.py` | **Modified** -- T-037 CI fix: removed `# type: ignore[misc]` on `__wrapped__` access |
+| File                                             | Change                                                                               |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------ |
+| `backend/agents/contrarian_investor.py`          | **New** -- full Contrarian Investor agent                                            |
+| `backend/tests/unit/test_contrarian_investor.py` | **New** -- 83 unit tests                                                             |
+| `backend/graph/nodes.py`                         | **Modified** -- replaced stub `_contrarian_impl` with real delegate; added import    |
+| `backend/tests/unit/test_risk_officer.py`        | **Modified** -- T-037 CI fix: removed `# type: ignore[misc]` on `__wrapped__` access |
 
 ---
 
@@ -45,7 +46,7 @@ Also in this PR: **T-037 CI fix** -- removes `type: ignore[misc]` on
 
 ### Root cause
 
-`mypy --strict` implies `--warn-unused-ignores`.  In the test file, line 1149
+`mypy --strict` implies `--warn-unused-ignores`. In the test file, line 1149
 contained:
 
 ```python
@@ -82,7 +83,7 @@ uses a default argument (three-argument form), unlike
 The two `# type: ignore[misc]` comments on frozen-model mutation tests
 (lines 706 and 1091) are **kept** -- they are always necessary because mypy
 `--strict` always flags assignment to a frozen Pydantic model attribute as
-`[misc]`, regardless of whether pydantic is installed.  This matches the
+`[misc]`, regardless of whether pydantic is installed. This matches the
 existing pattern in `test_research_agents.py` line 314 which passes CI.
 
 ---
@@ -95,10 +96,10 @@ Two-stage pipeline:
 
 **Stage 1 -- Deterministic (no LLM, always executes)**
 
-| Function | Purpose |
-|----------|---------|
-| `_build_counter_arguments(...)` | Builds >= 3 specific counter-arguments from all research data |
-| `_score_bear_conviction(...)` | Computes `bear_conviction` 1-10 from strength of bullish signals |
+| Function                        | Purpose                                                          |
+| ------------------------------- | ---------------------------------------------------------------- |
+| `_build_counter_arguments(...)` | Builds >= 3 specific counter-arguments from all research data    |
+| `_score_bear_conviction(...)`   | Computes `bear_conviction` 1-10 from strength of bullish signals |
 
 **Counter-argument logic (`_build_counter_arguments`):**
 
@@ -135,6 +136,7 @@ clip to [1, 10]
 **Stage 2 -- LLM synthesis**
 
 The LLM receives all pre-computed arguments and is instructed to:
+
 - Extend/deepen the arguments (not repeat them)
 - Add 1-3 overlooked risks no other agent flagged
 - Identify the single strongest argument
@@ -179,34 +181,34 @@ with `ticker=""` triggers the early-return error path (no LLM call needed).
 
 83 unit tests across 9 test classes:
 
-| Class | Tests | What it covers |
-|-------|-------|----------------|
-| `TestConstants` | 1 | `MIN_COUNTER_ARGUMENTS == 3` |
-| `TestBuildCounterArguments` | 15 | TCS/Infosys acceptance criteria; PE/ROE/D/E/RSI/sentiment/risk challenges; caps; empty dicts |
-| `TestScoreBearConviction` | 9 | Bullish/bearish profiles; each scoring dimension; bounds |
-| `TestBuildContrarianPrompt` | 11 | Company/ticker/scores in prompt; ASCII-only; N/A formatting |
-| `TestRunContrarianAnalysisCore` | 14 | TCS & Infosys acceptance criteria; LLM merge; failure paths; frozen model; JSON-safe |
-| `TestRunContrarianAnalysisNode` | 11 | State in/out; round count increment; missing ticker; None research; acceptance criteria |
-| `TestContrarianReportSchemaValidation` | 9 | Pydantic bounds (0 rejected, 11 rejected); defaults; frozen; round-trip |
-| `TestSystemPrompt` | 8 | Content checks; ASCII-only; required keys present |
-| `TestTracingIntegration` | 2 | `__wrapped__` present; callable (safe pattern, no `type: ignore`) |
+| Class                                  | Tests | What it covers                                                                               |
+| -------------------------------------- | ----- | -------------------------------------------------------------------------------------------- |
+| `TestConstants`                        | 1     | `MIN_COUNTER_ARGUMENTS == 3`                                                                 |
+| `TestBuildCounterArguments`            | 15    | TCS/Infosys acceptance criteria; PE/ROE/D/E/RSI/sentiment/risk challenges; caps; empty dicts |
+| `TestScoreBearConviction`              | 9     | Bullish/bearish profiles; each scoring dimension; bounds                                     |
+| `TestBuildContrarianPrompt`            | 11    | Company/ticker/scores in prompt; ASCII-only; N/A formatting                                  |
+| `TestRunContrarianAnalysisCore`        | 14    | TCS & Infosys acceptance criteria; LLM merge; failure paths; frozen model; JSON-safe         |
+| `TestRunContrarianAnalysisNode`        | 11    | State in/out; round count increment; missing ticker; None research; acceptance criteria      |
+| `TestContrarianReportSchemaValidation` | 9     | Pydantic bounds (0 rejected, 11 rejected); defaults; frozen; round-trip                      |
+| `TestSystemPrompt`                     | 8     | Content checks; ASCII-only; required keys present                                            |
+| `TestTracingIntegration`               | 2     | `__wrapped__` present; callable (safe pattern, no `type: ignore`)                            |
 
 ---
 
 ## AIRP Standards Compliance
 
-| Standard | Status |
-|----------|--------|
-| No `from __future__ import annotations` | OK |
-| Plain ASCII section comments (`# ---`) | OK |
-| No bare `# type: ignore` in agent file | OK -- zero in `contrarian_investor.py` |
-| No `type: ignore` that becomes unused when packages installed | OK -- fixed in `test_risk_officer.py` |
-| `# type: ignore[misc]` on frozen model mutations in tests | OK -- always necessary, matches existing pattern |
-| Agent never raises | OK |
-| `@traced_agent` applied | OK |
-| `_run_contrarian_analysis_core` separated for testability | OK |
-| All lines <= 88 bytes | OK |
-| All ASCII | OK |
+| Standard                                                      | Status                                           |
+| ------------------------------------------------------------- | ------------------------------------------------ |
+| No `from __future__ import annotations`                       | OK                                               |
+| Plain ASCII section comments (`# ---`)                        | OK                                               |
+| No bare `# type: ignore` in agent file                        | OK -- zero in `contrarian_investor.py`           |
+| No `type: ignore` that becomes unused when packages installed | OK -- fixed in `test_risk_officer.py`            |
+| `# type: ignore[misc]` on frozen model mutations in tests     | OK -- always necessary, matches existing pattern |
+| Agent never raises                                            | OK                                               |
+| `@traced_agent` applied                                       | OK                                               |
+| `_run_contrarian_analysis_core` separated for testability     | OK                                               |
+| All lines <= 88 bytes                                         | OK                                               |
+| All ASCII                                                     | OK                                               |
 
 ---
 
@@ -232,6 +234,7 @@ backend/tests/unit/test_risk_officer.py         (modified -- T-037 CI fix)
 ### 3. Set environment and run tests
 
 **Windows CMD:**
+
 ```cmd
 set ENVIRONMENT=test
 python -m pytest backend/tests/unit/test_contrarian_investor.py -v --tb=short
@@ -239,6 +242,7 @@ python -m pytest backend/tests/unit/test_risk_officer.py -v --tb=short
 ```
 
 **Git Bash / Mac / Linux:**
+
 ```bash
 export ENVIRONMENT=test
 python -m pytest backend/tests/unit/test_contrarian_investor.py -v --tb=short
@@ -267,6 +271,7 @@ git commit -m "feat(agents): add Contrarian Investor agent with deterministic co
 ```
 
 If pre-commit auto-fixes formatting:
+
 ```bash
 git add .
 git commit -m "feat(agents): add Contrarian Investor agent with deterministic counter-arguments"
@@ -283,6 +288,7 @@ git push -u origin feat/debate-contrarian
 ## PR Details
 
 **PR title:**
+
 ```
 feat(agents): T-038 Contrarian Investor agent + T-037 mypy CI fix
 ```
@@ -297,7 +303,7 @@ Implements the Contrarian Investor agent (T-038) and fixes the mypy
 
 The Contrarian reads all five prior agent outputs and produces a
 `ContrarianReport` with >= 3 counter-arguments for any bullish stock,
-validated on TCS and Infosys profiles.  The `bear_conviction` score (1-10)
+validated on TCS and Infosys profiles. The `bear_conviction` score (1-10)
 drives the LangGraph debate loop routing.
 
 ## Changes

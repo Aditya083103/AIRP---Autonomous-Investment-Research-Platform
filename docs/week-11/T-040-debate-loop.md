@@ -28,6 +28,7 @@ so it now fires after `debate_loop` instead of directly after
 `contrarian_node`.
 
 **Acceptance criteria (all must pass):**
+
 - 2 debate rounds complete in <3 minutes
 - `debate_rounds[]` contains responses from each agent
 - No infinite loops
@@ -36,13 +37,13 @@ so it now fires after `debate_loop` instead of directly after
 
 ## Files Changed
 
-| File | Change |
-|------|--------|
-| `backend/graph/nodes.py` | **Modified** -- added `NODE_DEBATE_LOOP`, `debate_loop_node`, and its deterministic helper functions |
-| `backend/graph/routing.py` | **Modified** -- promoted `MAX_DEBATE_ROUNDS` to a module constant; updated `route_after_contrarian` docstring (logic unchanged) |
-| `backend/graph/graph.py` | **Modified** -- registered `debate_loop` node; rewired `contrarian -> debate_loop -> route_after_contrarian` (13 nodes total, was 12) |
-| `backend/tests/unit/test_debate_loop.py` | **New** -- 62 unit tests covering the new node, helpers, graph wiring, timing, and a no-infinite-loop regression suite |
-| `backend/tests/unit/test_graph_skeleton.py` | **Modified** -- node count assertion updated from 12 to 13; added `test_debate_loop_registered` |
+| File                                        | Change                                                                                                                                |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `backend/graph/nodes.py`                    | **Modified** -- added `NODE_DEBATE_LOOP`, `debate_loop_node`, and its deterministic helper functions                                  |
+| `backend/graph/routing.py`                  | **Modified** -- promoted `MAX_DEBATE_ROUNDS` to a module constant; updated `route_after_contrarian` docstring (logic unchanged)       |
+| `backend/graph/graph.py`                    | **Modified** -- registered `debate_loop` node; rewired `contrarian -> debate_loop -> route_after_contrarian` (13 nodes total, was 12) |
+| `backend/tests/unit/test_debate_loop.py`    | **New** -- 62 unit tests covering the new node, helpers, graph wiring, timing, and a no-infinite-loop regression suite                |
+| `backend/tests/unit/test_graph_skeleton.py` | **Modified** -- node count assertion updated from 12 to 13; added `test_debate_loop_registered`                                       |
 
 ---
 
@@ -53,12 +54,12 @@ so it now fires after `debate_loop` instead of directly after
 Three new pure helper functions plus the node itself, all deterministic
 (zero additional LLM calls):
 
-| Function | Purpose |
-|----------|---------|
-| `_agent_response_text(...)` | Builds one sentence describing a single agent's stance this round: "no position" if the agent's output is missing/errored, "reaffirms" if it was not challenged by the Contrarian, "concedes" or "maintains" if it was challenged (depending on `bear_conviction` vs `_CONCEDE_THRESHOLD = 7`) |
-| `_build_agent_responses(...)` | Calls `_agent_response_text` for all 5 agents (fundamental, technical, sentiment, macro, risk) and returns the combined dict |
-| `_debate_loop_impl(...)` | Core node logic: reads the Contrarian's current-round output, builds `agent_responses`, appends one `{round_number, agent_responses, contrarian, completed_at}` dict to `state["debate_rounds"]` |
-| `debate_loop_node` | `_debate_loop_impl` wrapped with `profile_node()` (T-036 latency tracking) then `_persist_after()` (T-033 state persistence) -- identical composition pattern to every other sequential node in the graph |
+| Function                      | Purpose                                                                                                                                                                                                                                                                                        |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `_agent_response_text(...)`   | Builds one sentence describing a single agent's stance this round: "no position" if the agent's output is missing/errored, "reaffirms" if it was not challenged by the Contrarian, "concedes" or "maintains" if it was challenged (depending on `bear_conviction` vs `_CONCEDE_THRESHOLD = 7`) |
+| `_build_agent_responses(...)` | Calls `_agent_response_text` for all 5 agents (fundamental, technical, sentiment, macro, risk) and returns the combined dict                                                                                                                                                                   |
+| `_debate_loop_impl(...)`      | Core node logic: reads the Contrarian's current-round output, builds `agent_responses`, appends one `{round_number, agent_responses, contrarian, completed_at}` dict to `state["debate_rounds"]`                                                                                               |
+| `debate_loop_node`            | `_debate_loop_impl` wrapped with `profile_node()` (T-036 latency tracking) then `_persist_after()` (T-033 state persistence) -- identical composition pattern to every other sequential node in the graph                                                                                      |
 
 **Why no LLM call in `debate_loop_node`?**
 The Contrarian agent (T-038) already pays the LLM cost for this round when
@@ -111,18 +112,18 @@ logically -- only its position in the graph did. Total node count: 13
 
 ## Tests
 
-| Test class | Count | What it covers |
-|------------|-------|-----------------|
-| `TestAgentResponseText` | 9 | Per-agent response sentence: missing/errored agent, unchallenged reaffirm (with/without summary), challenged concede/maintain, threshold boundary (7 vs 6), always non-empty |
-| `TestBuildAgentResponses` | 6 | Full 5-agent dict shape, round-1 risk-missing case, mixed challenged/unchallenged, never raises on empty state |
-| `TestDebateLoopImpl` | 19 | Core node: dict shape, list growth, round numbers, agent_responses contents, contrarian text fallback chain, timestamp format, never raises on missing/malformed input, two sequential rounds grow the list correctly |
-| `TestDebateLoopNode` | 4 | Persistence-wrapped public node behaves like the impl function |
-| `TestGraphWiring` | 4 | Node registered, 13 total nodes, Mermaid diagram contains `debate_loop` |
-| `TestRouteAfterContrarianUnchanged` | 7 | Regression suite -- every pre-existing T-032/T-038 routing assertion re-verified after the topology change |
-| `TestMultiRoundIntegration` | 6 | Full compiled-graph runs (research agents mocked, Contrarian mocked with a controllable conviction sequence): 2-round forced termination, 1-round early termination, increasing round numbers, every round has all 5 agent responses, pipeline always reaches `status=completed` |
-| `TestDebateLoopTiming` | 2 | 2 rounds complete in well under budget; `_debate_loop_impl` alone runs 50x in under 1 second (zero LLM calls) |
-| `TestPublicAPI` | 6 | All new symbols importable and present in `__all__` |
-| **Total** | **62** | |
+| Test class                          | Count  | What it covers                                                                                                                                                                                                                                                                   |
+| ----------------------------------- | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `TestAgentResponseText`             | 9      | Per-agent response sentence: missing/errored agent, unchallenged reaffirm (with/without summary), challenged concede/maintain, threshold boundary (7 vs 6), always non-empty                                                                                                     |
+| `TestBuildAgentResponses`           | 6      | Full 5-agent dict shape, round-1 risk-missing case, mixed challenged/unchallenged, never raises on empty state                                                                                                                                                                   |
+| `TestDebateLoopImpl`                | 19     | Core node: dict shape, list growth, round numbers, agent_responses contents, contrarian text fallback chain, timestamp format, never raises on missing/malformed input, two sequential rounds grow the list correctly                                                            |
+| `TestDebateLoopNode`                | 4      | Persistence-wrapped public node behaves like the impl function                                                                                                                                                                                                                   |
+| `TestGraphWiring`                   | 4      | Node registered, 13 total nodes, Mermaid diagram contains `debate_loop`                                                                                                                                                                                                          |
+| `TestRouteAfterContrarianUnchanged` | 7      | Regression suite -- every pre-existing T-032/T-038 routing assertion re-verified after the topology change                                                                                                                                                                       |
+| `TestMultiRoundIntegration`         | 6      | Full compiled-graph runs (research agents mocked, Contrarian mocked with a controllable conviction sequence): 2-round forced termination, 1-round early termination, increasing round numbers, every round has all 5 agent responses, pipeline always reaches `status=completed` |
+| `TestDebateLoopTiming`              | 2      | 2 rounds complete in well under budget; `_debate_loop_impl` alone runs 50x in under 1 second (zero LLM calls)                                                                                                                                                                    |
+| `TestPublicAPI`                     | 6      | All new symbols importable and present in `__all__`                                                                                                                                                                                                                              |
+| **Total**                           | **62** |                                                                                                                                                                                                                                                                                  |
 
 Plus 1 new test added to the existing `test_graph_skeleton.py`
 (`test_debate_loop_registered`) and 1 existing assertion updated
@@ -179,18 +180,18 @@ construction -- verified explicitly by
 
 ## AIRP Standards Compliance
 
-| Standard | Status |
-|----------|--------|
-| No `from __future__ import annotations` in production modules | OK -- not present in `nodes.py` / `routing.py` / `graph.py` |
-| Plain ASCII section comments (`# ---`) | OK -- no Unicode box-drawing, no rupee signs, no em-dashes, no arrows |
-| No bare `# type: ignore` | OK -- none added; existing `[literal-required]` pattern in test helper reused as-is |
-| `mypy --strict` / `--warn-unused-ignores` safe | OK -- every new function fully annotated; no ignores added at all |
-| Tools/agents never raise -- graceful degradation on bad input | OK -- `_debate_loop_impl` never raises, verified on empty state, missing contrarian, and malformed `bear_conviction` |
-| `@traced_agent` / LangSmith | N/A -- `debate_loop_node` makes no LLM calls, nothing to trace |
-| Persistence wrapper applied (T-033 pattern) | OK -- `_persist_after(profile_node(...))` composition, identical to every other sequential node |
-| All lines <= 88 chars | OK |
-| flake8 (bugbear, comprehensions) clean | OK -- no `getattr` with constant, no bare `pytest.raises(Exception)`, no generator-inside-`set()` |
-| `ENVIRONMENT=test` guard respected | OK -- new test file uses the same `os.environ.setdefault` + autouse `_no_db_persist` fixture pattern as every other test module |
+| Standard                                                      | Status                                                                                                                          |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| No `from __future__ import annotations` in production modules | OK -- not present in `nodes.py` / `routing.py` / `graph.py`                                                                     |
+| Plain ASCII section comments (`# ---`)                        | OK -- no Unicode box-drawing, no rupee signs, no em-dashes, no arrows                                                           |
+| No bare `# type: ignore`                                      | OK -- none added; existing `[literal-required]` pattern in test helper reused as-is                                             |
+| `mypy --strict` / `--warn-unused-ignores` safe                | OK -- every new function fully annotated; no ignores added at all                                                               |
+| Tools/agents never raise -- graceful degradation on bad input | OK -- `_debate_loop_impl` never raises, verified on empty state, missing contrarian, and malformed `bear_conviction`            |
+| `@traced_agent` / LangSmith                                   | N/A -- `debate_loop_node` makes no LLM calls, nothing to trace                                                                  |
+| Persistence wrapper applied (T-033 pattern)                   | OK -- `_persist_after(profile_node(...))` composition, identical to every other sequential node                                 |
+| All lines <= 88 chars                                         | OK                                                                                                                              |
+| flake8 (bugbear, comprehensions) clean                        | OK -- no `getattr` with constant, no bare `pytest.raises(Exception)`, no generator-inside-`set()`                               |
+| `ENVIRONMENT=test` guard respected                            | OK -- new test file uses the same `os.environ.setdefault` + autouse `_no_db_persist` fixture pattern as every other test module |
 
 ---
 
@@ -221,12 +222,14 @@ docs/week-11/T-040-debate-loop.md         (new)
 ### 3. Set environment and run the new test file
 
 **Windows CMD:**
+
 ```cmd
 set ENVIRONMENT=test
 python -m pytest backend/tests/unit/test_debate_loop.py -v --tb=short
 ```
 
 **Git Bash / Mac / Linux:**
+
 ```bash
 export ENVIRONMENT=test
 python -m pytest backend/tests/unit/test_debate_loop.py -v --tb=short
@@ -298,6 +301,7 @@ Open a PR on GitHub targeting `main`.
 ## PR Details
 
 **PR title:**
+
 ```
 feat(graph): T-040 implement multi-round debate loop node
 ```
@@ -373,4 +377,4 @@ on top of a complete agent pipeline.
 
 ---
 
-*End of Document | T-040 Workflow | AIRP Week 11*
+_End of Document | T-040 Workflow | AIRP Week 11_

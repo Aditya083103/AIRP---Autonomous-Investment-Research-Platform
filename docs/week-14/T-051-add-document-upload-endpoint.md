@@ -17,6 +17,7 @@ collection the Phase 1 data layer (T-017) already defined but never
 had a producer for until now.
 
 **Acceptance criteria (all must pass):**
+
 - PDF uploads
 - text extracted
 - embedded in ChromaDB
@@ -24,6 +25,7 @@ had a producer for until now.
 
 **Explicitly out of scope for this task** (separate task, per the
 master task list):
+
 - API test suite / coverage pass -> **T-052**
 
 ---
@@ -38,7 +40,7 @@ resolved `Company` row.
 
 - **Request shape:** `file` (the PDF, `UploadFile`), `company_name`
   (required form field, e.g. `'TCS'` or `'Tata Consultancy
-  Services'`), plus optional `ticker`/`exchange` override fields --
+Services'`), plus optional `ticker`/`exchange` override fields --
   the same three-field shape `POST /api/v1/analysis/start` (T-047)
   accepts, deliberately, so "link to company" resolves identically
   for an upload and for an analysis trigger. No JSON request schema
@@ -64,17 +66,17 @@ resolved `Company` row.
   `get_or_create_company` pair (T-047) -- the exact same resolver a
   later analysis trigger for the same company will use, so an upload
   for `'TCS'` and a subsequent analysis for `'Tata Consultancy
-  Services'` resolve to one `Company` row, not two.
+Services'` resolve to one `Company` row, not two.
 - **"Queryable by agents in subsequent analyses"** required no new
   agent-facing code: `backend.agents.macro_economist` and
   `backend.agents.sentiment_analyst` already call
   `backend.db.chroma_client.semantic_search` against `COLLECTION_NEWS`
   for their own RAG context (T-021-T-028). This task's job was only to
   make an uploaded document embedded with the same `{company, ticker,
-  doc_type}` metadata shape that same `semantic_search` function
+doc_type}` metadata shape that same `semantic_search` function
   already filters on -- a future agent task that wants uploaded annual
   reports calls `semantic_search(..., collection_name=
-  COLLECTION_DOCUMENTS, company_filter=ticker)` exactly the way the
+COLLECTION_DOCUMENTS, company_filter=ticker)` exactly the way the
   two existing agents already call it against `COLLECTION_NEWS`. The
   router/service test suites verify this end-to-end by calling
   `semantic_search` directly against the same collection right after
@@ -96,19 +98,19 @@ resolved `Company` row.
 
 ## Files Changed
 
-| File | Change |
-|------|--------|
-| `backend/db/chroma_client.py` | **Modified** -- added `ingest_document` (generalises `ingest_transcript` for `COLLECTION_DOCUMENTS`/configurable `DocumentType`) |
-| `backend/config.py` | **Modified** -- added `max_upload_size_mb` setting (default 20) |
-| `backend/models/schemas.py` | **Modified** -- added `DocumentUploadResponse` |
-| `backend/services/documents.py` | **New** -- `validate_upload_size`, `extract_pdf_text`, `link_document_to_company`, `ingest_uploaded_document`, `UploadResult`, `PDFTooLargeError`, `EmptyPDFError` |
-| `backend/routers/documents.py` | **New** -- `POST /api/v1/documents/upload` |
-| `backend/main.py` | **Modified** -- registered the `documents` router |
-| `backend/routers/__init__.py` | **Modified** -- docstring only, moved `documents.py` from "planned" to "current" |
-| `backend/tests/conftest.py` | **Modified** -- added `max_upload_size_mb` to `test_settings` |
-| `backend/tests/unit/test_documents_service.py` | **New** -- service-layer unit tests |
-| `backend/tests/unit/test_documents_router.py` | **New** -- HTTP-layer tests, including a real in-memory ChromaDB round-trip |
-| `docs/week-14/T-051-add-document-upload-endpoint.md` | **New** -- this document |
+| File                                                 | Change                                                                                                                                                             |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `backend/db/chroma_client.py`                        | **Modified** -- added `ingest_document` (generalises `ingest_transcript` for `COLLECTION_DOCUMENTS`/configurable `DocumentType`)                                   |
+| `backend/config.py`                                  | **Modified** -- added `max_upload_size_mb` setting (default 20)                                                                                                    |
+| `backend/models/schemas.py`                          | **Modified** -- added `DocumentUploadResponse`                                                                                                                     |
+| `backend/services/documents.py`                      | **New** -- `validate_upload_size`, `extract_pdf_text`, `link_document_to_company`, `ingest_uploaded_document`, `UploadResult`, `PDFTooLargeError`, `EmptyPDFError` |
+| `backend/routers/documents.py`                       | **New** -- `POST /api/v1/documents/upload`                                                                                                                         |
+| `backend/main.py`                                    | **Modified** -- registered the `documents` router                                                                                                                  |
+| `backend/routers/__init__.py`                        | **Modified** -- docstring only, moved `documents.py` from "planned" to "current"                                                                                   |
+| `backend/tests/conftest.py`                          | **Modified** -- added `max_upload_size_mb` to `test_settings`                                                                                                      |
+| `backend/tests/unit/test_documents_service.py`       | **New** -- service-layer unit tests                                                                                                                                |
+| `backend/tests/unit/test_documents_router.py`        | **New** -- HTTP-layer tests, including a real in-memory ChromaDB round-trip                                                                                        |
+| `docs/week-14/T-051-add-document-upload-endpoint.md` | **New** -- this document                                                                                                                                           |
 
 No other files were modified. `backend/tools/earnings_transcript.py`
 (T-015) and `backend/services/analysis.py` (T-047) are reused as-is --
@@ -125,7 +127,7 @@ triggering are related (both resolve a company) but distinct
 concerns. Keeping them in separate service modules mirrors the
 existing `auth.py` / `analysis.py` split rather than letting one
 service module grow to cover every router -- `documents.py` imports
-*from* `analysis.py` (`resolve_company`, `get_or_create_company`)
+_from_ `analysis.py` (`resolve_company`, `get_or_create_company`)
 rather than duplicating that logic, the same reuse relationship
 `routers/documents.py` has with `routers/analysis.py`'s established
 patterns.
@@ -156,7 +158,7 @@ thing `earnings_transcript.py`'s own callers don't need: raising
 transcript scrape does.
 
 **Why does `ingest_uploaded_document` resolve+commit the `Company` row
-*before* calling ChromaDB, rather than the reverse?** If ChromaDB
+_before_ calling ChromaDB, rather than the reverse?** If ChromaDB
 ingestion ran first and the subsequent `Company` persistence then
 failed, the vector store would contain an embedded document pointing
 at a `ticker`/`company` that does not (yet, or ever) exist as a row in
@@ -170,7 +172,7 @@ already exists.
 Content Too Large specifically for "the request entity is larger than
 limits the server is willing to process" -- exactly
 `PDFTooLargeError`'s condition. 422 is reserved for a same-size,
-well-formed request whose *content* the server cannot act on (wrong
+well-formed request whose _content_ the server cannot act on (wrong
 content-type, no extractable text) -- a different kind of problem from
 a request that is simply too big to read in the first place.
 
@@ -178,7 +180,7 @@ a request that is simply too big to read in the first place.
 itself parsed successfully -- it is well-formed, just commonly a
 scanned/image-only document with no embedded text layer. 400 Bad
 Request is reserved for `PDFExtractionError`, where the file could not
-be parsed *at all* (corrupt, truncated, or not really a PDF). 422
+be parsed _at all_ (corrupt, truncated, or not really a PDF). 422
 Unprocessable Entity describes "the request was well-formed but the
 server cannot process the contained instructions" more precisely for
 a structurally valid PDF that simply has nothing to embed.
@@ -406,6 +408,7 @@ Open a PR on GitHub targeting `main`.
 ## PR Details
 
 **PR title:**
+
 ```
 feat(api): implement PDF upload with automatic ChromaDB RAG ingestion
 ```
@@ -442,7 +445,7 @@ resolve_company/get_or_create_company pair POST /analysis/start uses.
   content-type/empty file/no-extractable-text PDF, 400 for a PDF that
   fails to parse at all
 - backend/main.py -- registered the documents router
-- backend/routers/__init__.py -- docstring only, documents.py moved
+- backend/routers/**init**.py -- docstring only, documents.py moved
   from "planned" to "current"
 - backend/tests/conftest.py -- added max_upload_size_mb to test_settings
 - backend/tests/unit/test_documents_service.py (new) -- service-layer
@@ -499,4 +502,4 @@ invalid ticker, rate limits; target >85% coverage). Branch:
 
 ---
 
-*End of Document | T-051 Workflow | AIRP Week 14*
+_End of Document | T-051 Workflow | AIRP Week 14_

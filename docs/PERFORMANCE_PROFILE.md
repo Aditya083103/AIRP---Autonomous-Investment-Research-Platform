@@ -20,7 +20,7 @@
 ### How latency is measured
 
 Every LangGraph node is now wrapped by `profile_node()` from
-`backend/graph/node_profiler.py`.  The wrapper:
+`backend/graph/node_profiler.py`. The wrapper:
 
 1. Records wall-clock start time (`time.perf_counter()`)
 2. Runs the node function inside a timeout context
@@ -37,11 +37,11 @@ Every LangGraph node is now wrapped by `profile_node()` from
 
 ### Timeout enforcement
 
-| Platform | Mechanism | Behaviour |
-|----------|-----------|-----------|
-| Linux / macOS (POSIX) | `signal.SIGALRM` | Hard interrupt -- raises `NodeTimeoutError` at exactly 30s |
-| Windows | Thread-elapsed check | Soft check -- raises after node returns if elapsed > 30s |
-| ENVIRONMENT=test | Disabled | `_EFFECTIVE_TIMEOUT_S = float('inf')` -- no timeout in tests |
+| Platform              | Mechanism            | Behaviour                                                    |
+| --------------------- | -------------------- | ------------------------------------------------------------ |
+| Linux / macOS (POSIX) | `signal.SIGALRM`     | Hard interrupt -- raises `NodeTimeoutError` at exactly 30s   |
+| Windows               | Thread-elapsed check | Soft check -- raises after node returns if elapsed > 30s     |
+| ENVIRONMENT=test      | Disabled             | `_EFFECTIVE_TIMEOUT_S = float('inf')` -- no timeout in tests |
 
 ### Composition with T-033 (persistence)
 
@@ -65,23 +65,23 @@ overhead.
 ## Baseline Performance Profile (Stub Agents)
 
 The following measurements were taken running `build_graph().invoke()` with
-all four research agents mocked to return instantly (<5ms each).  These
+all four research agents mocked to return instantly (<5ms each). These
 numbers represent LangGraph orchestration overhead with zero agent latency.
 
-| Node | Phase | Type | Typical Latency (stub) |
-|------|-------|------|------------------------|
-| `planner` | 1 | Sequential | <5ms |
-| `fundamental_analyst` | 2 (parallel) | Research | <5ms (mock) |
-| `technical_analyst` | 2 (parallel) | Research | <5ms (mock) |
-| `sentiment_analyst` | 2 (parallel) | Research | <5ms (mock) |
-| `macro_economist` | 2 (parallel) | Research | <5ms (mock) |
-| `research_join` | 2 (join) | Sequential | <5ms |
-| `error_handler` | 2 (routing) | Sequential | <5ms |
-| `sentiment_escalation` | 2 (routing) | Sequential | <5ms |
-| `contrarian_investor` | 4 (stub) | Sequential | <5ms |
-| `risk_officer` | 4 (stub) | Sequential | <5ms |
-| `valuation_agent` | 4 (stub) | Sequential | <5ms |
-| `portfolio_manager` | 4 (stub) | Sequential | <5ms |
+| Node                   | Phase        | Type       | Typical Latency (stub) |
+| ---------------------- | ------------ | ---------- | ---------------------- |
+| `planner`              | 1            | Sequential | <5ms                   |
+| `fundamental_analyst`  | 2 (parallel) | Research   | <5ms (mock)            |
+| `technical_analyst`    | 2 (parallel) | Research   | <5ms (mock)            |
+| `sentiment_analyst`    | 2 (parallel) | Research   | <5ms (mock)            |
+| `macro_economist`      | 2 (parallel) | Research   | <5ms (mock)            |
+| `research_join`        | 2 (join)     | Sequential | <5ms                   |
+| `error_handler`        | 2 (routing)  | Sequential | <5ms                   |
+| `sentiment_escalation` | 2 (routing)  | Sequential | <5ms                   |
+| `contrarian_investor`  | 4 (stub)     | Sequential | <5ms                   |
+| `risk_officer`         | 4 (stub)     | Sequential | <5ms                   |
+| `valuation_agent`      | 4 (stub)     | Sequential | <5ms                   |
+| `portfolio_manager`    | 4 (stub)     | Sequential | <5ms                   |
 
 **Total pipeline (stubs only):** < 200ms
 
@@ -92,22 +92,23 @@ numbers represent LangGraph orchestration overhead with zero agent latency.
 When Phase 4 agent implementations replace the stubs (T-037 to T-044),
 expected latencies with Groq (development LLM) are:
 
-| Node | Expected Latency | Timeout Risk |
-|------|-----------------|--------------|
-| `planner` | <10ms | None |
-| `fundamental_analyst` | 2-8s (yFinance + LLM) | Low |
-| `technical_analyst` | 2-6s (yFinance + LLM) | Low |
-| `sentiment_analyst` | 4-12s (NewsAPI + ChromaDB + LLM) | Moderate |
-| `macro_economist` | 3-10s (RBI scrape + LLM) | Moderate |
-| `research_join` | <10ms | None |
-| `contrarian_investor` | 5-15s (reads 4 outputs + LLM) | Moderate |
-| `risk_officer` | 4-12s (LLM) | Moderate |
-| `valuation_agent` | 5-15s (Screener.in + LLM) | Moderate |
-| `portfolio_manager` | 8-20s (reads full state + LLM) | Low-Moderate |
+| Node                  | Expected Latency                 | Timeout Risk |
+| --------------------- | -------------------------------- | ------------ |
+| `planner`             | <10ms                            | None         |
+| `fundamental_analyst` | 2-8s (yFinance + LLM)            | Low          |
+| `technical_analyst`   | 2-6s (yFinance + LLM)            | Low          |
+| `sentiment_analyst`   | 4-12s (NewsAPI + ChromaDB + LLM) | Moderate     |
+| `macro_economist`     | 3-10s (RBI scrape + LLM)         | Moderate     |
+| `research_join`       | <10ms                            | None         |
+| `contrarian_investor` | 5-15s (reads 4 outputs + LLM)    | Moderate     |
+| `risk_officer`        | 4-12s (LLM)                      | Moderate     |
+| `valuation_agent`     | 5-15s (Screener.in + LLM)        | Moderate     |
+| `portfolio_manager`   | 8-20s (reads full state + LLM)   | Low-Moderate |
 
 **Expected total pipeline (production):** 30-80 seconds
 
 The 30-second per-node timeout is designed to catch:
+
 - Hung HTTP connections to external APIs
 - LLM providers experiencing extreme latency (>30s response time)
 - Database timeouts in state persistence
@@ -158,6 +159,7 @@ run is annotated in the LangSmith trace with:
 ```
 
 This metadata is searchable in the LangSmith dashboard via:
+
 - Filter by `metadata.node_timed_out_<agent>: true` to find slow runs
 - Sort by `metadata.node_latency_ms_<agent>` to identify bottlenecks
 
@@ -171,7 +173,7 @@ This metadata is searchable in the LangSmith dashboard via:
 adds 1-3s on first run (cold cache).
 
 **Mitigation:** Redis cache (T-018) with 1-hour TTL ensures second run
-for the same ticker on the same day is near-instant.  LangSmith traces
+for the same ticker on the same day is near-instant. LangSmith traces
 distinguish first-run vs cached runs via the `elapsed_ms` distribution.
 
 ### Bottleneck 2: Portfolio Manager (highest single-node latency)
@@ -187,7 +189,7 @@ has higher latency but superior quality -- acceptable for the final step.
 ### Bottleneck 3: Parallel research join latency
 
 **Cause:** The four parallel research agents fan out via the Send API but
-reconverge at `research_join`.  Total parallel phase time is bounded by
+reconverge at `research_join`. Total parallel phase time is bounded by
 the slowest of the 4 agents, not their sum.
 
 **Current:** With stubs, join completes in <10ms.

@@ -1,13 +1,13 @@
 # T-006 — Register All Free API Accounts
 
-| Field          | Detail                              |
-|----------------|-------------------------------------|
-| **Task ID**    | T-006                               |
-| **Phase**      | 0 — Project Setup & Standards       |
-| **Week**       | 1                                   |
-| **Branch**     | `setup/api-keys`                    |
-| **Status**     | ✅ Completed                        |
-| **Merged into**| `main`                              |
+| Field           | Detail                        |
+| --------------- | ----------------------------- |
+| **Task ID**     | T-006                         |
+| **Phase**       | 0 — Project Setup & Standards |
+| **Week**        | 1                             |
+| **Branch**      | `setup/api-keys`              |
+| **Status**      | ✅ Completed                  |
+| **Merged into** | `main`                        |
 
 ---
 
@@ -23,44 +23,44 @@ clone the repo, read `APIS.md`, and know exactly where to get every secret.
 
 ## Acceptance Criteria
 
-| Criteria                                                              | Status |
-|-----------------------------------------------------------------------|--------|
-| `docs/APIS.md` lists every service used by AIRP                      | ✅     |
-| Every entry includes: purpose, free limit, sign-up URL, env var name | ✅     |
-| Rate limit strategy section explains how Redis protects free tiers   | ✅     |
-| Sign-up checklist in `APIS.md` covers every required service         | ✅     |
-| All env variable names match `.env.example` exactly                  | ✅     |
-| No real API keys committed anywhere in the repo                      | ✅     |
-| Task doc (`T-006-register-api-accounts.md`) created in `docs/week-01/` | ✅  |
-| PR merged via squash and merge                                        | ✅     |
+| Criteria                                                               | Status |
+| ---------------------------------------------------------------------- | ------ |
+| `docs/APIS.md` lists every service used by AIRP                        | ✅     |
+| Every entry includes: purpose, free limit, sign-up URL, env var name   | ✅     |
+| Rate limit strategy section explains how Redis protects free tiers     | ✅     |
+| Sign-up checklist in `APIS.md` covers every required service           | ✅     |
+| All env variable names match `.env.example` exactly                    | ✅     |
+| No real API keys committed anywhere in the repo                        | ✅     |
+| Task doc (`T-006-register-api-accounts.md`) created in `docs/week-01/` | ✅     |
+| PR merged via squash and merge                                         | ✅     |
 
 ---
 
 ## Services Registered
 
-| Service          | Purpose                          | Free Limit              | Env Variable(s)                                        |
-|------------------|----------------------------------|-------------------------|--------------------------------------------------------|
-| Anthropic        | LLM backbone (all 8 agents)      | Claude Pro subscription | `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`                 |
-| LangSmith        | Agent tracing + evals            | 5,000 traces/month      | `LANGSMITH_API_KEY`, `LANGCHAIN_TRACING_V2`, `LANGCHAIN_PROJECT` |
-| Neon DB          | PostgreSQL (users, analyses)     | 0.5 GB storage          | `DATABASE_URL`, `DATABASE_TEST_URL`                    |
-| Upstash Redis    | API response caching             | 10,000 commands/day     | `REDIS_URL`, `REDIS_TOKEN`                             |
-| Clerk            | User authentication              | 10,000 MAU              | `CLERK_SECRET_KEY`, `CLERK_PUBLISHABLE_KEY`, `CLERK_JWT_ISSUER` |
-| NewsAPI          | Company news (Sentiment Agent)   | 100 req/day             | `NEWS_API_KEY`                                         |
-| Alpha Vantage    | Fundamentals + earnings data     | 25 req/day              | `ALPHA_VANTAGE_KEY`                                    |
-| Vercel           | React frontend hosting           | Unlimited hobby         | Set in dashboard                                       |
-| Render           | FastAPI backend hosting          | 750 hours/month         | Set in dashboard                                       |
-| yFinance         | Stock prices + OHLCV             | Unlimited (no key)      | None required                                          |
-| Screener.in      | Indian stock peer ratios         | Free (scraping)         | `SCREENER_BASE_URL`                                    |
-| RBI              | Macro data                       | Free (scraping)         | `RBI_BASE_URL`                                         |
+| Service       | Purpose                        | Free Limit              | Env Variable(s)                                                  |
+| ------------- | ------------------------------ | ----------------------- | ---------------------------------------------------------------- |
+| Anthropic     | LLM backbone (all 8 agents)    | Claude Pro subscription | `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`                           |
+| LangSmith     | Agent tracing + evals          | 5,000 traces/month      | `LANGSMITH_API_KEY`, `LANGCHAIN_TRACING_V2`, `LANGCHAIN_PROJECT` |
+| Neon DB       | PostgreSQL (users, analyses)   | 0.5 GB storage          | `DATABASE_URL`, `DATABASE_TEST_URL`                              |
+| Upstash Redis | API response caching           | 10,000 commands/day     | `REDIS_URL`, `REDIS_TOKEN`                                       |
+| Clerk         | User authentication            | 10,000 MAU              | `CLERK_SECRET_KEY`, `CLERK_PUBLISHABLE_KEY`, `CLERK_JWT_ISSUER`  |
+| NewsAPI       | Company news (Sentiment Agent) | 100 req/day             | `NEWS_API_KEY`                                                   |
+| Alpha Vantage | Fundamentals + earnings data   | 25 req/day              | `ALPHA_VANTAGE_KEY`                                              |
+| Vercel        | React frontend hosting         | Unlimited hobby         | Set in dashboard                                                 |
+| Render        | FastAPI backend hosting        | 750 hours/month         | Set in dashboard                                                 |
+| yFinance      | Stock prices + OHLCV           | Unlimited (no key)      | None required                                                    |
+| Screener.in   | Indian stock peer ratios       | Free (scraping)         | `SCREENER_BASE_URL`                                              |
+| RBI           | Macro data                     | Free (scraping)         | `RBI_BASE_URL`                                                   |
 
 ---
 
 ## Files Created / Modified
 
-| File                                         | Action   | Purpose                                         |
-|----------------------------------------------|----------|-------------------------------------------------|
-| `docs/APIS.md`                               | Created  | Canonical reference for all external services   |
-| `docs/week-01/T-006-register-api-accounts.md`| Created  | This task document                              |
+| File                                          | Action  | Purpose                                       |
+| --------------------------------------------- | ------- | --------------------------------------------- |
+| `docs/APIS.md`                                | Created | Canonical reference for all external services |
+| `docs/week-01/T-006-register-api-accounts.md` | Created | This task document                            |
 
 ---
 

@@ -33,6 +33,7 @@ Markdown memo from T-042 remains fully available regardless of whether
 PDF export succeeds.
 
 **Acceptance criteria (all must pass):**
+
 - PDF downloaded correctly
 - All sections render
 - No layout bugs
@@ -42,20 +43,20 @@ PDF export succeeds.
 
 ## Files Changed
 
-| File | Change |
-|------|--------|
-| `backend/services/pdf_export.py` | **New** -- the full PDF export module: narrow Markdown-to-HTML converter, branded HTML document assembler, path resolution, WeasyPrint rendering with atomic disk write, and the `pdf_export_node` LangGraph node entry point |
-| `backend/config.py` | **Modified** -- added `memo_output_dir` setting (next to the existing `feature_pdf_enabled` flag) controlling where generated PDFs are written |
-| `.env.example` | **Modified** -- documented `MEMO_OUTPUT_DIR` alongside the existing `FEATURE_PDF_ENABLED` entry |
-| `backend/graph/nodes.py` | **Modified** -- added `NODE_PDF_EXPORT`, `_pdf_export_impl`, and `pdf_export_node` (same `_persist_after(profile_node(...))` composition as every other sequential node) |
-| `backend/graph/graph.py` | **Modified** -- registered `pdf_export` node; rewired the tail edge from `report_generator -> END` to `report_generator -> pdf_export -> END` (15 nodes total, was 14) |
-| `backend/graph/graph_visualisation.py` | **Modified** -- docstring updated to describe the new final node |
-| `backend/tests/unit/test_pdf_export.py` | **New** -- unit tests covering the Markdown converter, HTML document assembly, path resolution, PDF rendering (WeasyPrint mocked), and the LangGraph node contract |
-| `backend/tests/unit/test_graph_skeleton.py` | **Modified** -- node count assertion updated from 14 to 15; new registration, mermaid, edge, literal-value, and direct node-behaviour tests added for `pdf_export` |
-| `backend/tests/unit/test_debate_loop.py` | **Modified** -- node count assertion updated from 14 to 15 |
-| `backend/tests/unit/test_parallel_research.py` | **Modified** -- node count assertion updated from 14 to 15 |
-| `backend/tests/unit/test_routing.py` | **Modified** -- node count assertion updated from 14 to 15 |
-| `backend/tests/integration/test_graph_integration.py` | **Modified** -- docstring node count updated from 14 to 15 |
+| File                                                  | Change                                                                                                                                                                                                                        |
+| ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `backend/services/pdf_export.py`                      | **New** -- the full PDF export module: narrow Markdown-to-HTML converter, branded HTML document assembler, path resolution, WeasyPrint rendering with atomic disk write, and the `pdf_export_node` LangGraph node entry point |
+| `backend/config.py`                                   | **Modified** -- added `memo_output_dir` setting (next to the existing `feature_pdf_enabled` flag) controlling where generated PDFs are written                                                                                |
+| `.env.example`                                        | **Modified** -- documented `MEMO_OUTPUT_DIR` alongside the existing `FEATURE_PDF_ENABLED` entry                                                                                                                               |
+| `backend/graph/nodes.py`                              | **Modified** -- added `NODE_PDF_EXPORT`, `_pdf_export_impl`, and `pdf_export_node` (same `_persist_after(profile_node(...))` composition as every other sequential node)                                                      |
+| `backend/graph/graph.py`                              | **Modified** -- registered `pdf_export` node; rewired the tail edge from `report_generator -> END` to `report_generator -> pdf_export -> END` (15 nodes total, was 14)                                                        |
+| `backend/graph/graph_visualisation.py`                | **Modified** -- docstring updated to describe the new final node                                                                                                                                                              |
+| `backend/tests/unit/test_pdf_export.py`               | **New** -- unit tests covering the Markdown converter, HTML document assembly, path resolution, PDF rendering (WeasyPrint mocked), and the LangGraph node contract                                                            |
+| `backend/tests/unit/test_graph_skeleton.py`           | **Modified** -- node count assertion updated from 14 to 15; new registration, mermaid, edge, literal-value, and direct node-behaviour tests added for `pdf_export`                                                            |
+| `backend/tests/unit/test_debate_loop.py`              | **Modified** -- node count assertion updated from 14 to 15                                                                                                                                                                    |
+| `backend/tests/unit/test_parallel_research.py`        | **Modified** -- node count assertion updated from 14 to 15                                                                                                                                                                    |
+| `backend/tests/unit/test_routing.py`                  | **Modified** -- node count assertion updated from 14 to 15                                                                                                                                                                    |
+| `backend/tests/integration/test_graph_integration.py` | **Modified** -- docstring node count updated from 14 to 15                                                                                                                                                                    |
 
 ---
 
@@ -63,16 +64,16 @@ PDF export succeeds.
 
 ### New: `backend/services/pdf_export.py`
 
-| Function | Purpose |
-|----------|---------|
-| `_inline_markdown_to_html(...)` | Converts `**bold**` / `*italic*` within a single line; HTML-escapes the text first so any literal `<`, `>`, `&` in agent-written prose renders safely instead of being interpreted as markup |
-| `_render_table(...)` | Renders a contiguous block of pipe-table lines (header, separator, body rows) to an HTML `<table>` |
-| `markdown_to_html(...)` | The full converter: a single linear pass over the memo's lines handling `#`/`##` headers, bold/italic, pipe tables, numbered lists, bullet lists, horizontal rules, and paragraphs, with correct list-opening/list-closing/list-switching state tracking |
-| `build_branded_html_document(...)` | Wraps the converted HTML body in a complete document with AIRP-themed CSS; the company name and page numbers are injected via CSS `@page` rules so they appear identically on every printed page without any per-page logic in this function |
-| `resolve_memo_output_dir(...)` | Resolves the absolute output directory from `settings.memo_output_dir` (relative paths resolved against the repo root), falling back to a sane default if settings could not be loaded |
-| `resolve_memo_pdf_path(...)` | Resolves the absolute path for one job's PDF, with the `job_id` sanitised into a safe filename so concurrent analyses never collide |
-| `render_memo_pdf(...)` | Orchestrates the full pipeline: checks `feature_pdf_enabled`, lazily imports WeasyPrint, builds the branded HTML, calls `HTML(string=...).write_pdf()`, and writes the bytes to disk via an atomic temp-file-then-`os.replace()` write. Never raises -- every failure mode returns `None` |
-| `pdf_export_node(state)` | The LangGraph node entry point. Reads `state["memo_markdown"]`; returns `{"memo_pdf_path": str \| None}` |
+| Function                           | Purpose                                                                                                                                                                                                                                                                                   |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `_inline_markdown_to_html(...)`    | Converts `**bold**` / `*italic*` within a single line; HTML-escapes the text first so any literal `<`, `>`, `&` in agent-written prose renders safely instead of being interpreted as markup                                                                                              |
+| `_render_table(...)`               | Renders a contiguous block of pipe-table lines (header, separator, body rows) to an HTML `<table>`                                                                                                                                                                                        |
+| `markdown_to_html(...)`            | The full converter: a single linear pass over the memo's lines handling `#`/`##` headers, bold/italic, pipe tables, numbered lists, bullet lists, horizontal rules, and paragraphs, with correct list-opening/list-closing/list-switching state tracking                                  |
+| `build_branded_html_document(...)` | Wraps the converted HTML body in a complete document with AIRP-themed CSS; the company name and page numbers are injected via CSS `@page` rules so they appear identically on every printed page without any per-page logic in this function                                              |
+| `resolve_memo_output_dir(...)`     | Resolves the absolute output directory from `settings.memo_output_dir` (relative paths resolved against the repo root), falling back to a sane default if settings could not be loaded                                                                                                    |
+| `resolve_memo_pdf_path(...)`       | Resolves the absolute path for one job's PDF, with the `job_id` sanitised into a safe filename so concurrent analyses never collide                                                                                                                                                       |
+| `render_memo_pdf(...)`             | Orchestrates the full pipeline: checks `feature_pdf_enabled`, lazily imports WeasyPrint, builds the branded HTML, calls `HTML(string=...).write_pdf()`, and writes the bytes to disk via an atomic temp-file-then-`os.replace()` write. Never raises -- every failure mode returns `None` |
+| `pdf_export_node(state)`           | The LangGraph node entry point. Reads `state["memo_markdown"]`; returns `{"memo_pdf_path": str \| None}`                                                                                                                                                                                  |
 
 ### Why a hand-rolled Markdown-to-HTML converter instead of a library?
 
@@ -196,18 +197,18 @@ update T-042 made when it bumped the count from 13 to 14.
 
 ## Tests
 
-| Test class | What it covers |
-|------------|-----------------|
-| `TestInlineMarkdownToHtml` | Bold/italic conversion, both together, plain text passthrough, HTML-special-character escaping (`<`, `&`, `>`), no raw asterisks remain in output |
-| `TestRenderTable` | `<table>` tag present, header cells correct, body cells correct, a header-only table produces no spurious body rows, empty input returns an empty string, inline bold/italic applied correctly within table cells |
-| `TestMarkdownToHtml` | Every construct individually (H1, H2, horizontal rule, paragraph, numbered list, bullet list, table), list-state transitions (list closes before a following paragraph; switching from numbered to bulleted closes the first list before opening the second), and a **full realistic memo fixture** asserting all 7 section headings render as `<h2>` (acceptance criterion: all sections render), no raw `**`/`# `/`## ` markdown syntax survives (acceptance criterion: no layout bugs), and the disclaimer text is preserved |
-| `TestBuildBrandedHtmlDocument` | Full `<!DOCTYPE html>`...`</html>` document shape, company name present in the CSS `@page` header content, `generated_at` present in the CSS footer content, company name HTML-escaped against injection, memo body content correctly embedded, CSS `counter(page)`/`counter(pages)` rules present for pagination, and the same full-memo all-7-sections check at the complete-document level (what is actually handed to WeasyPrint) |
-| `TestResolveMemoOutputDir` | Returns a `Path`, a relative configured directory resolves to an absolute path under the repo root, an absolute configured directory is used as-is, and a missing/`None` settings object falls back to the documented default rather than raising |
-| `TestResolveMemoPdfPath` | Filename ends in `.pdf`, the job_id appears in the filename, unsafe characters (`/`, `..`, spaces, `!`) are sanitised out, an empty job_id falls back to a safe placeholder name, and different job_ids never collide |
-| `TestRenderMemoPdf` | `feature_pdf_enabled=False` short-circuits to `None`; a missing WeasyPrint installation degrades to `None`; a successful render (WeasyPrint mocked) writes a real file to disk at the expected path with the expected bytes; a simulated rendering failure degrades to `None` rather than raising; the output directory is created automatically if missing (including nested paths); **the PDF-size acceptance criterion** is checked directly against `MAX_PDF_SIZE_BYTES` using a realistically-sized (not minimal) mocked PDF payload; re-running the same `job_id` overwrites its own prior file rather than accumulating duplicates |
-| `TestPdfExportNode` | Returns `{"memo_pdf_path": ...}`; missing or empty `memo_markdown` degrades to `None`; a full successful export (mocked WeasyPrint) returns a string path to a file that actually exists on disk; a missing `job_id` does not raise; the node's return value contains exactly one key (`memo_pdf_path`) as a proper partial-state update; input state is never mutated |
+| Test class                     | What it covers                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `TestInlineMarkdownToHtml`     | Bold/italic conversion, both together, plain text passthrough, HTML-special-character escaping (`<`, `&`, `>`), no raw asterisks remain in output                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `TestRenderTable`              | `<table>` tag present, header cells correct, body cells correct, a header-only table produces no spurious body rows, empty input returns an empty string, inline bold/italic applied correctly within table cells                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `TestMarkdownToHtml`           | Every construct individually (H1, H2, horizontal rule, paragraph, numbered list, bullet list, table), list-state transitions (list closes before a following paragraph; switching from numbered to bulleted closes the first list before opening the second), and a **full realistic memo fixture** asserting all 7 section headings render as `<h2>` (acceptance criterion: all sections render), no raw `**`/`# `/`## ` markdown syntax survives (acceptance criterion: no layout bugs), and the disclaimer text is preserved                                                                                                           |
+| `TestBuildBrandedHtmlDocument` | Full `<!DOCTYPE html>`...`</html>` document shape, company name present in the CSS `@page` header content, `generated_at` present in the CSS footer content, company name HTML-escaped against injection, memo body content correctly embedded, CSS `counter(page)`/`counter(pages)` rules present for pagination, and the same full-memo all-7-sections check at the complete-document level (what is actually handed to WeasyPrint)                                                                                                                                                                                                     |
+| `TestResolveMemoOutputDir`     | Returns a `Path`, a relative configured directory resolves to an absolute path under the repo root, an absolute configured directory is used as-is, and a missing/`None` settings object falls back to the documented default rather than raising                                                                                                                                                                                                                                                                                                                                                                                         |
+| `TestResolveMemoPdfPath`       | Filename ends in `.pdf`, the job_id appears in the filename, unsafe characters (`/`, `..`, spaces, `!`) are sanitised out, an empty job_id falls back to a safe placeholder name, and different job_ids never collide                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `TestRenderMemoPdf`            | `feature_pdf_enabled=False` short-circuits to `None`; a missing WeasyPrint installation degrades to `None`; a successful render (WeasyPrint mocked) writes a real file to disk at the expected path with the expected bytes; a simulated rendering failure degrades to `None` rather than raising; the output directory is created automatically if missing (including nested paths); **the PDF-size acceptance criterion** is checked directly against `MAX_PDF_SIZE_BYTES` using a realistically-sized (not minimal) mocked PDF payload; re-running the same `job_id` overwrites its own prior file rather than accumulating duplicates |
+| `TestPdfExportNode`            | Returns `{"memo_pdf_path": ...}`; missing or empty `memo_markdown` degrades to `None`; a full successful export (mocked WeasyPrint) returns a string path to a file that actually exists on disk; a missing `job_id` does not raise; the node's return value contains exactly one key (`memo_pdf_path`) as a proper partial-state update; input state is never mutated                                                                                                                                                                                                                                                                    |
 
-Every test that needs PDF *bytes* mocks the lazily-imported
+Every test that needs PDF _bytes_ mocks the lazily-imported
 `weasyprint.HTML` class via `patch.dict(sys.modules, {"weasyprint":
 <fake module>})`, since WeasyPrint's system dependencies are not
 guaranteed to be present in every CI/dev environment. Tests that only
@@ -304,20 +305,20 @@ overwritten on re-run -- verified directly by
 
 ## AIRP Standards Compliance
 
-| Standard | Status |
-|----------|--------|
-| No `from __future__ import annotations` in production modules | OK -- not present in `pdf_export.py` (the project's native 3.11+ generic syntax, e.g. `dict[str, Any]`, is used directly, consistent with `portfolio_manager.py` and `memo_generator.py`) |
-| Plain ASCII section comments (`# ---`) | OK -- no Unicode box-drawing, no rupee signs, no em-dashes, no arrows in the new file |
-| No bare `# type: ignore` | OK -- the one `# type: ignore[assignment]` follows the exact pre-existing pattern from `backend/tools/cache.py` for the best-effort `settings` import fallback |
-| `mypy --strict` safe | OK -- every function fully annotated with explicit parameter and return types; `weasyprint.*` already has `ignore_missing_imports = true` configured in `pyproject.toml` |
-| Tools/agents never raise -- graceful degradation on bad input | OK -- `render_memo_pdf` and `pdf_export_node` never raise; verified for a disabled feature flag, a missing WeasyPrint installation, a simulated rendering failure, missing/empty `memo_markdown`, and a missing `job_id` |
-| `@traced_agent` / LangSmith | N/A -- `pdf_export_node` makes no LLM calls, nothing to trace (consistent with `debate_loop_node` and `report_generator_node`'s precedent for zero-LLM nodes) |
-| Persistence wrapper applied (T-033 pattern) | OK -- `_persist_after(profile_node(...))` composition, identical to every other sequential node |
-| Atomic file writes | OK -- temp-file-in-target-directory + `os.replace()`, the exact same pattern already established by `backend/graph/graph_visualisation.py` for `GRAPH_DIAGRAM.md` |
-| All lines <= 88 chars | OK -- verified by direct character-length check (not byte-length) |
-| flake8 (bugbear, comprehensions) clean | OK -- no unnecessary dict/list comprehensions with constant values (the C420 pattern caught in an earlier task), no f-strings missing placeholders (the F541 pattern caught in an earlier task) -- both explicitly re-checked across every file in this task before finalising |
-| `ENVIRONMENT=test` guard respected | OK -- new test file sets `ENVIRONMENT=test` via `os.environ.setdefault` before any backend import, consistent with every other test module |
-| `.gitignore` | OK -- `*.pdf` is already globally ignored; no change needed |
+| Standard                                                      | Status                                                                                                                                                                                                                                                                         |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| No `from __future__ import annotations` in production modules | OK -- not present in `pdf_export.py` (the project's native 3.11+ generic syntax, e.g. `dict[str, Any]`, is used directly, consistent with `portfolio_manager.py` and `memo_generator.py`)                                                                                      |
+| Plain ASCII section comments (`# ---`)                        | OK -- no Unicode box-drawing, no rupee signs, no em-dashes, no arrows in the new file                                                                                                                                                                                          |
+| No bare `# type: ignore`                                      | OK -- the one `# type: ignore[assignment]` follows the exact pre-existing pattern from `backend/tools/cache.py` for the best-effort `settings` import fallback                                                                                                                 |
+| `mypy --strict` safe                                          | OK -- every function fully annotated with explicit parameter and return types; `weasyprint.*` already has `ignore_missing_imports = true` configured in `pyproject.toml`                                                                                                       |
+| Tools/agents never raise -- graceful degradation on bad input | OK -- `render_memo_pdf` and `pdf_export_node` never raise; verified for a disabled feature flag, a missing WeasyPrint installation, a simulated rendering failure, missing/empty `memo_markdown`, and a missing `job_id`                                                       |
+| `@traced_agent` / LangSmith                                   | N/A -- `pdf_export_node` makes no LLM calls, nothing to trace (consistent with `debate_loop_node` and `report_generator_node`'s precedent for zero-LLM nodes)                                                                                                                  |
+| Persistence wrapper applied (T-033 pattern)                   | OK -- `_persist_after(profile_node(...))` composition, identical to every other sequential node                                                                                                                                                                                |
+| Atomic file writes                                            | OK -- temp-file-in-target-directory + `os.replace()`, the exact same pattern already established by `backend/graph/graph_visualisation.py` for `GRAPH_DIAGRAM.md`                                                                                                              |
+| All lines <= 88 chars                                         | OK -- verified by direct character-length check (not byte-length)                                                                                                                                                                                                              |
+| flake8 (bugbear, comprehensions) clean                        | OK -- no unnecessary dict/list comprehensions with constant values (the C420 pattern caught in an earlier task), no f-strings missing placeholders (the F541 pattern caught in an earlier task) -- both explicitly re-checked across every file in this task before finalising |
+| `ENVIRONMENT=test` guard respected                            | OK -- new test file sets `ENVIRONMENT=test` via `os.environ.setdefault` before any backend import, consistent with every other test module                                                                                                                                     |
+| `.gitignore`                                                  | OK -- `*.pdf` is already globally ignored; no change needed                                                                                                                                                                                                                    |
 
 ---
 
@@ -373,12 +374,14 @@ every run, exactly as designed.
 ### 4. Set environment and run the new test file
 
 **Windows CMD:**
+
 ```cmd
 set ENVIRONMENT=test
 python -m pytest backend/tests/unit/test_pdf_export.py -v --tb=short
 ```
 
 **Git Bash / Mac / Linux:**
+
 ```bash
 export ENVIRONMENT=test
 python -m pytest backend/tests/unit/test_pdf_export.py -v --tb=short
@@ -480,6 +483,7 @@ Open a PR on GitHub targeting `main`.
 ## PR Details
 
 **PR title:**
+
 ```
 feat(report): implement branded PDF export for Investment Memo
 ```
@@ -576,4 +580,4 @@ Branch: `feat/api-auth-setup` or similar (per the project plan's Phase
 
 ---
 
-*End of Document | T-043 Workflow | AIRP Week 12*
+_End of Document | T-043 Workflow | AIRP Week 12_

@@ -20,6 +20,7 @@ lifespan). T-052 is the acceptance-test pass T-051's own doc named as
 "the one remaining task before Phase 5 closes out."
 
 **Acceptance criteria (all must pass):**
+
 - All endpoints tested
 - Auth flow covered
 - WebSocket test connects and receives events
@@ -56,7 +57,7 @@ One pytest module, four test classes, all running against the real
 - **`TestFullSessionHappyPath`** -- registers a user, triggers an
   analysis, polls status, simulates pipeline completion, reads the
   result, downloads the PDF, lists history, and uploads a supporting
-  document for the *same* company -- all in one test, all against one
+  document for the _same_ company -- all in one test, all against one
   shared fake database, asserting at each step that the row created by
   an earlier step is the row a later step reads back. Satisfies "all
   endpoints tested" by construction: every route registered in
@@ -65,14 +66,14 @@ One pytest module, four test classes, all running against the real
 - **`TestAuthFlowAcrossRouters`** -- register -> login -> protected
   route, duplicate-email 409, wrong-password 401, unknown-email 401
   (same response as wrong password, by design), malformed/missing/
-  garbage bearer tokens rejected identically by three *different*
+  garbage bearer tokens rejected identically by three _different_
   routers in one test, and cross-user job isolation (user A's analysis
   is a 404 to user B, never a distinguishing 403). Satisfies "auth
   flow covered" at the level no single per-router file can: the same
   token proven valid everywhere it is presented, not just on the one
   router that issued it.
 - **`TestWebSocketAcrossSession`** -- opens the WebSocket stream for a
-  job_id created moments earlier via plain HTTP calls on the *same*
+  job_id created moments earlier via plain HTTP calls on the _same_
   `TestClient` instance, and asserts the very first event reflects
   that real, just-created row (status='pending') -- something
   `test_websocket_router.py`'s own suite cannot do, since it uses an
@@ -99,7 +100,7 @@ codes neither condition actually produces in AIRP's design.
 
 `[tool.coverage.report].fail_under` raised from `75` to `85` --
 `backend/requirements-dev.txt`'s own comment on `pytest-cov` already
-said *"enforces 85% threshold"*; `pyproject.toml` had simply never been
+said _"enforces 85% threshold"_; `pyproject.toml` had simply never been
 updated to match. T-052's two new test files (one router-test gap-fill
 pass plus this new cross-router suite) are what close the remaining
 distance to that number.
@@ -108,11 +109,11 @@ distance to that number.
 
 ## Files Changed
 
-| File | Change |
-|------|--------|
-| `backend/tests/unit/test_api_integration_flow.py` | **New** -- cross-router integration suite (this task's main deliverable) |
-| `pyproject.toml` | **Modified** -- `fail_under` raised from 75 to 85 |
-| `docs/week-14/T-052-write-api-tests-with-pytest.md` | **New** -- this document |
+| File                                                | Change                                                                   |
+| --------------------------------------------------- | ------------------------------------------------------------------------ |
+| `backend/tests/unit/test_api_integration_flow.py`   | **New** -- cross-router integration suite (this task's main deliverable) |
+| `pyproject.toml`                                    | **Modified** -- `fail_under` raised from 75 to 85                        |
+| `docs/week-14/T-052-write-api-tests-with-pytest.md` | **New** -- this document                                                 |
 
 No router, service, or schema file changed. T-052 is a pure test/
 config task -- every endpoint it exercises was already correct from
@@ -172,8 +173,8 @@ analyses (...)` produces a row with `status='pending'` and
 `state_snapshot=NULL` immediately -- both `GET /status` and
 `GET /result` can be called against that real row the instant
 `POST /start` returns, before any pipeline progress exists.
-`get_analysis_result`'s contract is precise: a *missing* row returns
-`None` (-> 404), while an *existing* row with `status != 'completed'`
+`get_analysis_result`'s contract is precise: a _missing_ row returns
+`None` (-> 404), while an _existing_ row with `status != 'completed'`
 raises `AnalysisNotReadyError` (-> 409) -- two different outcomes for
 two different conditions. Populating only `status_overrides` would
 make `result_overrides.get(job_id)` return `None` for a job that
@@ -304,6 +305,7 @@ ENVIRONMENT=test python -m pytest backend/tests/unit/test_api_integration_flow.p
 
 Every test in this file should pass before moving on -- if any do not,
 the most common causes (in order of likelihood) are:
+
 - A `_FakeFullSession` dispatch branch not matching the real SQL/ORM
   statement shape exactly (compare against the equivalent branch in
   `test_analysis_router.py` / `test_analysis_result_history_router.py`
@@ -334,6 +336,7 @@ ENVIRONMENT=test python -m pytest --cov=backend --cov-report=term-missing -m "no
 ```
 
 Read the `TOTAL` line at the bottom. If it lands below 85%:
+
 - Check `--cov-report=term-missing`'s per-file breakdown for the
   largest remaining gaps (likely candidates: error-handling branches
   in agent modules that graceful-degradation paths rarely exercise,
@@ -428,6 +431,7 @@ Open a PR on GitHub targeting `main`.
 ## PR Details
 
 **PR title:**
+
 ```
 test(api): implement pytest test suite covering all API endpoints
 ```
@@ -510,4 +514,4 @@ instead of `backend/`.
 
 ---
 
-*End of Document | T-052 Workflow | AIRP Week 14*
+_End of Document | T-052 Workflow | AIRP Week 14_

@@ -28,7 +28,7 @@ infrastructure:
    all.
 2. **WebSocket "Connection closed unexpectedly (code 1006)" mid-analysis.**
    `backend/db/chroma_client.py` persisted ChromaDB's dev data to
-   `.chroma_data/` — a path *inside* the project root. `uvicorn --reload`
+   `.chroma_data/` — a path _inside_ the project root. `uvicorn --reload`
    watches the entire working directory by default, so every document
    embedding write during an analysis (visible in the log as
    `Add of existing embedding ID: ...`) was detected as a source change
@@ -41,6 +41,7 @@ infrastructure:
    `prettier --check` in CI even when nothing meaningful changed.
 
 **Acceptance criteria:**
+
 - [x] A single analysis run makes no more than ~2-4 total yfinance
       network round-trips per ticker (down from ~8-12), verified by
       call-count assertions against a mocked `yf.Ticker`
@@ -62,6 +63,7 @@ infrastructure:
       `prettier --check` purely from CRLF/LF drift
 
 **Explicitly out of scope** (unchanged from the original ask):
+
 - Switching away from yfinance to a different data provider
 - Changing Redis cache TTLs or key structure
 - New retry/backoff tuning for yfinance or Alpha Vantage
@@ -95,13 +97,13 @@ docs/week-17/PERF-001-YFinance-Fetch-And-Dev-Reliability-Hardening.md (new, this
 `get_shared_ticker(ticker)` hands out one `yf.Ticker` instance per
 ticker, shared across all three tool modules for a short, TTL-bounded
 window (120s — comfortably longer than one analysis's documented <90s
-runtime, short enough that a *later*, separate analysis of the same
+runtime, short enough that a _later_, separate analysis of the same
 ticker still gets a fresh instance rather than indefinitely-stale data).
 
 This works because yfinance's own `Ticker` object caches `.info`,
 `.financials`, `.balance_sheet`, `.cashflow`, and `.history()` **on the
 instance** after first access — three tools sharing one instance means
-only the *first* tool to touch each property pays the network cost; the
+only the _first_ tool to touch each property pays the network cost; the
 other two get it for free from yfinance's own internal cache. Building
 three separate `yf.Ticker()` objects (the previous behaviour) meant none
 of that internal caching was ever shared, so every tool re-paid the full
@@ -132,11 +134,11 @@ are effectively case-insensitive on the symbol already.
 ### 2.3 `backend/tests/conftest.py` (modified)
 
 Added an autouse `_reset_shared_ticker_cache` fixture that clears
-`market_data`'s cache before *and* after every test. This is required,
+`market_data`'s cache before _and_ after every test. This is required,
 not optional: dozens of existing tests across the three tool test files
 reuse the same ticker string ("TCS.NS") with different mocks per test.
 Without a reset between tests, the second test to touch "TCS.NS" would
-silently receive the *first* test's cached (wrong) mock instead of its
+silently receive the _first_ test's cached (wrong) mock instead of its
 own patched one.
 
 ### 2.4 Test files — patch target updates only
@@ -257,6 +259,7 @@ python -m uvicorn backend.main:app --reload --port 8000
 
 Upload a document and run a full analysis for a ticker you haven't
 analysed yet this session (a genuinely cold run). Confirm:
+
 - No `429 Client Error` in the terminal log for that ticker
 - The live agent progress viewer runs to completion without a
   "Connection closed unexpectedly" error
@@ -315,9 +318,11 @@ perf(backend): consolidate yFinance fetch per ticker; fix dev-reload WebSocket d
 
 ```markdown
 ## Summary
+
 Three reliability fixes found together while testing the T-059/T-060
 frontend end-to-end against the full pipeline, bundled into one PR since
 they were diagnosed from the same run and touch adjacent infra:
+
 1. A single analysis was making 8-12 separate yfinance requests per
    ticker (three tools each building their own yf.Ticker), the likely
    cause of 429s on a ticker's first ("cold") run.
@@ -329,6 +334,7 @@ they were diagnosed from the same run and touch adjacent infra:
    Prettier's endOfLine: "lf" check on any touched file in CI.
 
 ## Changes
+
 - Add `backend/tools/market_data.py`: `get_shared_ticker(ticker)`
   hands out one TTL-bounded (120s), thread-safe `yf.Ticker` instance per
   ticker shared across `stock_price.py` / `financials.py` / `ratios.py`,
@@ -360,6 +366,7 @@ they were diagnosed from the same run and touch adjacent infra:
   normalised line endings (no content change).
 
 ## Testing
+
 - `black --check .` / `isort --check-only .` / `flake8 .` / `mypy .` — pass
 - `ENVIRONMENT=test pytest --cov=backend` — passes, coverage ≥ 85%,
   including the new `test_market_data.py` suite
@@ -369,13 +376,16 @@ they were diagnosed from the same run and touch adjacent infra:
   `--reload` on; confirmed no 429s and no WebSocket disconnect
 
 ## LangSmith Trace
+
 N/A — no agent prompt or graph routing behaviour changed; this is a
 data-fetch and dev-infra hardening change only.
 
 ## Screenshots
+
 N/A — backend/infra change; the one frontend file has no visual diff.
 
 ## Related Issues
+
 Closes #PERF-001
 ```
 

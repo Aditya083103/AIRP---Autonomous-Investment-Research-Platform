@@ -59,31 +59,31 @@ WebSocket, and displays live agent progress as the pipeline runs.
 
 ### Components
 
-| Component | Description |
-|---|---|
-| **Landing page** | Hero, feature highlights, 8-agent diagram, demo CTA |
-| **Auth pages** | Login and Register with `react-hook-form` + `zod` validation |
-| **Dashboard** | User's analysis history — company, date, verdict badge, risk score |
-| **Analysis input** | Company name autocomplete (top 50 NSE stocks), optional PDF upload |
-| **Live agent progress viewer** | WebSocket consumer — card per agent, animated state transitions |
-| **Debate viewer** | Timeline UI showing agents arguing, colour-coded per agent |
-| **Results page** | Final verdict panel, bull vs bear cases, conviction gauge |
-| **Charts** | Stock price, revenue trend, P/E vs peers, sentiment gauge, risk radar |
-| **Investment Memo viewer** | Full memo with collapsible sections + PDF download button |
-| **Compare page** | Side-by-side analysis of two companies |
+| Component                      | Description                                                           |
+| ------------------------------ | --------------------------------------------------------------------- |
+| **Landing page**               | Hero, feature highlights, 8-agent diagram, demo CTA                   |
+| **Auth pages**                 | Login and Register with `react-hook-form` + `zod` validation          |
+| **Dashboard**                  | User's analysis history — company, date, verdict badge, risk score    |
+| **Analysis input**             | Company name autocomplete (top 50 NSE stocks), optional PDF upload    |
+| **Live agent progress viewer** | WebSocket consumer — card per agent, animated state transitions       |
+| **Debate viewer**              | Timeline UI showing agents arguing, colour-coded per agent            |
+| **Results page**               | Final verdict panel, bull vs bear cases, conviction gauge             |
+| **Charts**                     | Stock price, revenue trend, P/E vs peers, sentiment gauge, risk radar |
+| **Investment Memo viewer**     | Full memo with collapsible sections + PDF download button             |
+| **Compare page**               | Side-by-side analysis of two companies                                |
 
 ### Technology choices
 
-| Technology | Version | Reason |
-|---|---|---|
-| React | 18 | Concurrent mode for smooth real-time updates |
-| TypeScript | 5.x | Catches integration bugs with backend schemas at compile time |
-| Vite | 5.x | Instant HMR — much faster than CRA during development |
-| Tailwind CSS | 3.x | Utility-first — fast UI iteration without context-switching |
-| React Query | 5.x | Handles server state, loading, error, and cache automatically |
-| Recharts | 2.x | Composable React chart library with good TypeScript support |
+| Technology            | Version   | Reason                                                          |
+| --------------------- | --------- | --------------------------------------------------------------- |
+| React                 | 18        | Concurrent mode for smooth real-time updates                    |
+| TypeScript            | 5.x       | Catches integration bugs with backend schemas at compile time   |
+| Vite                  | 5.x       | Instant HMR — much faster than CRA during development           |
+| Tailwind CSS          | 3.x       | Utility-first — fast UI iteration without context-switching     |
+| React Query           | 5.x       | Handles server state, loading, error, and cache automatically   |
+| Recharts              | 2.x       | Composable React chart library with good TypeScript support     |
 | React Hook Form + Zod | 7.x / 3.x | Minimal re-renders; schema validation shared with backend types |
-| WebSocket (native) | — | No extra library needed for agent event streaming |
+| WebSocket (native)    | —         | No extra library needed for agent event streaming               |
 
 ### State management strategy
 
@@ -175,6 +175,7 @@ Agent completes → publishes event to Redis pub/sub channel
 ```
 
 Event schema per agent:
+
 ```json
 {
   "agent": "fundamental_analyst",
@@ -202,16 +203,16 @@ LangGraph enables:
 
 ### The 8-Agent Investment Committee
 
-| # | Agent | Mandate | Primary Tools | Output Type |
-|---|---|---|---|---|
-| 1 | **Fundamental Analyst** | Revenue, margins, FCF, debt over 4 years | yFinance, Alpha Vantage | `FundamentalAnalysis` |
-| 2 | **Technical Analyst** | Price trends, RSI, 50d/200d MA, momentum | yFinance OHLCV | `TechnicalAnalysis` |
-| 3 | **News Sentiment Agent** | Last 30 days news, red flag detection, RAG | NewsAPI, ChromaDB | `SentimentAnalysis` |
-| 4 | **Macro Economist** | RBI rates, inflation, GDP, sector outlook | RBI scraper, macro DB | `MacroAnalysis` |
-| 5 | **Risk Officer** | Governance, fraud indicators, regulatory risk | All prior agent outputs | `RiskAnalysis` |
-| 6 | **Contrarian Investor** | Find flaws in every bull thesis | Full debate state | `ContrarianReport` |
-| 7 | **Valuation Agent** | DCF, PE/PB/EV-EBITDA vs peers | Screener.in, yFinance | `ValuationOutput` |
-| 8 | **Portfolio Manager** | Synthesise full debate → final verdict | Full pipeline state | `InvestmentDecision` |
+| #   | Agent                    | Mandate                                       | Primary Tools           | Output Type           |
+| --- | ------------------------ | --------------------------------------------- | ----------------------- | --------------------- |
+| 1   | **Fundamental Analyst**  | Revenue, margins, FCF, debt over 4 years      | yFinance, Alpha Vantage | `FundamentalAnalysis` |
+| 2   | **Technical Analyst**    | Price trends, RSI, 50d/200d MA, momentum      | yFinance OHLCV          | `TechnicalAnalysis`   |
+| 3   | **News Sentiment Agent** | Last 30 days news, red flag detection, RAG    | NewsAPI, ChromaDB       | `SentimentAnalysis`   |
+| 4   | **Macro Economist**      | RBI rates, inflation, GDP, sector outlook     | RBI scraper, macro DB   | `MacroAnalysis`       |
+| 5   | **Risk Officer**         | Governance, fraud indicators, regulatory risk | All prior agent outputs | `RiskAnalysis`        |
+| 6   | **Contrarian Investor**  | Find flaws in every bull thesis               | Full debate state       | `ContrarianReport`    |
+| 7   | **Valuation Agent**      | DCF, PE/PB/EV-EBITDA vs peers                 | Screener.in, yFinance   | `ValuationOutput`     |
+| 8   | **Portfolio Manager**    | Synthesise full debate → final verdict        | Full pipeline state     | `InvestmentDecision`  |
 
 ### Pipeline execution flow
 
@@ -278,13 +279,13 @@ of completed agents.
 
 Primary relational database. Stores all persistent data.
 
-| Table | Purpose |
-|---|---|
-| `users` | Account credentials, created_at |
-| `analyses` | Job records — company, status, timestamps, state checkpoint |
-| `agent_outputs` | Raw output per agent per analysis (JSONB) |
-| `investment_memos` | Generated memo text (JSONB structured) |
-| `documents` | Uploaded PDF metadata — filename, company, embedding status |
+| Table              | Purpose                                                     |
+| ------------------ | ----------------------------------------------------------- |
+| `users`            | Account credentials, created_at                             |
+| `analyses`         | Job records — company, status, timestamps, state checkpoint |
+| `agent_outputs`    | Raw output per agent per analysis (JSONB)                   |
+| `investment_memos` | Generated memo text (JSONB structured)                      |
+| `documents`        | Uploaded PDF metadata — filename, company, embedding status |
 
 Schema migrations managed by **Alembic**. Run `alembic upgrade head` to apply.
 
@@ -293,11 +294,11 @@ Schema migrations managed by **Alembic**. Run `alembic upgrade head` to apply.
 Stores embeddings for RAG — retrieved by the News Sentiment Agent when
 searching for relevant past context about a company.
 
-| Collection | Contents | Embedding model |
-|---|---|---|
-| `news_articles` | NewsAPI headlines + descriptions, last 30 days | `all-MiniLM-L6-v2` (sentence-transformers) |
-| `earnings_transcripts` | Scraped Screener.in concall transcripts | `all-MiniLM-L6-v2` |
-| `uploaded_documents` | User-uploaded annual reports and PDFs | `all-MiniLM-L6-v2` |
+| Collection             | Contents                                       | Embedding model                            |
+| ---------------------- | ---------------------------------------------- | ------------------------------------------ |
+| `news_articles`        | NewsAPI headlines + descriptions, last 30 days | `all-MiniLM-L6-v2` (sentence-transformers) |
+| `earnings_transcripts` | Scraped Screener.in concall transcripts        | `all-MiniLM-L6-v2`                         |
+| `uploaded_documents`   | User-uploaded annual reports and PDFs          | `all-MiniLM-L6-v2`                         |
 
 ChromaDB runs locally in development (Docker volume). In production it is a
 persistent Docker container on Render alongside the FastAPI service.
@@ -311,13 +312,13 @@ cost. The `all-MiniLM-L6-v2` model runs locally and produces high-quality
 Caches all external API responses to protect free tier rate limits and reduce
 pipeline latency.
 
-| Cache key pattern | TTL | What is cached |
-|---|---|---|
-| `stock:{ticker}:ohlcv` | 15 min | yFinance OHLCV data |
-| `stock:{ticker}:financials` | 1 hour | Income statement, balance sheet, cash flow |
-| `news:{company}` | 1 hour | NewsAPI response for company name |
-| `macro:rbi` | 24 hours | RBI repo rate and inflation data |
-| `ratios:{ticker}` | 1 hour | PE, PB, ROE, ROCE, Debt/Equity |
+| Cache key pattern           | TTL      | What is cached                             |
+| --------------------------- | -------- | ------------------------------------------ |
+| `stock:{ticker}:ohlcv`      | 15 min   | yFinance OHLCV data                        |
+| `stock:{ticker}:financials` | 1 hour   | Income statement, balance sheet, cash flow |
+| `news:{company}`            | 1 hour   | NewsAPI response for company name          |
+| `macro:rbi`                 | 24 hours | RBI repo rate and inflation data           |
+| `ratios:{ticker}`           | 1 hour   | PE, PB, ROE, ROCE, Debt/Equity             |
 
 Redis also serves as the pub/sub broker between the pipeline background task
 and the WebSocket endpoint (agent completion events).
@@ -326,13 +327,13 @@ and the WebSocket endpoint (agent completion events).
 
 See [APIS.md](APIS.md) for full details. Brief summary:
 
-| API | Used by | Data |
-|---|---|---|
-| yFinance | Fundamental, Technical, Valuation agents | Prices, OHLCV, financials |
-| NewsAPI | News Sentiment Agent | Company news headlines |
-| Alpha Vantage | Fundamental Agent (supplementary) | Earnings, fundamentals |
-| Screener.in | Valuation Agent | Indian peer comparison, transcripts |
-| RBI scraper | Macro Economist Agent | Repo rate, inflation |
+| API           | Used by                                  | Data                                |
+| ------------- | ---------------------------------------- | ----------------------------------- |
+| yFinance      | Fundamental, Technical, Valuation agents | Prices, OHLCV, financials           |
+| NewsAPI       | News Sentiment Agent                     | Company news headlines              |
+| Alpha Vantage | Fundamental Agent (supplementary)        | Earnings, fundamentals              |
+| Screener.in   | Valuation Agent                          | Indian peer comparison, transcripts |
+| RBI scraper   | Macro Economist Agent                    | Repo rate, inflation                |
 
 ---
 
@@ -350,6 +351,7 @@ Every LLM call, tool use, and agent execution is traced in LangSmith.
   Debate novelty, end-to-end latency (p50 < 90s target)
 
 Enable/disable tracing without code change:
+
 ```bash
 LANGCHAIN_TRACING_V2=true   # enable
 LANGCHAIN_TRACING_V2=false  # disable (saves free quota during rapid iteration)
@@ -382,6 +384,7 @@ docker-compose up
 ```
 
 Starts four services locally:
+
 - `api` — FastAPI on port 8000
 - `postgres` — PostgreSQL on port 5432
 - `redis` — Redis on port 6379
@@ -525,6 +528,7 @@ final authority on resolving disagreements.
 
 The Portfolio Manager receives the complete `InvestmentState` including every
 debate round. It is prompted to:
+
 1. Summarise the bull case and bear case from the debate
 2. Explicitly acknowledge the Contrarian's strongest arguments
 3. Weigh them against the research agents' evidence
@@ -551,6 +555,7 @@ Agents use `claude-haiku-4-20250514` during development (lower cost) and
 ### Why not a single LLM call?
 
 A single LLM call with a long system prompt cannot:
+
 - Run tasks in parallel
 - Produce independently validated structured outputs per domain
 - Simulate adversarial debate between genuinely distinct perspectives
@@ -562,6 +567,7 @@ Multi-agent orchestration solves all four problems.
 
 Every agent's output is validated against a strict Pydantic model before being
 written to state. This prevents:
+
 - Agents returning unstructured prose instead of structured data
 - Missing fields causing `KeyError` in downstream agents
 - Type mismatches between agent output and the Investment Memo template
@@ -617,18 +623,18 @@ Claude API (Anthropic)        ChromaDB (Render volume)
 
 ### Environment separation
 
-| Variable | Development | Production |
-|---|---|---|
-| `DATABASE_URL` | Local Docker PostgreSQL | Neon connection string |
-| `REDIS_URL` | Local Docker Redis | Upstash Redis URL |
-| `LANGCHAIN_PROJECT` | `airp-dev` | `airp-prod` |
-| `LANGCHAIN_TRACING_V2` | `false` (off by default) | `true` |
-| `ANTHROPIC_MODEL` | `claude-haiku-4-20250514` | `claude-sonnet-4-20250514` |
-| `ENVIRONMENT` | `development` | `production` |
+| Variable               | Development               | Production                 |
+| ---------------------- | ------------------------- | -------------------------- |
+| `DATABASE_URL`         | Local Docker PostgreSQL   | Neon connection string     |
+| `REDIS_URL`            | Local Docker Redis        | Upstash Redis URL          |
+| `LANGCHAIN_PROJECT`    | `airp-dev`                | `airp-prod`                |
+| `LANGCHAIN_TRACING_V2` | `false` (off by default)  | `true`                     |
+| `ANTHROPIC_MODEL`      | `claude-haiku-4-20250514` | `claude-sonnet-4-20250514` |
+| `ENVIRONMENT`          | `development`             | `production`               |
 
 All environment variables are documented in `.env.example`.
 Never commit `.env` to version control.
 
 ---
 
-*Last updated: T-008 — Write initial documentation (Phase 0, Week 1)*
+_Last updated: T-008 — Write initial documentation (Phase 0, Week 1)_

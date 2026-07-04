@@ -17,17 +17,19 @@ streaming endpoint that T-049/T-050 will add later. It reuses the exact
 `StatePersistenceService` keeps updating after every LangGraph node.
 
 **Acceptance criteria (all must pass):**
+
 - Status updates reflect actual pipeline progress
 - 404 for unknown job_id
 
 **Explicitly out of scope for this task** (separate Phase 5 tasks, per
 the master task list):
+
 - `WS /api/v1/analysis/{job_id}/stream` -> **T-049/T-050** (real-time
   push; this task is poll-only)
 - Document upload endpoint -> later T-05x
 - Any change to how or when the pipeline itself writes
   `last_completed_node` / `status` -- T-033's `StatePersistenceService`
-  already does this correctly; T-048 only *reads* it
+  already does this correctly; T-048 only _reads_ it
 
 ---
 
@@ -50,11 +52,11 @@ adds:
   including them would understate progress on the far more common path
   that skips them.
 - **`PHASE_DISPLAY_NAMES`** -- human-readable label per node name,
-  including the two detour nodes (so a job that *does* take a detour
+  including the two detour nodes (so a job that _does_ take a detour
   still gets a sensible phase string instead of a bare technical name).
 - **`compute_progress(last_completed_node, status)`** -- a pure
   function (no I/O) that derives `(current_phase, completed_nodes,
-  progress_percent)`. `status='completed'` always returns 100% and the
+progress_percent)`. `status='completed'` always returns 100% and the
   full sequence, regardless of which node technically wrote the last
   checkpoint (the existing pipeline sets `status='completed'` as early
   as `portfolio_manager_node`, even though `report_generator` and
@@ -104,7 +106,7 @@ and `requested_at` / `started_at` / `completed_at` (all nullable
 
 ### `backend/main.py` / `backend/routers/__init__.py` (docstrings only)
 
-No code change -- the new route lives on the *existing* `analysis.router`
+No code change -- the new route lives on the _existing_ `analysis.router`
 object, which `main.py` already registers via
 `application.include_router(analysis.router)`. Only the module
 docstrings were updated to record that T-048 is complete and to note
@@ -133,7 +135,7 @@ where the new route lives.
   `last_completed_node` advances between polls). The existing
   `_FakeAnalysisSession` fake (T-047) was extended with a
   `status_overrides` dict and a branch on `isinstance(statement,
-  TextClause)` so it can serve T-048's raw-SQL status query alongside
+TextClause)` so it can serve T-048's raw-SQL status query alongside
   the existing `select(Company)` ORM query it already handled; T-047's
   test classes (`TestStartAnalysisSuccess`, `TestJobPersistence`,
   `TestBackgroundScheduling`, `TestLatency`, etc.) are untouched and
@@ -143,16 +145,16 @@ where the new route lives.
 
 ## Files Changed
 
-| File | Change |
-|------|--------|
-| `backend/services/analysis.py` | **Modified** -- added `CANONICAL_NODE_SEQUENCE`, `PHASE_DISPLAY_NAMES`, `compute_progress`, `AnalysisStatusResult`, `get_analysis_status` |
-| `backend/routers/analysis.py` | **Modified** -- added `GET /{job_id}/status` |
-| `backend/models/schemas.py` | **Modified** -- added `AnalysisStatusResponse` |
-| `backend/main.py` | **Modified** -- docstring only, no code change |
-| `backend/routers/__init__.py` | **Modified** -- docstring only |
-| `backend/tests/unit/test_analysis_service.py` | **Modified** -- added `compute_progress` / `get_analysis_status` test classes |
-| `backend/tests/unit/test_analysis_router.py` | **Modified** -- extended the fake session; added `GET /status` test classes |
-| `docs/week-13/T-048-build-analysis-status-endpoint.md` | **New** -- this document |
+| File                                                   | Change                                                                                                                                    |
+| ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `backend/services/analysis.py`                         | **Modified** -- added `CANONICAL_NODE_SEQUENCE`, `PHASE_DISPLAY_NAMES`, `compute_progress`, `AnalysisStatusResult`, `get_analysis_status` |
+| `backend/routers/analysis.py`                          | **Modified** -- added `GET /{job_id}/status`                                                                                              |
+| `backend/models/schemas.py`                            | **Modified** -- added `AnalysisStatusResponse`                                                                                            |
+| `backend/main.py`                                      | **Modified** -- docstring only, no code change                                                                                            |
+| `backend/routers/__init__.py`                          | **Modified** -- docstring only                                                                                                            |
+| `backend/tests/unit/test_analysis_service.py`          | **Modified** -- added `compute_progress` / `get_analysis_status` test classes                                                             |
+| `backend/tests/unit/test_analysis_router.py`           | **Modified** -- extended the fake session; added `GET /status` test classes                                                               |
+| `docs/week-13/T-048-build-analysis-status-endpoint.md` | **New** -- this document                                                                                                                  |
 
 No other files were modified. `backend/services/state_persistence.py`
 (T-033) is reused as-is -- T-048 reads the exact same `last_completed_node`
@@ -191,7 +193,7 @@ memo and PDF. From the caller's perspective, once `status='completed'`
 the investment decision itself is final and the remaining two nodes are
 best-effort artifact generation -- showing 100% the moment the decision
 is final is the more honest signal than showing some intermediate
-percentage while the *decision itself* is already done.
+percentage while the _decision itself_ is already done.
 
 **Why prefix `"Failed after: "` instead of just reusing the in-progress
 phase label when `status='failed'`?** `StatePersistenceService.mark_failed`
@@ -208,7 +210,7 @@ never added to `backend/models/orm.py`'s `Analysis` class -- changing
 that now would be an unrelated, larger refactor (every other place that
 constructs an `Analysis` ORM instance, including T-047's
 `create_analysis_job`, would need re-auditing against the new mapped
-columns) for a task whose entire job is to *read* two columns that
+columns) for a task whose entire job is to _read_ two columns that
 already have a working read path (`state_persistence.py`'s own
 `_SQL_LOAD_SNAPSHOT`) to copy the pattern from.
 
@@ -396,6 +398,7 @@ Open a PR on GitHub targeting `main`.
 ## PR Details
 
 **PR title:**
+
 ```
 feat(api): implement GET /analysis/{job_id}/status with progress tracking
 ```
@@ -496,4 +499,4 @@ Branch: `feat/api-websocket-stream`.
 
 ---
 
-*End of Document | T-048 Workflow | AIRP Week 13*
+_End of Document | T-048 Workflow | AIRP Week 13_

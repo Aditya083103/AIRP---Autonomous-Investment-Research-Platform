@@ -10,7 +10,7 @@
 ## Overview
 
 T-039 builds the **Valuation Agent** -- the seventh of eight investment
-committee agents.  The Valuation Agent is a rigorous quantitative analyst
+committee agents. The Valuation Agent is a rigorous quantitative analyst
 who values businesses using two complementary methods:
 
 1. **Intrinsic value** -- 5-year DCF model using free cash flow from yFinance
@@ -18,6 +18,7 @@ who values businesses using two complementary methods:
    Screener.in
 
 **Acceptance criteria (all must pass):**
+
 - DCF output within 15% sensitivity when WACC varies by 1% for Infosys
 - Peer comparison pulls from Screener.in correctly (mocked in tests)
 - `valuation_verdict` in `('undervalued', 'fairly_valued', 'overvalued')`
@@ -29,11 +30,11 @@ who values businesses using two complementary methods:
 
 ## Files Changed
 
-| File | Change |
-|------|--------|
-| `backend/agents/valuation_agent.py` | **New** -- full Valuation Agent |
-| `backend/tests/unit/test_valuation_agent.py` | **New** -- 101 unit tests |
-| `backend/graph/nodes.py` | **Modified** -- replaced stub with real delegate |
+| File                                         | Change                                           |
+| -------------------------------------------- | ------------------------------------------------ |
+| `backend/agents/valuation_agent.py`          | **New** -- full Valuation Agent                  |
+| `backend/tests/unit/test_valuation_agent.py` | **New** -- 101 unit tests                        |
+| `backend/graph/nodes.py`                     | **Modified** -- replaced stub with real delegate |
 
 ---
 
@@ -45,14 +46,14 @@ Two-stage pipeline:
 
 **Stage 1 -- Deterministic (no LLM)**
 
-| Function | Purpose |
-|----------|---------|
-| `_run_dcf(...)` | 5-year DCF engine: projects FCF, discounts at WACC, adds terminal value |
-| `_determine_verdict(...)` | Maps upside % + PE premium -> `undervalued/fairly_valued/overvalued` |
-| `_determine_margin_of_safety(...)` | Maps upside % -> `high/moderate/low/none` |
-| `_fetch_peer_multiples(...)` | Scrapes Screener.in `/company/<slug>/` for sector avg PE/PB/EV-EBITDA |
-| `_ticker_to_slug(...)` | Converts company name/ticker to Screener.in URL slug |
-| `_parse_float(...)` | Extracts float from Screener.in HTML cell text |
+| Function                           | Purpose                                                                 |
+| ---------------------------------- | ----------------------------------------------------------------------- |
+| `_run_dcf(...)`                    | 5-year DCF engine: projects FCF, discounts at WACC, adds terminal value |
+| `_determine_verdict(...)`          | Maps upside % + PE premium -> `undervalued/fairly_valued/overvalued`    |
+| `_determine_margin_of_safety(...)` | Maps upside % -> `high/moderate/low/none`                               |
+| `_fetch_peer_multiples(...)`       | Scrapes Screener.in `/company/<slug>/` for sector avg PE/PB/EV-EBITDA   |
+| `_ticker_to_slug(...)`             | Converts company name/ticker to Screener.in URL slug                    |
+| `_parse_float(...)`                | Extracts float from Screener.in HTML cell text                          |
 
 **DCF Algorithm:**
 
@@ -85,6 +86,7 @@ otherwise                  -> fairly_valued
 ```
 
 **Data flow:**
+
 1. `fetch_financials.invoke({"ticker": ...})` -- FCF series (yFinance)
 2. `fetch_ratios.invoke({"ticker": ...})` -- PE, PB, EV/EBITDA, shares, price
 3. `fetch_stock_price.invoke({"ticker": ..., "period": "1y"})` -- current price
@@ -125,38 +127,38 @@ calls are made (no network, no LLM needed).
 
 101 unit tests across 12 test classes:
 
-| Class | Tests | What it covers |
-|-------|-------|----------------|
-| `TestConstants` | 5 | Constant values and invariants |
-| `TestRunDcf` | 12 | DCF correctness; Infosys acceptance criteria; WACC/growth monotonicity; edge cases |
-| `TestDetermineVerdict` | 10 | All verdict thresholds; fallback to PE premium; all 3 verdicts |
-| `TestDetermineMarginOfSafety` | 7 | All MoS bands including boundary values |
-| `TestTickerToSlug` | 7 | Override table; ticker fallback; empty ticker |
-| `TestParseFloat` | 7 | Screener.in cell parsing; dashes; commas; units |
-| `TestBuildValuationPrompt` | 10 | Content checks; ASCII-only; positive upside sign |
-| `TestRunValuationAnalysisCore` | 20 | Full agent with mocked tools; tool failures; WACC adjustment; LLM failure |
-| `TestRunValuationAnalysisNode` | 7 | LangGraph state in/out; missing ticker; JSON-safe |
-| `TestAcceptanceCriteria` | 3 | DCF positive; 1% WACC -> <15% change; Screener.in called |
-| `TestValuationOutputSchema` | 4 | Pydantic constraints; frozen model |
-| `TestTracingIntegration` | 2 | `__wrapped__` present; callable (safe pattern, no type:ignore) |
+| Class                          | Tests | What it covers                                                                     |
+| ------------------------------ | ----- | ---------------------------------------------------------------------------------- |
+| `TestConstants`                | 5     | Constant values and invariants                                                     |
+| `TestRunDcf`                   | 12    | DCF correctness; Infosys acceptance criteria; WACC/growth monotonicity; edge cases |
+| `TestDetermineVerdict`         | 10    | All verdict thresholds; fallback to PE premium; all 3 verdicts                     |
+| `TestDetermineMarginOfSafety`  | 7     | All MoS bands including boundary values                                            |
+| `TestTickerToSlug`             | 7     | Override table; ticker fallback; empty ticker                                      |
+| `TestParseFloat`               | 7     | Screener.in cell parsing; dashes; commas; units                                    |
+| `TestBuildValuationPrompt`     | 10    | Content checks; ASCII-only; positive upside sign                                   |
+| `TestRunValuationAnalysisCore` | 20    | Full agent with mocked tools; tool failures; WACC adjustment; LLM failure          |
+| `TestRunValuationAnalysisNode` | 7     | LangGraph state in/out; missing ticker; JSON-safe                                  |
+| `TestAcceptanceCriteria`       | 3     | DCF positive; 1% WACC -> <15% change; Screener.in called                           |
+| `TestValuationOutputSchema`    | 4     | Pydantic constraints; frozen model                                                 |
+| `TestTracingIntegration`       | 2     | `__wrapped__` present; callable (safe pattern, no type:ignore)                     |
 
 ---
 
 ## AIRP Standards Compliance
 
-| Standard | Status |
-|----------|--------|
-| No `from __future__ import annotations` | OK |
-| Plain ASCII section comments (`# ---`) | OK |
-| No bare `# type: ignore` in agent file | OK -- zero |
-| `# type: ignore[misc]` on frozen model mutation in test | OK -- always necessary, matches existing pattern |
+| Standard                                                      | Status                                              |
+| ------------------------------------------------------------- | --------------------------------------------------- |
+| No `from __future__ import annotations`                       | OK                                                  |
+| Plain ASCII section comments (`# ---`)                        | OK                                                  |
+| No bare `# type: ignore` in agent file                        | OK -- zero                                          |
+| `# type: ignore[misc]` on frozen model mutation in test       | OK -- always necessary, matches existing pattern    |
 | No `type: ignore` that becomes unused when packages installed | OK -- `[misc]` on frozen model never becomes unused |
-| Agent never raises | OK |
-| `@traced_agent` applied | OK |
-| `_run_valuation_analysis_core` separated for testability | OK |
-| All lines <= 88 bytes | OK |
-| All ASCII | OK |
-| Tools never raise -- wrapped in try/except | OK |
+| Agent never raises                                            | OK                                                  |
+| `@traced_agent` applied                                       | OK                                                  |
+| `_run_valuation_analysis_core` separated for testability      | OK                                                  |
+| All lines <= 88 bytes                                         | OK                                                  |
+| All ASCII                                                     | OK                                                  |
+| Tools never raise -- wrapped in try/except                    | OK                                                  |
 
 ---
 
@@ -182,12 +184,14 @@ docs/week-10/T-039-valuation-agent.md       (new)
 ### 3. Set environment and run tests
 
 **Windows CMD:**
+
 ```cmd
 set ENVIRONMENT=test
 python -m pytest backend/tests/unit/test_valuation_agent.py -v --tb=short
 ```
 
 **Git Bash / Mac / Linux:**
+
 ```bash
 export ENVIRONMENT=test
 python -m pytest backend/tests/unit/test_valuation_agent.py -v --tb=short
@@ -214,6 +218,7 @@ git commit -m "feat(agents): add Valuation Agent with DCF engine and Screener.in
 ```
 
 If pre-commit auto-fixes formatting:
+
 ```bash
 git add .
 git commit -m "feat(agents): add Valuation Agent with DCF engine and Screener.in peer comparison"
@@ -230,6 +235,7 @@ git push -u origin feat/debate-valuation
 ## PR Details
 
 **PR title:**
+
 ```
 feat(agents): T-039 Valuation Agent -- DCF + Screener.in peer comparison
 ```
@@ -240,7 +246,7 @@ feat(agents): T-039 Valuation Agent -- DCF + Screener.in peer comparison
 ## Summary
 
 Implements the Valuation Agent (T-039) -- the seventh of eight investment
-committee agents.  The agent runs a 5-year DCF on free cash flow from
+committee agents. The agent runs a 5-year DCF on free cash flow from
 yFinance and compares PE/PB/EV-EBITDA against sector peers scraped from
 Screener.in, producing a `ValuationOutput` with intrinsic value, upside %,
 and a `valuation_verdict`.

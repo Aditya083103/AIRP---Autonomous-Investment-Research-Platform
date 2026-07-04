@@ -238,8 +238,8 @@ tsconfig enforces `strict`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTy
 This means array access `items[0]` returns `T | undefined`, not `T` — handle it:
 
 ```typescript
-const first = items[0];        // type: AgentOutput | undefined
-if (!first) return null;       // ✅ guard before use
+const first = items[0]; // type: AgentOutput | undefined
+if (!first) return null; // ✅ guard before use
 ```
 
 ### Component conventions
@@ -269,19 +269,20 @@ export function AgentProgressCard({
 
 ## 4. Branch Naming
 
-| Pattern | Example | Use for |
-|---|---|---|
-| `feat/<area>-<description>` | `feat/agent-fundamental-analyst` | New functionality |
-| `fix/<area>-<description>` | `fix/api-websocket-disconnect` | Bug fixes |
-| `chore/<description>` | `chore/update-dependencies` | Config, deps, tooling |
-| `docs/<description>` | `docs/add-architecture-diagram` | Documentation only |
-| `perf/<area>-<description>` | `perf/graph-parallel-execution` | Performance improvements |
-| `refactor/<area>-<description>` | `refactor/agents-base-class` | Code restructuring |
-| `test/<area>-<description>` | `test/data-layer-integration` | Adding/updating tests |
-| `ci/<description>` | `ci/add-coverage-report` | CI/CD pipeline changes |
-| `setup/<description>` | `setup/pre-commit` | Project setup tasks (Phase 0) |
+| Pattern                         | Example                          | Use for                       |
+| ------------------------------- | -------------------------------- | ----------------------------- |
+| `feat/<area>-<description>`     | `feat/agent-fundamental-analyst` | New functionality             |
+| `fix/<area>-<description>`      | `fix/api-websocket-disconnect`   | Bug fixes                     |
+| `chore/<description>`           | `chore/update-dependencies`      | Config, deps, tooling         |
+| `docs/<description>`            | `docs/add-architecture-diagram`  | Documentation only            |
+| `perf/<area>-<description>`     | `perf/graph-parallel-execution`  | Performance improvements      |
+| `refactor/<area>-<description>` | `refactor/agents-base-class`     | Code restructuring            |
+| `test/<area>-<description>`     | `test/data-layer-integration`    | Adding/updating tests         |
+| `ci/<description>`              | `ci/add-coverage-report`         | CI/CD pipeline changes        |
+| `setup/<description>`           | `setup/pre-commit`               | Project setup tasks (Phase 0) |
 
 **Rules:**
+
 - All lowercase, hyphens only (no underscores, no slashes except the prefix separator)
 - No direct pushes to `main` — ever. Even as a solo developer.
 - Delete branch after PR is merged.
@@ -297,19 +298,20 @@ Optional longer body explaining WHY, not what.
 Wrap at 72 characters.
 ```
 
-| Type | Meaning | Example |
-|---|---|---|
-| `feat` | New feature | `feat(agents): add Fundamental Analyst with scoring` |
-| `fix` | Bug fix | `fix(api): handle WebSocket disconnect gracefully` |
-| `docs` | Documentation | `docs(readme): add architecture diagram` |
-| `test` | Tests added/updated | `test(data): add unit tests for fetch_ratios tool` |
-| `chore` | Maintenance | `chore(deps): upgrade langchain to 0.3.0` |
-| `perf` | Performance | `perf(graph): run research agents in parallel via Send API` |
-| `refactor` | Code restructure | `refactor(agents): extract base agent class` |
-| `ci` | CI/CD changes | `ci: add pytest coverage report to Actions` |
-| `setup` | Project setup | `setup(pre-commit): configure black, flake8, eslint` |
+| Type       | Meaning             | Example                                                     |
+| ---------- | ------------------- | ----------------------------------------------------------- |
+| `feat`     | New feature         | `feat(agents): add Fundamental Analyst with scoring`        |
+| `fix`      | Bug fix             | `fix(api): handle WebSocket disconnect gracefully`          |
+| `docs`     | Documentation       | `docs(readme): add architecture diagram`                    |
+| `test`     | Tests added/updated | `test(data): add unit tests for fetch_ratios tool`          |
+| `chore`    | Maintenance         | `chore(deps): upgrade langchain to 0.3.0`                   |
+| `perf`     | Performance         | `perf(graph): run research agents in parallel via Send API` |
+| `refactor` | Code restructure    | `refactor(agents): extract base agent class`                |
+| `ci`       | CI/CD changes       | `ci: add pytest coverage report to Actions`                 |
+| `setup`    | Project setup       | `setup(pre-commit): configure black, flake8, eslint`        |
 
 **Rules:**
+
 - Subject line: max 72 characters, imperative mood ("add" not "added")
 - Never: `fix stuff`, `updates`, `wip`, `asdf`
 - Every commit must be meaningful enough to understand from `git log --oneline` alone
@@ -326,26 +328,33 @@ Every change — even solo — goes through a PR. No direct pushes to `main`.
 
 ```markdown
 ## Summary
+
 2–3 sentences: what this PR does and why.
 
 ## Changes
+
 - Specific change 1
 - Specific change 2
 
 ## Testing
+
 How it was tested. Which tests were added.
 
 ## LangSmith Trace
+
 Link to trace (required if this PR touches any agent code).
 
 ## Screenshots
+
 Terminal output or UI screenshot for visual changes.
 
 ## Related Issues
+
 Closes #<issue-number>
 ```
 
 **PR checklist before merge:**
+
 - [ ] CI passes (lint + type-check + pytest)
 - [ ] `pre-commit run --all-files` passes locally
 - [ ] Closes at least one GitHub Issue
@@ -355,18 +364,18 @@ Closes #<issue-number>
 
 ## 7. File & Folder Naming
 
-| Type | Convention | Example |
-|---|---|---|
-| Python source files | `snake_case` | `fundamental_analyst.py` |
-| Python test files | `test_<module>.py` | `test_fundamental_analyst.py` |
-| Python classes | `PascalCase` | `FundamentalAnalystAgent` |
-| Python constants | `SCREAMING_SNAKE_CASE` | `MAX_DEBATE_ROUNDS = 2` |
-| TypeScript React components | `PascalCase` | `AgentProgressCard.tsx` |
-| TypeScript hooks | `camelCase` with `use` prefix | `useWebSocket.ts` |
-| TypeScript utilities | `camelCase` | `formatConvictionScore.ts` |
-| TypeScript types/interfaces | `PascalCase` | `InvestmentState.ts` |
-| Folders | `kebab-case` | `agent-progress/` |
-| Environment variables | `SCREAMING_SNAKE_CASE` | `LANGSMITH_API_KEY` |
+| Type                        | Convention                    | Example                       |
+| --------------------------- | ----------------------------- | ----------------------------- |
+| Python source files         | `snake_case`                  | `fundamental_analyst.py`      |
+| Python test files           | `test_<module>.py`            | `test_fundamental_analyst.py` |
+| Python classes              | `PascalCase`                  | `FundamentalAnalystAgent`     |
+| Python constants            | `SCREAMING_SNAKE_CASE`        | `MAX_DEBATE_ROUNDS = 2`       |
+| TypeScript React components | `PascalCase`                  | `AgentProgressCard.tsx`       |
+| TypeScript hooks            | `camelCase` with `use` prefix | `useWebSocket.ts`             |
+| TypeScript utilities        | `camelCase`                   | `formatConvictionScore.ts`    |
+| TypeScript types/interfaces | `PascalCase`                  | `InvestmentState.ts`          |
+| Folders                     | `kebab-case`                  | `agent-progress/`             |
+| Environment variables       | `SCREAMING_SNAKE_CASE`        | `LANGSMITH_API_KEY`           |
 
 ---
 
@@ -374,15 +383,15 @@ Closes #<issue-number>
 
 Every push to every branch runs `.github/workflows/ci.yml`:
 
-| Check | Tool | Fails if |
-|---|---|---|
-| Python format | `black --check` | Any file would be reformatted |
-| Python imports | `isort --check` | Import order differs from isort output |
-| Python lint | `flake8` | Any violation not in ignore list |
-| Python types | `mypy` | Any type error in strict mode |
-| Python tests | `pytest --cov` | Any test fails OR coverage < 85% |
-| TS types | `tsc --noEmit` | Any TypeScript error |
-| TS lint | `eslint --max-warnings 0` | Any ESLint warning or error |
-| Frontend build | `vite build` | Build fails for any reason |
+| Check          | Tool                      | Fails if                               |
+| -------------- | ------------------------- | -------------------------------------- |
+| Python format  | `black --check`           | Any file would be reformatted          |
+| Python imports | `isort --check`           | Import order differs from isort output |
+| Python lint    | `flake8`                  | Any violation not in ignore list       |
+| Python types   | `mypy`                    | Any type error in strict mode          |
+| Python tests   | `pytest --cov`            | Any test fails OR coverage < 85%       |
+| TS types       | `tsc --noEmit`            | Any TypeScript error                   |
+| TS lint        | `eslint --max-warnings 0` | Any ESLint warning or error            |
+| Frontend build | `vite build`              | Build fails for any reason             |
 
 PRs to `main` must pass all checks. There are no exceptions.

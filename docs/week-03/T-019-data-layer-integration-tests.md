@@ -16,13 +16,13 @@ correcting the fundamental design of `redis_client.py`.
 
 ### Acceptance Criteria (all met)
 
-| Criterion | How it is satisfied |
-|-----------|---------------------|
-| All integration tests pass | Tests use real APIs with TCS.NS as canonical ticker |
-| Unit tests mock APIs | All existing unit tests unchanged — still mock all I/O |
+| Criterion                     | How it is satisfied                                                    |
+| ----------------------------- | ---------------------------------------------------------------------- |
+| All integration tests pass    | Tests use real APIs with TCS.NS as canonical ticker                    |
+| Unit tests mock APIs          | All existing unit tests unchanged — still mock all I/O                 |
 | Coverage >80% for data module | `pyproject.toml` `fail_under = 75` (CI-safe); `80%` target met locally |
-| CI skips integration tests | `addopts = "-m 'not integration'"` already in `pyproject.toml` |
-| All unit tests pass | T-018 redis_client bug fixed in this task |
+| CI skips integration tests    | `addopts = "-m 'not integration'"` already in `pyproject.toml`         |
+| All unit tests pass           | T-018 redis_client bug fixed in this task                              |
 
 ---
 
@@ -70,14 +70,14 @@ git checkout -b feat/data-integration-tests
 
 ### 2. Files changed
 
-| Action | File |
-|--------|------|
-| **Fixed** | `backend/db/redis_client.py` — remove `_is_test_environment()` from guard |
-| **Fixed** | `backend/tests/unit/test_redis_client.py` — 22 tests, all pass |
-| **New** | `backend/tests/integration/__init__.py` |
-| **New** | `backend/tests/integration/test_data_layer.py` — 30 integration tests |
-| **Updated** | `pyproject.toml` — coverage threshold 60 → 75 |
-| **New** | `docs/week-04/T-019-data-layer-integration-tests.md` |
+| Action      | File                                                                      |
+| ----------- | ------------------------------------------------------------------------- |
+| **Fixed**   | `backend/db/redis_client.py` — remove `_is_test_environment()` from guard |
+| **Fixed**   | `backend/tests/unit/test_redis_client.py` — 22 tests, all pass            |
+| **New**     | `backend/tests/integration/__init__.py`                                   |
+| **New**     | `backend/tests/integration/test_data_layer.py` — 30 integration tests     |
+| **Updated** | `pyproject.toml` — coverage threshold 60 → 75                             |
+| **New**     | `docs/week-04/T-019-data-layer-integration-tests.md`                      |
 
 ### 3. Run tests
 
@@ -108,13 +108,14 @@ git push -u origin feat/data-integration-tests
 ## Pull Request
 
 ### Title
+
 ```
 feat(data): add data layer integration tests + fix Redis client guard (T-019)
 ```
 
 ### Description
 
-```markdown
+````markdown
 ## Summary
 
 Adds 30 `@pytest.mark.integration` tests covering all five data tools
@@ -125,12 +126,15 @@ all terminal environments.
 ## Changes
 
 ### Bug fix — backend/db/redis_client.py
+
 Removed `_is_test_environment()` from the `get_redis_client()` hot path.
 The `_FORCE_DISABLE` flag is now the sole test guard. This means the flag's
 state is always deterministic regardless of shell environment variables.
 
 ### New — backend/tests/integration/test_data_layer.py
+
 30 integration tests across 7 test classes:
+
 - `TestFetchStockPriceIntegration` (7 tests) — yFinance round-trip
 - `TestFetchFinancialsIntegration` (8 tests) — income/balance/cashflow
 - `TestFetchRatiosIntegration` (5 tests) — PE/PB/ROE/ROCE/D/E/EV-EBITDA
@@ -142,27 +146,34 @@ state is always deterministic regardless of shell environment variables.
 All tests use `TCS.NS` as the canonical NSE ticker.
 
 ### Updated — pyproject.toml
+
 Coverage threshold raised from 60 → 75.
 
 ## Testing
 
 Unit tests (CI):
+
 ```bash
 set ENVIRONMENT=test
 python -m pytest --tb=short -q --cov=backend --cov-report=term-missing
 ```
+````
 
 Integration tests (local only):
+
 ```bash
 python -m pytest -m integration -v
 ```
 
 ## LangSmith Trace
+
 N/A — no agent calls in this task.
 
 ## Related Issues
+
 Closes #19
-```
+
+````
 
 ---
 
@@ -225,9 +236,10 @@ def get_client():
     if _FORCE_DISABLE:  # checked first — deterministic, no env-var read
         return None
     ...
-```
+````
 
 This is more reliable than `monkeypatch.setenv` because:
+
 - No platform-specific os.environ behaviour
 - Works identically in CMD, Git Bash, PowerShell, and Linux CI
 - The test's intent is explicit (`enable_for_tests()`) rather than implicit

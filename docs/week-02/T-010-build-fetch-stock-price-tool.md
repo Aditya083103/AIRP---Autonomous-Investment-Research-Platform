@@ -13,10 +13,12 @@
 This task implements the first LangChain data tool in the AIRP backend — `fetch_stock_price`. It wraps yFinance to provide daily OHLCV (Open, High, Low, Close, Volume) price data for Indian NSE/BSE and global equities. The tool returns a fully-typed Pydantic model so downstream agents always receive structured, validated data rather than raw dictionaries.
 
 Two tools are delivered:
+
 - **`fetch_stock_price`** — Full OHLCV series + derived statistics (52w high/low, moving averages, % returns)
 - **`fetch_ohlcv`** — Lightweight candle-only format (no stats block), optimised for the frontend charting pipeline
 
 **Acceptance criteria:**
+
 - Tool returns `StockPrice` Pydantic model (serialised to dict via `.model_dump()`)
 - `pytest` tests mock `yfinance` — zero real API calls during test runs
 - `TickerNotFoundError` raised and gracefully handled when yFinance returns empty data
@@ -26,10 +28,10 @@ Two tools are delivered:
 
 ## Files Changed / Created in This Task
 
-| File | Action | Purpose |
-|------|--------|---------|
-| `backend/tools/stock_price.py` | **CREATE** | Two LangChain tools (`fetch_stock_price`, `fetch_ohlcv`), Pydantic models (`StockPrice`, `OHLCVRecord`, `PriceStats`), internal helpers |
-| `backend/tests/unit/test_stock_price.py` | **CREATE** | 30+ unit tests covering all tools, helpers, and Pydantic validation — yfinance mocked throughout |
+| File                                     | Action     | Purpose                                                                                                                                 |
+| ---------------------------------------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `backend/tools/stock_price.py`           | **CREATE** | Two LangChain tools (`fetch_stock_price`, `fetch_ohlcv`), Pydantic models (`StockPrice`, `OHLCVRecord`, `PriceStats`), internal helpers |
+| `backend/tests/unit/test_stock_price.py` | **CREATE** | 30+ unit tests covering all tools, helpers, and Pydantic validation — yfinance mocked throughout                                        |
 
 ---
 
@@ -58,13 +60,13 @@ Place the file at `backend/tools/stock_price.py`. This is the only production fi
 
 **Key design decisions documented in the file:**
 
-| Decision | Rationale |
-|----------|-----------|
-| `_fetch_from_yfinance()` separated from `@tool` decorator | Enables direct unit testing without LangChain tool machinery |
-| Error dict returned (not exception raised) from `@tool` | Agents receive structured error objects — LangGraph can route on `result["error"]` |
-| `TickerNotFoundError` custom exception | Distinguishes "ticker doesn't exist" from unexpected failures |
-| `.NS` / `.BO` suffix documented in docstring | Prevents the most common Indian market mistake |
-| `auto_adjust=True` in `yf.history()` | Returns split/dividend-adjusted closes — correct for % return calculations |
+| Decision                                                  | Rationale                                                                          |
+| --------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `_fetch_from_yfinance()` separated from `@tool` decorator | Enables direct unit testing without LangChain tool machinery                       |
+| Error dict returned (not exception raised) from `@tool`   | Agents receive structured error objects — LangGraph can route on `result["error"]` |
+| `TickerNotFoundError` custom exception                    | Distinguishes "ticker doesn't exist" from unexpected failures                      |
+| `.NS` / `.BO` suffix documented in docstring              | Prevents the most common Indian market mistake                                     |
+| `auto_adjust=True` in `yf.history()`                      | Returns split/dividend-adjusted closes — correct for % return calculations         |
 
 ---
 
@@ -74,15 +76,15 @@ Place the file at `backend/tests/unit/test_stock_price.py`.
 
 **Test structure overview:**
 
-| Test class | What it tests |
-|------------|---------------|
-| `TestComputePctChange` | Pure `_compute_pct_change()` helper — edge cases (empty, zero, oversized lookback) |
-| `TestComputeSma` | Pure `_compute_sma()` helper — insufficient data returns `None` |
-| `TestBuildStats` | `_build_stats()` with 260 and 30 records — MA availability |
-| `TestFetchFromYfinance` | `_fetch_from_yfinance()` with mocked `yf.Ticker` — all periods, fallback company name, uppercase normalisation |
-| `TestFetchStockPriceTool` | `fetch_stock_price.invoke()` — success dict, error dicts, default period, unexpected exception |
-| `TestFetchOhlcvTool` | `fetch_ohlcv.invoke()` — lightweight format, no stats block, error handling |
-| `TestStockPriceModelValidation` | Pydantic validation — empty ticker and invalid period raise |
+| Test class                      | What it tests                                                                                                  |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `TestComputePctChange`          | Pure `_compute_pct_change()` helper — edge cases (empty, zero, oversized lookback)                             |
+| `TestComputeSma`                | Pure `_compute_sma()` helper — insufficient data returns `None`                                                |
+| `TestBuildStats`                | `_build_stats()` with 260 and 30 records — MA availability                                                     |
+| `TestFetchFromYfinance`         | `_fetch_from_yfinance()` with mocked `yf.Ticker` — all periods, fallback company name, uppercase normalisation |
+| `TestFetchStockPriceTool`       | `fetch_stock_price.invoke()` — success dict, error dicts, default period, unexpected exception                 |
+| `TestFetchOhlcvTool`            | `fetch_ohlcv.invoke()` — lightweight format, no stats block, error handling                                    |
+| `TestStockPriceModelValidation` | Pydantic validation — empty ticker and invalid period raise                                                    |
 
 ---
 
@@ -106,6 +108,7 @@ python -m pytest --tb=short
 ```
 
 **Expected output (all passing):**
+
 ```
 backend/tests/unit/test_stock_price.py::TestComputePctChange::test_normal_positive_return PASSED
 backend/tests/unit/test_stock_price.py::TestComputePctChange::test_negative_return PASSED
@@ -219,6 +222,7 @@ python -m pytest backend/tests/unit/test_stock_price.py -v
 ```
 
 No regression in the existing test suite:
+
 ```bash
 python -m pytest --tb=short
 # → all passed
@@ -271,11 +275,11 @@ ma_50d = result["stats"]["ma_50d"]
 
 ### Indian ticker conventions
 
-| Exchange | Suffix | Example |
-|----------|--------|---------|
-| NSE | `.NS` | `TCS.NS`, `INFY.NS`, `RELIANCE.NS` |
-| BSE | `.BO` | `532540.BO` (TCS BSE code) |
-| US | none | `AAPL`, `MSFT` |
+| Exchange | Suffix | Example                            |
+| -------- | ------ | ---------------------------------- |
+| NSE      | `.NS`  | `TCS.NS`, `INFY.NS`, `RELIANCE.NS` |
+| BSE      | `.BO`  | `532540.BO` (TCS BSE code)         |
+| US       | none   | `AAPL`, `MSFT`                     |
 
 > **Why `.NS` and not just `TCS`?** yFinance uses Yahoo Finance's ticker namespace. Indian NSE stocks require the `.NS` suffix to distinguish them from US tickers with the same symbol. This is documented in the tool's docstring and is a common gotcha for Indian market developers.
 

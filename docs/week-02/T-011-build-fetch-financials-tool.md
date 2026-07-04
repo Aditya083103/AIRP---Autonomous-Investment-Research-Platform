@@ -18,14 +18,15 @@ always works in the same unit.
 
 **Four tools delivered:**
 
-| Tool | Data returned |
-|------|--------------|
-| `fetch_financials` | All three statements in one call (used by agents) |
-| `fetch_income_statement` | Revenue, EBITDA, margins, EPS |
-| `fetch_balance_sheet` | Assets, debt, equity, current ratio |
-| `fetch_cash_flow` | FCF, capex, FCF margin |
+| Tool                     | Data returned                                     |
+| ------------------------ | ------------------------------------------------- |
+| `fetch_financials`       | All three statements in one call (used by agents) |
+| `fetch_income_statement` | Revenue, EBITDA, margins, EPS                     |
+| `fetch_balance_sheet`    | Assets, debt, equity, current ratio               |
+| `fetch_cash_flow`        | FCF, capex, FCF margin                            |
 
 **Acceptance criteria:**
+
 - Returns `FinancialStatements` Pydantic model (serialised to dict)
 - Tests cover missing data — `None` fields returned, no crash
 - Currency normalised to INR Crores for all monetary fields
@@ -35,10 +36,10 @@ always works in the same unit.
 
 ## Files Created in This Task
 
-| File | Action | Purpose |
-|------|--------|---------|
-| `backend/tools/financials.py` | **CREATE** | Four LangChain tools, Pydantic models (`FinancialStatements`, `IncomeStatementYear`, `BalanceSheetYear`, `CashFlowYear`), internal helpers |
-| `backend/tests/unit/test_financials.py` | **CREATE** | 50+ unit tests — all yfinance mocked, covers missing data, USD conversion, ratio derivation, error handling |
+| File                                    | Action     | Purpose                                                                                                                                    |
+| --------------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `backend/tools/financials.py`           | **CREATE** | Four LangChain tools, Pydantic models (`FinancialStatements`, `IncomeStatementYear`, `BalanceSheetYear`, `CashFlowYear`), internal helpers |
+| `backend/tests/unit/test_financials.py` | **CREATE** | 50+ unit tests — all yfinance mocked, covers missing data, USD conversion, ratio derivation, error handling                                |
 
 ---
 
@@ -78,6 +79,7 @@ python -m pytest backend/tests/unit/test_financials.py -v
 ```
 
 **Expected output:**
+
 ```
 backend/tests/unit/test_financials.py::TestSafeGet::test_returns_float_for_valid_key_and_index PASSED
 backend/tests/unit/test_financials.py::TestToCrores::test_inr_conversion PASSED
@@ -154,6 +156,7 @@ receive `None` fields and populated `data_warnings` rather than crashes.
 ### Changes
 
 **`backend/tools/financials.py`**
+
 - `IncomeStatementYear` — revenue, gross profit, EBITDA, net income, EPS, 3 margin ratios
 - `BalanceSheetYear` — assets, liabilities, equity, debt, cash, net debt, D/E ratio, current ratio
 - `CashFlowYear` — operating/investing/financing CF, FCF, capex, FCF margin
@@ -163,6 +166,7 @@ receive `None` fields and populated `data_warnings` rather than crashes.
 - Four `@tool` functions: `fetch_financials`, `fetch_income_statement`, `fetch_balance_sheet`, `fetch_cash_flow`
 
 **`backend/tests/unit/test_financials.py`**
+
 - 50+ unit tests — all yfinance mocked, zero network calls
 - `TestSafeGet` — empty df, None df, out-of-range index, missing row key
 - `TestToCrores` — INR no double conversion, USD conversion, None passthrough
@@ -213,25 +217,27 @@ Closes #11
 
 ### Key design decisions
 
-| Decision | Rationale |
-|----------|-----------|
-| `_fetch_financials_from_yfinance()` separated from `@tool` | Same testability pattern as T-010 — internal function is callable without LangChain tool machinery |
-| Fixed `USD_TO_INR = 83.5` constant | Consistent unit across all 4 years. Live FX would mean year-over-year values are incomparable due to FX noise |
-| `None` not `0.0` for missing data | Agents must distinguish "zero revenue" from "data unavailable" — `None` is unambiguous |
-| `data_warnings` list | Non-fatal issues surfaced to agents without crashing the pipeline |
-| All three statements fetched in one `_fetch_financials_from_yfinance()` call | Avoids 3 separate yFinance round-trips; individual tools slice the result |
+| Decision                                                                     | Rationale                                                                                                     |
+| ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `_fetch_financials_from_yfinance()` separated from `@tool`                   | Same testability pattern as T-010 — internal function is callable without LangChain tool machinery            |
+| Fixed `USD_TO_INR = 83.5` constant                                           | Consistent unit across all 4 years. Live FX would mean year-over-year values are incomparable due to FX noise |
+| `None` not `0.0` for missing data                                            | Agents must distinguish "zero revenue" from "data unavailable" — `None` is unambiguous                        |
+| `data_warnings` list                                                         | Non-fatal issues surfaced to agents without crashing the pipeline                                             |
+| All three statements fetched in one `_fetch_financials_from_yfinance()` call | Avoids 3 separate yFinance round-trips; individual tools slice the result                                     |
 
 ### yFinance row key reference
 
 These are the exact string keys used from yFinance DataFrames. If yFinance changes its schema, update `_build_*` functions here:
 
 **Income statement:**
+
 ```
 "Total Revenue", "Gross Profit", "Operating Income",
 "EBITDA", "Net Income", "Basic EPS"
 ```
 
 **Balance sheet:**
+
 ```
 "Total Assets", "Total Liabilities Net Minority Interest",
 "Stockholders Equity", "Total Debt", "Cash And Cash Equivalents",
@@ -239,6 +245,7 @@ These are the exact string keys used from yFinance DataFrames. If yFinance chang
 ```
 
 **Cash flow:**
+
 ```
 "Operating Cash Flow", "Investing Cash Flow",
 "Financing Cash Flow", "Capital Expenditure"

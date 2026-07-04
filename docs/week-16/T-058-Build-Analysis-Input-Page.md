@@ -17,6 +17,7 @@ both fields. Submitting calls the already-existing
 `POST /api/v1/documents/upload` (T-051) first.
 
 **Acceptance criteria (all must pass):**
+
 - Autocomplete works for top 50 NSE stocks
 - PDF upload accepts <10MB
 - Triggers `POST /analysis/start`
@@ -40,9 +41,9 @@ both fields. Submitting calls the already-existing
    `backend.services.analysis`'s name-resolution table
    (`_COMPANY_NAME_OVERRIDES`) only covers about 15 companies -- but
    `AnalysisStartRequest`'s own docstring already anticipates exactly
-   this case: *"ticker and exchange are optional overrides for callers
+   this case: _"ticker and exchange are optional overrides for callers
    (e.g. a future autocomplete-driven frontend) that already know the
-   exact Yahoo Finance symbol and want to skip resolution entirely."*
+   exact Yahoo Finance symbol and want to skip resolution entirely."_
    Sending the explicit ticker from the selected option means all 50
    companies resolve correctly, not just the ~15 already in the
    backend's lookup table.
@@ -55,6 +56,7 @@ both fields. Submitting calls the already-existing
 needs a Bearer token).
 
 **Explicitly out of scope:**
+
 - The live 8-agent progress viewer (WebSocket-driven) -- T-059. On
   success, this form navigates straight to the existing
   `/analysis/:jobId/result` placeholder from T-057; T-059/T-061 make
@@ -69,17 +71,19 @@ needs a Bearer token).
 ## What Was Built
 
 ### `src/data/nseTop50.ts` (new)
+
 50 large, well-known NSE-listed companies (`{ name, ticker, exchange }`),
 `ticker` carrying the exact Yahoo Finance `.NS` suffix
 `AnalysisStartRequest.ticker` expects. See scope note 1 above for why
 this is static.
 
 ### `src/lib/validation/analysisSchemas.ts` (new)
+
 `analysisInputSchema` -- a zod schema for just the company selection
 (`{ company: {name, ticker, exchange: 'NSE'} | null }`), validated with
 a plain boolean `.refine()` rather than a type-predicate refine
 specifically so `z.infer` keeps `company: NseCompany | null` (a
-type-predicate refine narrows the *inferred* type to non-null, which
+type-predicate refine narrows the _inferred_ type to non-null, which
 would make `defaultValues: { company: null }` a type error -- the same
 class of subtlety `RegisterPage`'s `confirmPassword` refine in T-056
 already sidestepped the same way). The optional PDF is validated
@@ -92,6 +96,7 @@ enough that a couple of functions read at least as clearly as a
 this shape.
 
 ### `src/components/analysis/CompanyAutocomplete.tsx` (new)
+
 A hand-rolled ARIA combobox (the W3C APG combobox-with-listbox pattern)
 -- no combobox/autocomplete package was already a dependency, and
 `npm install`-ing one is not verifiable in this environment (same
@@ -105,6 +110,7 @@ substring, capped at 8 visible results. Visually matches
 extending `Input` itself (`Input` has no concept of a popup listbox).
 
 ### `src/components/analysis/PdfUploadField.tsx` (new)
+
 A visually-hidden native `<input type="file">` behind a styled
 `<label>` trigger ("Choose PDF"), a filename + size preview once a file
 is chosen, a Remove action, and an inline error slot. Contains no
@@ -113,18 +119,21 @@ validation logic itself -- `AnalysisPage.tsx` calls `isPdfFile` /
 string down.
 
 ### `src/api/analysis.ts` (extended)
+
 Two new functions alongside T-057's `fetchAnalysisHistory`:
+
 - **`startAnalysis`** -- `POST /api/v1/analysis/start` with
   `company_name`/`ticker`/`exchange`, `Authorization: Bearer` header.
 - **`uploadDocument`** -- `POST /api/v1/documents/upload` as
   `multipart/form-data`. Deliberately does **not** set a `Content-Type`
   header by hand -- the browser fills in the `multipart/form-data;
-  boundary=...` value itself when given a `FormData` body, and
+boundary=...` value itself when given a `FormData` body, and
   overriding that by hand is a classic bug (the boundary actually
   written into the body would no longer match a hand-set header, and
   the backend's multipart parser would see zero parts).
 
 ### `src/pages/AnalysisPage.tsx` (rewritten)
+
 `react-hook-form` + `Controller` wires `CompanyAutocomplete` to
 `analysisInputSchema`; the PDF file is separate local component state
 (not part of the RHF-managed values), validated on selection. Submit
@@ -137,6 +146,7 @@ success, navigates to `/analysis/{job_id}/result` (T-057's placeholder;
 T-059/T-061 make it real).
 
 ### `src/routes/AppRoutes.tsx` (modified)
+
 `path="analysis"` is now wrapped in `ProtectedRoute`. A logged-out
 visitor clicking "Run a live analysis" (the T-055 landing-page CTA) now
 redirects to `/login` and returns to `/analysis` automatically after
@@ -146,6 +156,7 @@ already implements from T-056 -- no changes needed there.
 ### Testing
 
 `frontend/src/test/`:
+
 - **`nseTop50.test.ts`** -- exactly 50 entries, unique tickers, every
   ticker `.NS`-suffixed, every entry has `exchange: 'NSE'` and a
   non-empty name.
@@ -163,13 +174,13 @@ already implements from T-056 -- no changes needed there.
   `onChange`, a given error replaces the default hint.
 - **`analysisApi.test.ts`** (extended) -- `startAnalysis`'s request
   body/headers and error handling; `uploadDocument`'s `FormData` fields,
-  the *absence* of a hand-set `Content-Type` header, and error handling
+  the _absence_ of a hand-set `Content-Type` header, and error handling
   (including a 413-style oversized-upload response).
 - **`AnalysisPage.test.tsx`** (rewritten) -- validation error with no
   company selected; a successful submit posts the right body and
   navigates to the result page; the backend's error message renders on
   failure; an oversized PDF shows its error and disables the submit
-  button; attaching a valid PDF uploads it *before* starting the
+  button; attaching a valid PDF uploads it _before_ starting the
   analysis (asserted via call order); a failed upload prevents
   `startAnalysis` from being called at all.
 
@@ -232,7 +243,7 @@ Control blocks it -- see T-056's doc.)
    10MB." appears and the "Start Analysis" button is disabled.
 6. Attach a real PDF under 10MB, select a company, and submit: confirm
    in the Network tab that `POST /api/v1/documents/upload` fires
-   *before* `POST /api/v1/analysis/start`, and both succeed.
+   _before_ `POST /api/v1/analysis/start`, and both succeed.
 7. Stop the backend and try submitting: confirm a readable error message
    appears in the form rather than a blank screen or unhandled
    exception.
@@ -287,18 +298,22 @@ git push -u origin feat/ui-analysis-input
 ```
 
 **Commit message:**
+
 ```
 feat(analysis): build analysis input page with company autocomplete and PDF upload
 ```
 
 **PR title:**
+
 ```
 feat(analysis): implement Analysis Input page with NSE autocomplete, PDF upload, and validation
 ```
 
 **PR description:**
+
 ```markdown
 ## Summary
+
 Replaces the T-055 /analysis placeholder with the real input form: an
 accessible company-search combobox over a static top-50 NSE list, an
 optional PDF upload (<=10MB, validated client-side), and a "Start
@@ -311,6 +326,7 @@ explicit ticker/exchange override rather than relying on the backend's
 ~15-company name-resolution table.
 
 ## Changes
+
 - `src/data/nseTop50.ts` (new static dataset)
 - `src/lib/validation/analysisSchemas.ts` (company schema + PDF
   validation helpers)
@@ -323,31 +339,35 @@ explicit ticker/exchange override rather than relying on the backend's
   present since T-053
 
 ## Testing
+
 - [x] Unit tests added / updated -- 6 new/extended frontend test files
-  covering the dataset, schema/validation helpers, both new components,
-  the extended API client, and the full page (validation, success path,
-  error path, oversized-PDF gating, upload-before-start ordering,
-  upload-failure short-circuit)
+      covering the dataset, schema/validation helpers, both new components,
+      the extended API client, and the full page (validation, success path,
+      error path, oversized-PDF gating, upload-before-start ordering,
+      upload-failure short-circuit)
 - [x] Integration tests pass (backend untouched; T-047/T-051's existing
-  tests are unaffected)
+      tests are unaffected)
 - [x] Manual smoke test performed against a running backend -- see the
-  8-step walkthrough in the doc (autocomplete filtering, keyboard
-  selection, empty-selection validation, successful start + redirect,
-  oversized-PDF rejection, upload-then-start Network-tab ordering,
-  backend-down error handling, and the logged-out redirect round-trip)
+      8-step walkthrough in the doc (autocomplete filtering, keyboard
+      selection, empty-selection validation, successful start + redirect,
+      oversized-PDF rejection, upload-then-start Network-tab ordering,
+      backend-down error handling, and the logged-out redirect round-trip)
 
 `npm run type-check`, `npm run lint`, `npm run format:check`,
 `npm run test:run`, and `npm run build` all pass locally.
 
 ## LangSmith Trace
+
 n/a -- no agent code touched.
 
 ## Screenshots
+
 <paste terminal output of the passing checks, a screenshot of the
 autocomplete dropdown open with a filtered result, and a screenshot of
 the oversized-PDF error state>
 
 ## Related Issues
+
 Closes #<issue-number>
 ```
 

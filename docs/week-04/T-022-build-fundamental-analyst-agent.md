@@ -27,11 +27,11 @@ The agent follows a strict two-stage pipeline:
 
 ## 2. Files Delivered
 
-| File | Description |
-|------|-------------|
-| `backend/agents/fundamental_analyst.py` | Agent implementation |
-| `backend/tests/unit/test_fundamental_analyst.py` | Unit tests (no network) |
-| `docs/week-04/T-022-build-fundamental-analyst-agent.md` | This document |
+| File                                                    | Description             |
+| ------------------------------------------------------- | ----------------------- |
+| `backend/agents/fundamental_analyst.py`                 | Agent implementation    |
+| `backend/tests/unit/test_fundamental_analyst.py`        | Unit tests (no network) |
+| `docs/week-04/T-022-build-fundamental-analyst-agent.md` | This document           |
 
 ---
 
@@ -60,13 +60,13 @@ run_fundamental_analysis(state)          ← LangGraph node entry point
 
 The score is fully deterministic — no LLM involved. Six dimensions, 10 points max:
 
-| Dimension | Max pts | Criteria |
-|-----------|---------|----------|
-| Revenue CAGR | 3 | >15% → 3, >8% → 2, >3% → 1 |
-| Net margin | 2 | >20% → 2, >12% → 1 |
-| ROE | 2 | >20% → 2, >12% → 1 |
-| Debt/Equity | 2 | ≤0 (net cash) → 2, ≤0.5 → 1 |
-| FCF margin | 1 | ≥5% of revenue → 1 |
+| Dimension    | Max pts | Criteria                    |
+| ------------ | ------- | --------------------------- |
+| Revenue CAGR | 3       | >15% → 3, >8% → 2, >3% → 1  |
+| Net margin   | 2       | >20% → 2, >12% → 1          |
+| ROE          | 2       | >20% → 2, >12% → 1          |
+| Debt/Equity  | 2       | ≤0 (net cash) → 2, ≤0.5 → 1 |
+| FCF margin   | 1       | ≥5% of revenue → 1          |
 
 Score is clamped to [1, 10]. If fewer than 2 data points are available,
 returns 1 (minimum) to signal an unreliable assessment.
@@ -78,12 +78,12 @@ returns 1 (minimum) to signal an unreliable assessment.
 Four deterministic labels are computed and passed to the LLM as structured
 context (not free-form):
 
-| Label | Values |
-|-------|--------|
-| `revenue_trend` | `growing` / `stable` / `declining` / `insufficient_data` |
-| `profit_trend` | `improving` / `stable` / `declining` / `insufficient_data` |
-| `debt_level` | `net_cash` / `low` / `moderate` / `high` / `unknown` |
-| `fcf_status` | `strong` / `adequate` / `weak` / `negative` / `unknown` |
+| Label           | Values                                                     |
+| --------------- | ---------------------------------------------------------- |
+| `revenue_trend` | `growing` / `stable` / `declining` / `insufficient_data`   |
+| `profit_trend`  | `improving` / `stable` / `declining` / `insufficient_data` |
+| `debt_level`    | `net_cash` / `low` / `moderate` / `high` / `unknown`       |
+| `fcf_status`    | `strong` / `adequate` / `weak` / `negative` / `unknown`    |
 
 ---
 
@@ -105,17 +105,17 @@ No additional code is needed — LangChain instruments `llm.invoke()` and
 
 ## 7. Acceptance Criteria Verification
 
-| Criterion | Status | Evidence |
-|-----------|--------|----------|
-| Returns valid `FundamentalAnalysis` for TCS | ✅ | `test_high_quality_data_scores_high` |
-| Returns valid `FundamentalAnalysis` for Infosys | ✅ | `test_infy_state` |
-| Returns valid `FundamentalAnalysis` for Reliance | ✅ | `test_reliance_state` |
-| LangSmith trace visible | ✅ | Auto-traced via LangChain instrumentation |
-| Score 1–10 always valid | ✅ | `test_score_in_valid_range` |
-| Never raises (error dict convention) | ✅ | `test_never_raises` |
-| Tool called with correct ticker | ✅ | `test_tool_called_with_correct_ticker` |
-| Graceful LLM failure | ✅ | `test_llm_failure_uses_fallback_summary` |
-| Output serialisable to dict | ✅ | `test_model_serialisable` |
+| Criterion                                        | Status | Evidence                                  |
+| ------------------------------------------------ | ------ | ----------------------------------------- |
+| Returns valid `FundamentalAnalysis` for TCS      | ✅     | `test_high_quality_data_scores_high`      |
+| Returns valid `FundamentalAnalysis` for Infosys  | ✅     | `test_infy_state`                         |
+| Returns valid `FundamentalAnalysis` for Reliance | ✅     | `test_reliance_state`                     |
+| LangSmith trace visible                          | ✅     | Auto-traced via LangChain instrumentation |
+| Score 1–10 always valid                          | ✅     | `test_score_in_valid_range`               |
+| Never raises (error dict convention)             | ✅     | `test_never_raises`                       |
+| Tool called with correct ticker                  | ✅     | `test_tool_called_with_correct_ticker`    |
+| Graceful LLM failure                             | ✅     | `test_llm_failure_uses_fallback_summary`  |
+| Output serialisable to dict                      | ✅     | `test_model_serialisable`                 |
 
 ---
 
@@ -207,7 +207,7 @@ feat(agents): build Fundamental Analyst agent (T-022)
 
 ### Description
 
-```markdown
+````markdown
 ## Summary
 
 Implements the Fundamental Analyst — the first of 8 AIRP investment committee
@@ -248,6 +248,7 @@ set ENVIRONMENT=test
 python -m pytest backend/tests/unit/test_fundamental_analyst.py -v
 # All tests pass — no network, no API quota consumed
 ```
+````
 
 ## LangSmith Trace
 
@@ -258,7 +259,8 @@ needed to enable tracing.
 ## Related Issues
 
 Closes #22
-```
+
+````
 
 ---
 
@@ -282,4 +284,4 @@ builder.add_node("fundamental_analyst", run_fundamental_analysis)
 # Check for errors before consuming output:
 #   if state["fundamental"]["error"] is not None:
 #       # handle gracefully
-```
+````

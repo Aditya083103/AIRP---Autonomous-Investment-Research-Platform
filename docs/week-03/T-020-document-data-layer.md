@@ -19,13 +19,13 @@ trivially (no Python or TypeScript changes).
 
 ### Acceptance Criteria
 
-| Criterion | Status |
-|---|---|
-| `DATA_LAYER.md` covers every tool with example input/output | ✅ All 7 tools documented |
-| Error handling notes per tool | ✅ Full error code table per tool + master reference table |
-| Rate limit documentation | ✅ Section 9 — all 8 services with free limits |
-| Cache key and TTL documentation | ✅ Section 8 — full key registry |
-| Testing patterns documented | ✅ Section 12 — unit, integration, and cache test examples |
+| Criterion                                                   | Status                                                     |
+| ----------------------------------------------------------- | ---------------------------------------------------------- |
+| `DATA_LAYER.md` covers every tool with example input/output | ✅ All 7 tools documented                                  |
+| Error handling notes per tool                               | ✅ Full error code table per tool + master reference table |
+| Rate limit documentation                                    | ✅ Section 9 — all 8 services with free limits             |
+| Cache key and TTL documentation                             | ✅ Section 8 — full key registry                           |
+| Testing patterns documented                                 | ✅ Section 12 — unit, integration, and cache test examples |
 
 ---
 
@@ -41,9 +41,9 @@ git checkout -b feat/data-docs
 
 ### 2. Files changed
 
-| Action | File |
-|---|---|
-| **New** | `docs/DATA_LAYER.md` |
+| Action  | File                                        |
+| ------- | ------------------------------------------- |
+| **New** | `docs/DATA_LAYER.md`                        |
 | **New** | `docs/week-04/T-020-document-data-layer.md` |
 
 No Python or TypeScript files are modified. CI passes without any additional
@@ -127,20 +127,20 @@ Closes #20
 
 `docs/DATA_LAYER.md` is organised into 12 sections:
 
-| # | Section | What it covers |
-|---|---|---|
-| 1 | Cache Layer | `@cached` decorator, TTL constants, low-level helpers, env behaviour |
-| 2 | fetch_stock_price / fetch_ohlcv | yFinance OHLCV + stats; PriceStats schema; error codes |
-| 3 | fetch_financials | Income statement, balance sheet, cash flow; INR Crores normalisation |
-| 4 | fetch_ratios | Six ratios with formulas; inputs audit trail; Alpha Vantage gap-fill |
-| 5 | fetch_news | NewsAPI; retry policy; rate limit strategy |
-| 6 | fetch_macro_data | RBI/MOSPI/World Bank; graceful degradation; force_refresh |
-| 7 | fetch_earnings_transcript | Screener.in scrape + PDF upload paths; chunk tool |
-| 8 | Cache Keys & TTLs | Complete key registry table |
-| 9 | Rate Limits | All 8 external services; free tier limits; .env config |
-| 10 | Error Code Reference | Master table — all error codes across all tools |
-| 11 | Ticker Convention | NSE `.NS` / BSE `.BO` / US suffix rules |
-| 12 | Testing Patterns | Unit, integration, and cache test code examples |
+| #   | Section                         | What it covers                                                       |
+| --- | ------------------------------- | -------------------------------------------------------------------- |
+| 1   | Cache Layer                     | `@cached` decorator, TTL constants, low-level helpers, env behaviour |
+| 2   | fetch_stock_price / fetch_ohlcv | yFinance OHLCV + stats; PriceStats schema; error codes               |
+| 3   | fetch_financials                | Income statement, balance sheet, cash flow; INR Crores normalisation |
+| 4   | fetch_ratios                    | Six ratios with formulas; inputs audit trail; Alpha Vantage gap-fill |
+| 5   | fetch_news                      | NewsAPI; retry policy; rate limit strategy                           |
+| 6   | fetch_macro_data                | RBI/MOSPI/World Bank; graceful degradation; force_refresh            |
+| 7   | fetch_earnings_transcript       | Screener.in scrape + PDF upload paths; chunk tool                    |
+| 8   | Cache Keys & TTLs               | Complete key registry table                                          |
+| 9   | Rate Limits                     | All 8 external services; free tier limits; .env config               |
+| 10  | Error Code Reference            | Master table — all error codes across all tools                      |
+| 11  | Ticker Convention               | NSE `.NS` / BSE `.BO` / US suffix rules                              |
+| 12  | Testing Patterns                | Unit, integration, and cache test code examples                      |
 
 ---
 

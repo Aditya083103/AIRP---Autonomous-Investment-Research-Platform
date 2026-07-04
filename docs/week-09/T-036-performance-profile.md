@@ -13,8 +13,9 @@ T-036 adds per-node latency logging, per-node timeout enforcement, and a
 profiling report to the AIRP LangGraph pipeline.
 
 **Acceptance criteria (all must pass):**
+
 - Node latencies logged to LangSmith (`[AIRP_LATENCY]` structured log lines
-  + LangSmith run metadata when tracing is active)
+  - LangSmith run metadata when tracing is active)
 - No node runs >30s without timeout (`NodeTimeoutError` raised at 30s)
 - Profiling report in `docs/` (`docs/PERFORMANCE_PROFILE.md`)
 
@@ -54,6 +55,7 @@ _persist_after(profiled, name) <-- outer: DB write time excluded from metric
 ```
 
 For parallel research nodes (no `_persist_after`):
+
 ```
 impl_function
     |
@@ -65,6 +67,7 @@ profile_node(impl, name)       <-- inline call inside node function
 ### New file: `docs/PERFORMANCE_PROFILE.md`
 
 Profiling report covering:
+
 - Acceptance criteria checklist
 - How latency is measured
 - Timeout mechanism per platform
@@ -77,6 +80,7 @@ Profiling report covering:
 ### New file: `backend/tests/unit/test_node_profiler.py`
 
 100+ unit tests across 13 test classes:
+
 - `NodeTimeoutError` class and attributes
 - `profile_node` normal path (latency in state, log emitted, dict unchanged)
 - `profile_node` exception propagation
@@ -142,6 +146,7 @@ python -m pytest backend/tests/unit/ -v --tb=short -q
 ```
 
 Key new tests to watch:
+
 - `test_node_profiler.py` -- all 100+ T-036 profiler tests
 - `test_graph_skeleton.py` -- must still pass (profiler is transparent to graph)
 - `test_parallel_research.py` -- must still pass
@@ -176,7 +181,7 @@ perf(graph): add per-node latency profiling and 30s timeout (T-036)
 
 **PR Description:**
 
-```markdown
+````markdown
 ## Summary
 
 Implements T-036 pipeline performance profiling. Every LangGraph node
@@ -194,7 +199,7 @@ metadata annotation, and 30-second timeout enforcement via SIGALRM
 
 - `backend/graph/nodes.py` (modified): All 12 nodes now wrapped with
   `profile_node()` as the inner layer (measures business logic only,
-  not DB persistence time). `NodeTimeoutError` added to __all__.
+  not DB persistence time). `NodeTimeoutError` added to **all**.
 
 - `backend/tests/unit/test_node_profiler.py` (new): 100+ tests covering
   all profiler paths, all 12 node integrations, timeout simulation,
@@ -211,6 +216,7 @@ metadata annotation, and 30-second timeout enforcement via SIGALRM
 set ENVIRONMENT=test
 python -m pytest backend/tests/unit/ -v --tb=short -q
 ```
+````
 
 All 100+ new tests pass. All existing tests still pass.
 
@@ -222,6 +228,7 @@ in production. Tests mock LangSmith entirely.
 ## Related Issues
 
 Closes #36
+
 ```
 
 ---
@@ -229,6 +236,7 @@ Closes #36
 ## Commit Message
 
 ```
+
 perf(graph): add per-node latency profiling and 30s timeout (T-036)
 
 - node_profiler.py: profile_node() wraps every LangGraph node with
@@ -246,6 +254,7 @@ perf(graph): add per-node latency profiling and 30s timeout (T-036)
   observability, bottleneck analysis
 
 Closes #36
+
 ```
 
 ---
@@ -281,3 +290,4 @@ post-run analysis without needing LangSmith.
 LangSmith metadata calls go over the network. A transient 429 (rate limit)
 or 5xx from LangSmith must never abort an investment analysis. The metadata
 is observability data, not business logic.
+```

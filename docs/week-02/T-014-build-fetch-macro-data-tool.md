@@ -20,20 +20,21 @@ is cached in Redis for 24 hours.
 
 **Two tools delivered:**
 
-| Tool | Data returned |
-|------|--------------|
-| `fetch_macro_data` | Full `MacroData` — repo rate, CPI, GDP growth, per-source `as_of` dates, sources map, warnings, cache flag |
-| `fetch_macro_summary` | Lightweight: the three numbers + warnings only (saves LLM tokens for the Macro Economist agent) |
+| Tool                  | Data returned                                                                                              |
+| --------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `fetch_macro_data`    | Full `MacroData` — repo rate, CPI, GDP growth, per-source `as_of` dates, sources map, warnings, cache flag |
+| `fetch_macro_summary` | Lightweight: the three numbers + warnings only (saves LLM tokens for the Macro Economist agent)            |
 
 **Three indicators sourced:**
 
-| Indicator | Source | Method |
-|-----------|--------|--------|
-| Repo rate (%) | RBI (`rbi.org.in`) | HTML scrape, label-driven regex |
-| CPI inflation (% YoY) | MOSPI (`mospi.gov.in`) | HTML scrape, label-driven regex |
-| GDP growth (% real) | World Bank API (`NY.GDP.MKTP.KD.ZG`, `mrnev=1`) | Key-less JSON |
+| Indicator             | Source                                          | Method                          |
+| --------------------- | ----------------------------------------------- | ------------------------------- |
+| Repo rate (%)         | RBI (`rbi.org.in`)                              | HTML scrape, label-driven regex |
+| CPI inflation (% YoY) | MOSPI (`mospi.gov.in`)                          | HTML scrape, label-driven regex |
+| GDP growth (% real)   | World Bank API (`NY.GDP.MKTP.KD.ZG`, `mrnev=1`) | Key-less JSON                   |
 
 **Key production features:**
+
 - Three sources fetched **independently** — a blocked or failed source sets
   only its own field to `None` and appends a warning; the other two still
   populate. The tool never raises to the agent.
@@ -54,6 +55,7 @@ is cached in Redis for 24 hours.
   agent can inspect, never an exception.
 
 **Acceptance criteria:**
+
 - Returns a valid `MacroData` object (verified against fixture HTML/JSON in the
   unit tests — repo 6.5, CPI 5.1, GDP 7.0).
 - Fails gracefully if a scrape is blocked — the blocked field becomes `None`
@@ -65,12 +67,12 @@ is cached in Redis for 24 hours.
 
 ## Files Created in This Task
 
-| File | Action | Purpose |
-|------|--------|---------|
-| `backend/tools/macro.py` | **CREATE** | Two LangChain tools, `MacroData` model, RBI/MOSPI scrapers, World Bank GDP fetcher, bounds-checked parsers |
-| `backend/tools/cache.py` | **CREATE** | Minimal Redis JSON cache helper (`cache_get_json` / `cache_set_json`) — interim seed for T-018's cache decorator |
-| `backend/tests/unit/test_macro.py` | **CREATE** | 44 unit tests — all scrapes/HTTP mocked, covers parsers, graceful degradation, cache short-circuit |
-| `backend/tests/unit/test_cache.py` | **CREATE** | 12 unit tests — no-op under test env, fake-client round-trip, corrupt/non-dict handling |
+| File                               | Action     | Purpose                                                                                                          |
+| ---------------------------------- | ---------- | ---------------------------------------------------------------------------------------------------------------- |
+| `backend/tools/macro.py`           | **CREATE** | Two LangChain tools, `MacroData` model, RBI/MOSPI scrapers, World Bank GDP fetcher, bounds-checked parsers       |
+| `backend/tools/cache.py`           | **CREATE** | Minimal Redis JSON cache helper (`cache_get_json` / `cache_set_json`) — interim seed for T-018's cache decorator |
+| `backend/tests/unit/test_macro.py` | **CREATE** | 44 unit tests — all scrapes/HTTP mocked, covers parsers, graceful degradation, cache short-circuit               |
+| `backend/tests/unit/test_cache.py` | **CREATE** | 12 unit tests — no-op under test env, fake-client round-trip, corrupt/non-dict handling                          |
 
 > **Note on `cache.py`.** Redis caching is referenced in earlier tools'
 > docstrings but no cache module existed yet; **T-018 ("Setup Redis caching
@@ -118,6 +120,7 @@ python -m pytest backend/tests/unit/test_macro.py backend/tests/unit/test_cache.
 ```
 
 **Expected output:**
+
 ```
 backend/tests/unit/test_macro.py::TestParseRbiRepoRate::test_extracts_repo_rate PASSED
 backend/tests/unit/test_macro.py::TestParseMospiCpi::test_extracts_cpi PASSED
@@ -219,6 +222,7 @@ T-018 will later generalise into a reusable decorator.
 ### Changes
 
 **`backend/tools/macro.py`**
+
 - `MacroData` — Pydantic output model: `repo_rate`, `cpi_inflation`,
   `gdp_growth` (each `float | None`), per-source `*_as_of` dates, `sources`
   map, `warnings` list, `fetched_at`, `cached`, `source`; `has_any_data`
@@ -239,6 +243,7 @@ T-018 will later generalise into a reusable decorator.
 - `fetch_macro_summary` `@tool` — three numbers + warnings only
 
 **`backend/tools/cache.py`**
+
 - `get_client()` — lazy, memoised Redis connect with `.ping()` verify; returns
   `None` under test env / missing URL / unreachable, and latches unavailable
 - `cache_get_json(key)` — returns `dict | None`; never raises; handles miss,
@@ -249,6 +254,7 @@ T-018 will later generalise into a reusable decorator.
 - No-op when `ENVIRONMENT=test` so CI never touches Redis
 
 **`backend/tests/unit/test_macro.py`** (44 tests)
+
 - `TestParseRbiRepoRate` / `TestParseMospiCpi` / `TestParseWorldbankGdp` —
   pure parsers against fixture HTML/JSON, plus bounds-rejection cases
 - `TestHttpGet` — parametrized block statuses → `ScrapeBlockedError`,
@@ -263,6 +269,7 @@ T-018 will later generalise into a reusable decorator.
 - `TestMacroDataModel` — valid, all-None, empty-country raises
 
 **`backend/tests/unit/test_cache.py`** (12 tests)
+
 - `TestTestEnvironmentNoOp` — `get_client` returns `None`, get/set are no-ops
 - `TestWithFakeClient` — set→get round-trip, miss, corrupt, non-dict,
   client-error, TTL passed to `set`, datetime serialised via `default=str`

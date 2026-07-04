@@ -2,6 +2,7 @@
 
 > **Context:** AIRP is currently a solo portfolio project (Phase 0 of 8).
 > This guide documents the development workflow so that:
+>
 > 1. The developer maintains consistent discipline across all 80 tasks
 > 2. Any future collaborator can contribute without needing to ask questions
 > 3. Technical reviewers and recruiters see a professional engineering process
@@ -28,13 +29,13 @@
 
 Before setting up AIRP locally, ensure you have:
 
-| Tool | Minimum version | Check |
-|---|---|---|
-| Python | 3.11 | `python --version` |
-| Node.js | 20 LTS | `node --version` |
-| Git | 2.40+ | `git --version` |
-| Docker Desktop | 24+ | `docker --version` |
-| Docker Compose | 2.20+ | `docker compose version` |
+| Tool           | Minimum version | Check                    |
+| -------------- | --------------- | ------------------------ |
+| Python         | 3.11            | `python --version`       |
+| Node.js        | 20 LTS          | `node --version`         |
+| Git            | 2.40+           | `git --version`          |
+| Docker Desktop | 24+             | `docker --version`       |
+| Docker Compose | 2.20+           | `docker compose version` |
 
 You also need accounts and API keys for all services listed in [APIS.md](APIS.md).
 Complete the sign-up checklist there before proceeding.
@@ -62,6 +63,7 @@ docker compose up
 ```
 
 This starts:
+
 - FastAPI API server on http://localhost:8000
 - PostgreSQL on port 5432
 - Redis on port 6379
@@ -206,19 +208,20 @@ git push origin feat/agent-fundamental-analyst
 
 All branches are created from `main`. There are no long-lived feature branches.
 
-| Pattern | Example | Purpose |
-|---|---|---|
-| `feat/<area>-<description>` | `feat/agent-fundamental-analyst` | New functionality |
-| `fix/<area>-<description>` | `fix/api-websocket-disconnect` | Bug fixes |
-| `chore/<description>` | `chore/update-dependencies` | Config, tooling, deps |
-| `docs/<description>` | `docs/add-architecture-diagram` | Documentation only |
-| `perf/<area>-<description>` | `perf/graph-parallel-execution` | Performance improvements |
-| `refactor/<area>-<description>` | `refactor/agents-base-class` | Restructuring, no feature change |
-| `test/<area>-<description>` | `test/data-layer-integration` | Adding or updating tests |
-| `ci/<description>` | `ci/add-coverage-report` | CI/CD pipeline changes |
-| `setup/<description>` | `setup/pre-commit` | Project setup tasks (Phase 0) |
+| Pattern                         | Example                          | Purpose                          |
+| ------------------------------- | -------------------------------- | -------------------------------- |
+| `feat/<area>-<description>`     | `feat/agent-fundamental-analyst` | New functionality                |
+| `fix/<area>-<description>`      | `fix/api-websocket-disconnect`   | Bug fixes                        |
+| `chore/<description>`           | `chore/update-dependencies`      | Config, tooling, deps            |
+| `docs/<description>`            | `docs/add-architecture-diagram`  | Documentation only               |
+| `perf/<area>-<description>`     | `perf/graph-parallel-execution`  | Performance improvements         |
+| `refactor/<area>-<description>` | `refactor/agents-base-class`     | Restructuring, no feature change |
+| `test/<area>-<description>`     | `test/data-layer-integration`    | Adding or updating tests         |
+| `ci/<description>`              | `ci/add-coverage-report`         | CI/CD pipeline changes           |
+| `setup/<description>`           | `setup/pre-commit`               | Project setup tasks (Phase 0)    |
 
 **Rules:**
+
 - Lowercase only. Hyphens only. No underscores in branch names.
 - Branch names must be self-explanatory — someone reading `git branch -a`
   should know what every branch is doing.
@@ -242,17 +245,17 @@ Closes #<issue-number>
 
 ### Types and scopes
 
-| Type | Use for |
-|---|---|
-| `feat` | New feature or capability |
-| `fix` | Bug fix |
-| `docs` | Documentation changes |
-| `test` | Adding or updating tests |
-| `chore` | Dependencies, tooling, config |
-| `perf` | Performance improvements |
+| Type       | Use for                                     |
+| ---------- | ------------------------------------------- |
+| `feat`     | New feature or capability                   |
+| `fix`      | Bug fix                                     |
+| `docs`     | Documentation changes                       |
+| `test`     | Adding or updating tests                    |
+| `chore`    | Dependencies, tooling, config               |
+| `perf`     | Performance improvements                    |
 | `refactor` | Code restructuring without behaviour change |
-| `ci` | CI/CD pipeline changes |
-| `setup` | Project setup (Phase 0 tasks) |
+| `ci`       | CI/CD pipeline changes                      |
+| `setup`    | Project setup (Phase 0 tasks)               |
 
 Scopes map to the relevant system layer or module:
 
@@ -309,26 +312,33 @@ final final version
 
 ```markdown
 ## Summary
+
 2–3 sentences: what does this PR do and why was it needed?
 
 ## Changes
+
 - Specific change 1 — what file/module and what it does
 - Specific change 2
 - Specific change 3
 
 ## Testing
+
 - Which tests were added?
 - What manual testing was done?
 - What edge cases were considered?
 
 ## LangSmith Trace
+
 <!-- Required only if this PR touches any agent code -->
+
 [Link to LangSmith trace](https://smith.langchain.com/...)
 
 ## Screenshots
+
 <!-- Required for UI changes; terminal output for backend changes -->
 
 ## Related Issues
+
 Closes #<issue-number>
 ```
 
@@ -371,16 +381,16 @@ immediately open a follow-up issue to fix the violation.
 
 Every push triggers GitHub Actions. The pipeline runs:
 
-| Check | Tool | Pass condition |
-|---|---|---|
-| Python format | `black --check` | Zero files would be reformatted |
-| Python imports | `isort --check` | Zero files would be reordered |
-| Python lint | `flake8` | Zero violations |
-| Python types | `mypy` | Zero errors in strict mode |
-| Python tests | `pytest --cov` | All pass, coverage ≥ 85% |
-| TypeScript types | `tsc --noEmit` | Zero errors |
-| TypeScript lint | `eslint --max-warnings 0` | Zero warnings or errors |
-| Frontend build | `vite build` | Build succeeds |
+| Check            | Tool                      | Pass condition                  |
+| ---------------- | ------------------------- | ------------------------------- |
+| Python format    | `black --check`           | Zero files would be reformatted |
+| Python imports   | `isort --check`           | Zero files would be reordered   |
+| Python lint      | `flake8`                  | Zero violations                 |
+| Python types     | `mypy`                    | Zero errors in strict mode      |
+| Python tests     | `pytest --cov`            | All pass, coverage ≥ 85%        |
+| TypeScript types | `tsc --noEmit`            | Zero errors                     |
+| TypeScript lint  | `eslint --max-warnings 0` | Zero warnings or errors         |
+| Frontend build   | `vite build`              | Build succeeds                  |
 
 A red CI check on a PR is a blocker. Do not merge with failing CI.
 
@@ -535,4 +545,4 @@ python scripts/embed_seed_data.py
 
 ---
 
-*Last updated: T-008 — Write initial documentation (Phase 0, Week 1)*
+_Last updated: T-008 — Write initial documentation (Phase 0, Week 1)_

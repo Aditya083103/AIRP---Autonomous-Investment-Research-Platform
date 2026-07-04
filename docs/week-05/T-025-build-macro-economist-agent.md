@@ -18,6 +18,7 @@ headwinds for the company under analysis.
 Cuts through noise to identify the macro forces that actually move stock prices.
 
 **Tools used:**
+
 - `fetch_macro_data` (RBI repo rate, CPI inflation, India GDP growth)
 - `semantic_search` (ChromaDB `airp_news` collection — sector macro news, non-fatal)
 
@@ -54,11 +55,11 @@ git branch
 
 ## 3. Files to Create
 
-| File | Path |
-|------|------|
-| Agent | `backend/agents/macro_economist.py` |
-| Tests | `backend/tests/unit/test_macro_economist.py` |
-| Docs | `docs/week-05/T-025-build-macro-economist-agent.md` |
+| File  | Path                                                |
+| ----- | --------------------------------------------------- |
+| Agent | `backend/agents/macro_economist.py`                 |
+| Tests | `backend/tests/unit/test_macro_economist.py`        |
+| Docs  | `docs/week-05/T-025-build-macro-economist-agent.md` |
 
 The `docs/week-05/` folder already exists from T-024. No need to create it.
 
@@ -72,6 +73,7 @@ All section dividers use `# ---` (plain ASCII). No Unicode box-drawing
 characters. This rule applies from T-024 onwards across all new agent files.
 
 Correct:
+
 ```python
 # ---------------------------------------------------------------------------
 # Constants -- RBI rate thresholds
@@ -121,12 +123,12 @@ round-trip. The ticker resolver gap is addressed in T-029 (Planner node).
 
 ### 4.5 Rate Thresholds (RBI Historical Norms)
 
-| Repo rate | Stance |
-|-----------|--------|
-| < 5.0% | `accommodative` |
-| 5.0 – 5.99% | `neutral` |
+| Repo rate   | Stance                  |
+| ----------- | ----------------------- |
+| < 5.0%      | `accommodative`         |
+| 5.0 – 5.99% | `neutral`               |
 | 6.0 – 6.99% | `calibrated_tightening` |
-| ≥ 7.0% | `tightening` |
+| ≥ 7.0%      | `tightening`            |
 
 These mirror the actual RBI rate cycle: 4.0% (COVID 2020), 6.5% (post-hike
 2023), 7.25% (historical peak 2012).
@@ -134,6 +136,7 @@ These mirror the actual RBI rate cycle: 4.0% (COVID 2020), 6.5% (post-hike
 ### 4.6 Banking Headwind Logic (Acceptance Criteria)
 
 When `rate_stance = "tightening"` AND `sector = "banking"`:
+
 - `sector_impact = "headwind"` (from `_SECTOR_MACRO_RULES` lookup)
 - Headwinds include: NIM compression, higher cost of funds, rising credit risk
 - This covers the full path: `fetch_macro_data` returns `repo_rate=7.5` →
@@ -248,7 +251,9 @@ for narrative synthesis (tailwinds, headwinds, global/India factors, summary).
 ## Testing
 
 ```
+
 python -m pytest backend/tests/unit/test_macro_economist.py -v
+
 ```
 
 Acceptance criteria verified:
@@ -290,19 +295,19 @@ git branch -d feat/agent-macro
 
 ## 12. Acceptance Criteria Mapping
 
-| Criterion | Test(s) | Status |
-|-----------|---------|--------|
-| Rate hike → banking headwind | `test_banking_tightening_is_headwind`, `test_tightening_rate_banking_headwind`, `test_tightening_banking_headwind_full_pipeline` | Verified |
-| Rate hike → NBFC headwind | `test_nbfc_tightening_is_headwind`, `test_nbfc_tightening_headwind` | Verified |
-| Rate hike → auto headwind | `test_auto_tightening_is_headwind`, `test_auto_tightening_headwind` | Verified |
-| Accommodative → banking tailwind | `test_banking_accommodative_is_tailwind`, `test_accommodative_rate_banking_tailwind` | Verified |
-| IT services neutral in tightening | `test_it_tightening_is_neutral` | Verified |
-| Agent never raises | `test_never_raises_on_catastrophic_failure` | Verified |
-| ChromaDB failure non-fatal | `test_chroma_failure_is_non_fatal` | Verified |
-| LLM failure → fallback | `test_llm_failure_uses_fallback_summary` | Verified |
-| All-None macro data handled | `test_none_macro_data_fields_handled` | Verified |
+| Criterion                         | Test(s)                                                                                                                          | Status   |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| Rate hike → banking headwind      | `test_banking_tightening_is_headwind`, `test_tightening_rate_banking_headwind`, `test_tightening_banking_headwind_full_pipeline` | Verified |
+| Rate hike → NBFC headwind         | `test_nbfc_tightening_is_headwind`, `test_nbfc_tightening_headwind`                                                              | Verified |
+| Rate hike → auto headwind         | `test_auto_tightening_is_headwind`, `test_auto_tightening_headwind`                                                              | Verified |
+| Accommodative → banking tailwind  | `test_banking_accommodative_is_tailwind`, `test_accommodative_rate_banking_tailwind`                                             | Verified |
+| IT services neutral in tightening | `test_it_tightening_is_neutral`                                                                                                  | Verified |
+| Agent never raises                | `test_never_raises_on_catastrophic_failure`                                                                                      | Verified |
+| ChromaDB failure non-fatal        | `test_chroma_failure_is_non_fatal`                                                                                               | Verified |
+| LLM failure → fallback            | `test_llm_failure_uses_fallback_summary`                                                                                         | Verified |
+| All-None macro data handled       | `test_none_macro_data_fields_handled`                                                                                            | Verified |
 
 ---
 
-*T-025 complete. All four parallel research agents are now built.*
-*Next: T-026 or T-029 (LangGraph Planner node / ticker resolver).*
+_T-025 complete. All four parallel research agents are now built._
+_Next: T-026 or T-029 (LangGraph Planner node / ticker resolver)._

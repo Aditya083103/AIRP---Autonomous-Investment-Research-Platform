@@ -17,6 +17,7 @@ agent, transitioning Waiting -> Thinking -> Complete as real events
 arrive.
 
 **Acceptance criteria (all must pass):**
+
 - Cards animate in real time
 - Each agent card shows its output on completion
 - No race conditions
@@ -24,7 +25,7 @@ arrive.
 **The one thing worth understanding before reading the code**
 
 `backend.services.ws_broadcaster.AgentStreamEvent`'s own docstring says
-`agent` is *"the LangGraph node name that just **completed**"* -- there
+`agent` is _"the LangGraph node name that just **completed**"_ -- there
 is no corresponding "node X has **started**" event. The backend only
 ever announces completions. That means "Thinking" cannot be read off
 the wire; it has to be **inferred**. This viewer infers it from round
@@ -43,6 +44,7 @@ itself (T-049's hook had none), and removing the T-049 throwaway demo
 component it explicitly said Phase 6 should delete.
 
 **Explicitly out of scope:**
+
 - The full verdict panel, bull/bear case, and Investment Memo -- T-061.
   `AnalysisResultPage` shows a "what happens next" note once the job
   terminates, not the memo itself.
@@ -63,6 +65,7 @@ component it explicitly said Phase 6 should delete.
 ## What Was Built
 
 ### `src/lib/agentProgress.ts` (new)
+
 `deriveAgentCards(events, isComplete)` -- a pure function, no React, no
 timers, no subscriptions. Given the exact same inputs it always
 produces the exact same output, which is what makes "no race
@@ -77,12 +80,14 @@ early pipeline failure, most commonly) -- so a card never spins on
 "Waiting" forever after the job is already over.
 
 ### `src/components/progress/TypingIndicator.tsx` (new)
+
 Three dots, `animate-bounce` with a staggered `animationDelay`, wrapped
 in `role="status" aria-label="Thinking"` so a screen reader announces
 it once rather than three unlabelled bouncing elements. Pure CSS --
 costs nothing to leave running for as long as a card stays "Thinking".
 
 ### `src/components/progress/AgentCard.tsx` (new)
+
 Seat number, display name, a state badge, and body content that
 depends on state: `TypingIndicator` + "Working…" when thinking, the
 `output_preview` when complete/failed, plain copy for waiting/skipped.
@@ -92,6 +97,7 @@ Top-border accent colour reuses the exact hex values
 counterpart read as the same agent.
 
 ### `src/components/progress/AgentProgressBoard.tsx` (new)
+
 Composes the 8 `AgentCard`s into the same three round groupings
 (`CommitteeSection.tsx`'s grid layout, T-055), plus an overall
 `ProgressBar` (reusing `progress_percent` from the stream -- no new
@@ -102,6 +108,7 @@ what makes it fully testable with hand-built event arrays and zero
 WebSocket mocking (`AgentProgressBoard.test.tsx`).
 
 ### `src/pages/AnalysisResultPage.tsx` (rewritten)
+
 Calls `useAnalysisStream({ jobId, token: accessToken, enabled: ... })`
 and renders `AgentProgressBoard`. Once `isComplete` is true, shows
 either a completion note (pointing at T-061 for the real memo) or a
@@ -109,8 +116,9 @@ failure note (using the terminal event's `output_preview` as the
 explanation) -- distinguished by the last event's `status`.
 
 ### Removed: `src/components/AgentProgressDemo.tsx`
-Its own T-049 docstring said exactly this: *"Phase 6 can delete or
-replace this file outright once the real dashboard lands."* Confirmed
+
+Its own T-049 docstring said exactly this: _"Phase 6 can delete or
+replace this file outright once the real dashboard lands."_ Confirmed
 nothing else imported it before removing. `useAnalysisStream.ts`, the
 part that docstring called out as "the reusable part worth keeping", is
 untouched and is exactly what this task builds on.
@@ -118,6 +126,7 @@ untouched and is exactly what this task builds on.
 ### Testing
 
 `frontend/src/test/`:
+
 - **`useAnalysisStream.test.ts`** (new -- T-049's hook had no test file
   before this task) -- a `FakeWebSocket` class substituted via
   `vi.stubGlobal` drives it deterministically: correct connection URL
@@ -257,18 +266,22 @@ git push -u origin feat/ui-agent-progress
 ```
 
 **Commit message:**
+
 ```
 feat(progress): build live agent progress viewer with animated cards
 ```
 
 **PR title:**
+
 ```
 feat(progress): implement live Agent Progress viewer (Waiting -> Thinking -> Complete)
 ```
 
 **PR description:**
+
 ```markdown
 ## Summary
+
 Gives AnalysisResultPage its real first job: connect to the existing
 WS /api/v1/analysis/{job_id}/stream (useAnalysisStream, T-049) and
 render one animated card per committee agent, transitioning
@@ -281,10 +294,11 @@ rather than read directly off the wire -- the backend only emits
 completion events, never "started" events.
 
 ## Changes
+
 - `src/lib/agentProgress.ts` (new) -- pure Waiting/Thinking/Complete/
   Failed/Skipped derivation from the raw event stream
 - `src/components/progress/{TypingIndicator,AgentCard,
-  AgentProgressBoard}.tsx` (new)
+AgentProgressBoard}.tsx` (new)
 - Rewrites `src/pages/AnalysisResultPage.tsx` to render the live board
   and a completion/failure summary
 - Removes `src/components/AgentProgressDemo.tsx` (superseded)
@@ -293,27 +307,31 @@ completion events, never "started" events.
 - No new dependencies
 
 ## Testing
+
 - [x] Unit tests added / updated -- 6 new/rewritten test files,
-  including an explicit forward-vs-reverse event-order test in
-  agentProgress.test.ts that is the direct check for the "no race
-  conditions" acceptance criterion
+      including an explicit forward-vs-reverse event-order test in
+      agentProgress.test.ts that is the direct check for the "no race
+      conditions" acceptance criterion
 - [x] Integration tests pass (backend untouched)
 - [x] Manual smoke test performed against a running backend -- see the
-  8-step walkthrough in the doc (round-by-round card transitions,
-  overall progress, completion and failure paths, mid-run refresh)
+      8-step walkthrough in the doc (round-by-round card transitions,
+      overall progress, completion and failure paths, mid-run refresh)
 
 `npm run type-check`, `npm run lint`, `npm run format:check`,
 `npm run test:run`, and `npm run build` all pass locally.
 
 ## LangSmith Trace
+
 n/a -- no agent code touched.
 
 ## Screenshots
+
 <paste terminal output of the passing checks, plus a screenshot of the
 board mid-run (some cards Thinking, some Complete) and one screenshot
 of the completed state>
 
 ## Related Issues
+
 Closes #<issue-number>
 ```
 

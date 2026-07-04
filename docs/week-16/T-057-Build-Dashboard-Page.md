@@ -16,6 +16,7 @@ colour-coded BUY/HOLD/SELL badges, a company-name search box, pagination,
 and a link from each row to its (not-yet-built) detail page.
 
 **Acceptance criteria (all must pass):**
+
 - History loads from API
 - BUY/HOLD/SELL badges colour-coded
 - Search filters by company name
@@ -51,6 +52,7 @@ a `src/api/analysis.ts` client, `src/types/analysis.ts`, a
 `/analysis/:jobId/result` detail route, and tests for all of it.
 
 **Explicitly out of scope:**
+
 - The real Analysis Results page (verdict panel, bull/bear case, memo) --
   T-061. `/analysis/:jobId/result` here is a small placeholder, the same
   pattern `AnalysisPage` (T-055) and the original `DashboardPage`
@@ -68,12 +70,14 @@ a `src/api/analysis.ts` client, `src/types/analysis.ts`, a
 ## What Was Built
 
 ### `src/types/analysis.ts` (new)
+
 `HistoryEntryResponse` / `HistoryResponse` mirroring
 `backend.models.schemas` exactly, plus narrower `AnalysisStatus` /
 `Verdict` string-literal unions for better autocomplete on the frontend
 (the backend itself just types these as `str`).
 
 ### `src/api/analysis.ts` (new)
+
 `fetchAnalysisHistory({ accessToken, limit, offset })` -- `GET
 /api/v1/analysis/history` with an `Authorization: Bearer` header (this
 endpoint authenticates via the header, not the httpOnly cookie -- same
@@ -86,6 +90,7 @@ sites (the same tradeoff `backend/services/analysis.py`'s own docstring
 makes for its duplicated ticker-override table).
 
 ### `src/hooks/useAnalysisHistory.ts` (new)
+
 A thin React Query wrapper (`src/lib/queryClient.ts`'s own docstring
 already names "analysis status, results, history" as the data its
 defaults are tuned for). `enabled: accessToken !== null` gates the
@@ -93,6 +98,7 @@ query -- `DashboardPage` is behind `ProtectedRoute`, so this should
 never matter in practice, but the hook stays honest about the type.
 
 ### `src/components/dashboard/VerdictBadge.tsx` (new)
+
 Maps a history row's `verdict` + `status` to the right `Badge` (T-054)
 tone: `buy`/`hold`/`sell` for a real verdict, and `Pending` / `Running` /
 `Failed` neutral-toned badges for the three states a row can be in
@@ -101,16 +107,19 @@ before it has a verdict at all -- `HistoryEntryResponse.verdict` is
 table never renders a blank cell for an in-progress or failed analysis.
 
 ### `src/components/dashboard/HistoryTable.tsx` (new)
+
 Company (name + ticker), date, `VerdictBadge`, conviction score
 (`X/10`, or an em dash when not yet available), and a "View" link to
 `/analysis/{job_id}/result`.
 
 ### `src/pages/AnalysisResultPage.tsx` (new, placeholder)
+
 The link target for `HistoryTable`'s "View" column -- the acceptance
 criterion's "link to detail". Shows the `job_id` from the route so the
 link is visibly confirmable; the real verdict/memo rendering is T-061.
 
 ### `src/pages/DashboardPage.tsx` (rewritten)
+
 Composes `useAnalysisHistory` + a search `Input` + `HistoryTable` +
 Previous/Next pagination buttons (`PAGE_SIZE = 20`, matching the
 backend's `DEFAULT_HISTORY_PAGE_SIZE`). Loading shows a `Spinner`; a
@@ -122,11 +131,13 @@ header (T-056) already provides one globally, so the T-056 placeholder's
 copy was redundant here.
 
 ### `src/routes/AppRoutes.tsx` (modified)
+
 Adds a `ProtectedRoute`-wrapped `path="analysis/:jobId/result"`.
 
 ### Testing
 
 `frontend/src/test/`:
+
 - **`analysisApi.test.ts`** -- `src/api/analysis.ts` against a mocked
   `fetch`: `Authorization` header, `limit`/`offset` query params (and
   their omission when not given), successful parsing, and
@@ -251,18 +262,22 @@ git push -u origin feat/ui-dashboard
 ```
 
 **Commit message:**
+
 ```
 feat(dashboard): build analysis history table with search and pagination
 ```
 
 **PR title:**
+
 ```
 feat(dashboard): implement Dashboard page with history table, verdict badges, and search
 ```
 
 **PR description:**
+
 ```markdown
 ## Summary
+
 Replaces the T-056 Dashboard placeholder with the real page: analysis
 history loaded from the existing GET /api/v1/analysis/history endpoint
 (T-050), rendered with colour-coded BUY/HOLD/SELL badges, a company-name
@@ -274,6 +289,7 @@ labelled "Conviction" rather than "Risk" (the API has no risk-score
 field in this endpoint) and why search is client-side only.
 
 ## Changes
+
 - `src/types/analysis.ts`, `src/api/analysis.ts`,
   `src/hooks/useAnalysisHistory.ts`
 - `src/components/dashboard/{VerdictBadge,HistoryTable}.tsx`
@@ -284,29 +300,33 @@ field in this endpoint) and why search is client-side only.
 - No new dependencies -- @tanstack/react-query already present since T-053
 
 ## Testing
+
 - [x] Unit tests added / updated -- 5 new frontend test files covering
-  the API client, VerdictBadge, HistoryTable, DashboardPage (loading,
-  data, colour-coding, empty state, error state, search, pagination),
-  and AnalysisResultPage
+      the API client, VerdictBadge, HistoryTable, DashboardPage (loading,
+      data, colour-coding, empty state, error state, search, pagination),
+      and AnalysisResultPage
 - [x] Integration tests pass (backend untouched; T-050's existing
-  history-endpoint tests are unaffected)
+      history-endpoint tests are unaffected)
 - [x] Manual smoke test performed against a running backend -- history
-  loads, verdict colours correct, search narrows results, View link
-  navigates, pagination buttons behave correctly, and a stopped backend
-  shows a readable error instead of a blank page
+      loads, verdict colours correct, search narrows results, View link
+      navigates, pagination buttons behave correctly, and a stopped backend
+      shows a readable error instead of a blank page
 
 `npm run type-check`, `npm run lint`, `npm run format:check`,
 `npm run test:run`, and `npm run build` all pass locally.
 
 ## LangSmith Trace
+
 n/a -- no agent code touched.
 
 ## Screenshots
+
 <paste terminal output of the passing checks, plus a screenshot of the
 dashboard with a few history rows showing colour-coded verdict badges,
 and a screenshot of the search box narrowing results>
 
 ## Related Issues
+
 Closes #<issue-number>
 ```
 

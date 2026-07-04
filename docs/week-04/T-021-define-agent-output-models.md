@@ -22,11 +22,11 @@ No agent code is written here — only the **output schemas**. This is a foundat
 
 ## 2. Files Delivered
 
-| File | Description |
-|------|-------------|
-| `backend/agents/output_models.py` | All 9 models (1 base + 8 concrete) |
-| `backend/tests/unit/test_output_models.py` | 60+ unit tests covering all models |
-| `docs/week-04/T-021-define-agent-output-models.md` | This document |
+| File                                               | Description                        |
+| -------------------------------------------------- | ---------------------------------- |
+| `backend/agents/output_models.py`                  | All 9 models (1 base + 8 concrete) |
+| `backend/tests/unit/test_output_models.py`         | 60+ unit tests covering all models |
+| `docs/week-04/T-021-define-agent-output-models.md` | This document                      |
 
 ---
 
@@ -46,14 +46,14 @@ AgentOutput (base — frozen, shared fields)
 
 ### Base class fields (all models inherit these)
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `agent_name` | `str` | Canonical agent ID (matches `AgentNameEnum` in ORM) |
-| `analysis_id` | `str` | UUID of the parent Analysis job |
-| `company_name` | `str` | Human-readable company name |
-| `ticker` | `str` | Yahoo Finance ticker with suffix (`TCS.NS`) |
-| `generated_at` | `datetime` | UTC timestamp when output was produced |
-| `error` | `Optional[str]` | `None` on success; error message on failure |
+| Field          | Type            | Description                                         |
+| -------------- | --------------- | --------------------------------------------------- |
+| `agent_name`   | `str`           | Canonical agent ID (matches `AgentNameEnum` in ORM) |
+| `analysis_id`  | `str`           | UUID of the parent Analysis job                     |
+| `company_name` | `str`           | Human-readable company name                         |
+| `ticker`       | `str`           | Yahoo Finance ticker with suffix (`TCS.NS`)         |
+| `generated_at` | `datetime`      | UTC timestamp when output was produced              |
+| `error`        | `Optional[str]` | `None` on success; error message on failure         |
 
 ---
 
@@ -83,15 +83,15 @@ API rate limits and data gaps are real. Fields like `rsi_14`, `pe_ratio`, and `g
 
 ## 5. Acceptance Criteria Verification
 
-| Criterion | Status | Evidence |
-|-----------|--------|----------|
-| All models importable | ✅ | `from backend.agents.output_models import FundamentalAnalysis` etc. — verified in `test_all_models_importable` |
-| JSON serialisation round-trips | ✅ | Every model has a `test_json_round_trip` / `test_model_dump` test |
-| Schema auto-generated | ✅ | Every model has a `test_json_schema_generated` test calling `model_json_schema()` |
-| `__all__` exports all 9 classes | ✅ | `test_all_exports_in_dunder_all` verifies exact set |
-| Validation rejects bad values | ✅ | `test_score_lower_bound`, `test_score_upper_bound`, `test_sentiment_score_bounds`, etc. |
-| Frozen — immutable after creation | ✅ | `test_frozen_prevents_mutation` |
-| All 8 concrete agents covered | ✅ | Dedicated test class per model |
+| Criterion                         | Status | Evidence                                                                                                       |
+| --------------------------------- | ------ | -------------------------------------------------------------------------------------------------------------- |
+| All models importable             | ✅     | `from backend.agents.output_models import FundamentalAnalysis` etc. — verified in `test_all_models_importable` |
+| JSON serialisation round-trips    | ✅     | Every model has a `test_json_round_trip` / `test_model_dump` test                                              |
+| Schema auto-generated             | ✅     | Every model has a `test_json_schema_generated` test calling `model_json_schema()`                              |
+| `__all__` exports all 9 classes   | ✅     | `test_all_exports_in_dunder_all` verifies exact set                                                            |
+| Validation rejects bad values     | ✅     | `test_score_lower_bound`, `test_score_upper_bound`, `test_sentiment_score_bounds`, etc.                        |
+| Frozen — immutable after creation | ✅     | `test_frozen_prevents_mutation`                                                                                |
+| All 8 concrete agents covered     | ✅     | Dedicated test class per model                                                                                 |
 
 ---
 
@@ -196,7 +196,7 @@ feat(agents): define Pydantic output models for all 8 agents (T-021)
 
 ### Description
 
-```markdown
+````markdown
 ## Summary
 
 Defines the canonical Pydantic v2 output schemas for every agent in the
@@ -233,6 +233,7 @@ set ENVIRONMENT=test
 python -m pytest backend/tests/unit/test_output_models.py -v
 # 60+ passed
 ```
+````
 
 Full unit suite passes with no regressions.
 
@@ -243,7 +244,8 @@ Not applicable — no LLM calls in this task (pure schema definitions).
 ## Related Issues
 
 Closes #21
-```
+
+````
 
 ---
 
@@ -270,7 +272,7 @@ def run_fundamental_analysis(state: InvestmentState) -> dict:
 
     # Store in state as dict (LangGraph requires serialisable state)
     return {"fundamental": result.model_dump()}
-```
+````
 
 On error:
 

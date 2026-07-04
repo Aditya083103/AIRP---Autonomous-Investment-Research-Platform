@@ -1,13 +1,13 @@
 # T-004 — Setup GitHub Actions CI
 
-| Field | Detail |
-|-------|--------|
-| **Task ID** | T-004 |
-| **Phase** | 0 — Project Setup & Standards |
-| **Week** | 1 |
-| **Branch** | `ci/github-actions` |
-| **Status** | ✅ Completed |
-| **Merged into** | `main` |
+| Field           | Detail                        |
+| --------------- | ----------------------------- |
+| **Task ID**     | T-004                         |
+| **Phase**       | 0 — Project Setup & Standards |
+| **Week**        | 1                             |
+| **Branch**      | `ci/github-actions`           |
+| **Status**      | ✅ Completed                  |
+| **Merged into** | `main`                        |
 
 ---
 
@@ -22,28 +22,28 @@ and provides a visible CI badge on the README.
 
 ## Acceptance Criteria
 
-| Criteria | Status |
-|----------|--------|
-| CI pipeline triggers on push to every branch | ✅ |
-| CI pipeline triggers on pull request to `main` | ✅ |
-| Backend job: black, isort, flake8, mypy all pass | ✅ |
-| Backend job: pytest runs and exits cleanly | ✅ |
-| Frontend job: tsc, eslint, prettier check, vite build all pass | ✅ |
-| `ci-pass` summary job gates both backend and frontend | ✅ |
-| CI badge shows passing on README | ✅ |
-| Concurrent runs on same branch are cancelled automatically | ✅ |
+| Criteria                                                       | Status |
+| -------------------------------------------------------------- | ------ |
+| CI pipeline triggers on push to every branch                   | ✅     |
+| CI pipeline triggers on pull request to `main`                 | ✅     |
+| Backend job: black, isort, flake8, mypy all pass               | ✅     |
+| Backend job: pytest runs and exits cleanly                     | ✅     |
+| Frontend job: tsc, eslint, prettier check, vite build all pass | ✅     |
+| `ci-pass` summary job gates both backend and frontend          | ✅     |
+| CI badge shows passing on README                               | ✅     |
+| Concurrent runs on same branch are cancelled automatically     | ✅     |
 
 ---
 
 ## Files Created / Modified
 
-| File | Action | Purpose |
-|------|--------|---------|
-| `.github/workflows/ci.yml` | Modified | Complete 3-job pipeline: backend lint+test, frontend lint+build, ci-pass summary gate |
-| `backend/tests/conftest.py` | Created | Global pytest fixtures; environment guard prevents accidental production DB hits |
-| `backend/tests/test_placeholder.py` | Created | Placeholder tests so pytest has something to collect in Phase 0; replaced in Phase 1 |
-| `pyproject.toml` | Modified | Coverage threshold set to `0` for Phase 0 (no app code yet); raised to `85` in T-009 |
-| `README.md` | Modified | CI badge added at top of file |
+| File                                | Action   | Purpose                                                                               |
+| ----------------------------------- | -------- | ------------------------------------------------------------------------------------- |
+| `.github/workflows/ci.yml`          | Modified | Complete 3-job pipeline: backend lint+test, frontend lint+build, ci-pass summary gate |
+| `backend/tests/conftest.py`         | Created  | Global pytest fixtures; environment guard prevents accidental production DB hits      |
+| `backend/tests/test_placeholder.py` | Created  | Placeholder tests so pytest has something to collect in Phase 0; replaced in Phase 1  |
+| `pyproject.toml`                    | Modified | Coverage threshold set to `0` for Phase 0 (no app code yet); raised to `85` in T-009  |
+| `README.md`                         | Modified | CI badge added at top of file                                                         |
 
 ---
 
@@ -74,6 +74,7 @@ push / pull_request
 ```
 
 ### Why a `ci-pass` summary job?
+
 GitHub branch protection rules require you to specify which jobs must pass
 before a PR can merge. If you name individual jobs (e.g. `backend`,
 `frontend`), you must update branch protection every time you add a new job.
@@ -82,22 +83,26 @@ all others — you never need to touch branch protection settings again. New
 jobs just get added to `ci-pass`'s `needs` array.
 
 ### Why `concurrency: cancel-in-progress: true`?
+
 Without this, rapid consecutive pushes queue multiple CI runs. On a free
 GitHub Actions account (2,000 minutes/month), queued runs waste minutes on
 stale commits. Cancelling in-progress runs on the same branch means only the
 latest commit is tested, which is always what you want.
 
 ### Why `postgres:16-alpine` instead of `postgres:16`?
+
 The alpine variant is ~80MB vs ~400MB for the full image. Faster pull time
 in CI = faster pipeline. Alpine PostgreSQL has identical SQL behaviour for
 AIRP's use case.
 
 ### Why conditional `requirements.txt` install?
+
 ```yaml
 if [ -f backend/requirements.txt ]; then
-  pip install -r backend/requirements.txt
+pip install -r backend/requirements.txt
 fi
 ```
+
 `requirements.txt` (production dependencies: FastAPI, LangChain, etc.) does
 not exist until Phase 1, T-009. Without this guard, the CI step would fail
 with `FileNotFoundError` for all of Phase 0. The conditional means Phase 0
@@ -108,6 +113,7 @@ CI passes cleanly, and Phase 1 automatically picks up the file when it exists.
 ## Problems Encountered & Solutions
 
 ### 1. Coverage threshold fails with no source files
+
 **Problem:** `pytest --cov-fail-under=85` fails immediately in Phase 0 because
 there are no application source files to measure coverage against. The coverage
 tool reports 0% and exits with code 1.
@@ -118,6 +124,7 @@ The placeholder test file ensures pytest has at least one test to collect so
 it doesn't warn about an empty test suite.
 
 ### 2. `conftest.py` environment guard fails in CI without `ENVIRONMENT=test`
+
 **Problem:** The `require_test_environment` fixture in `conftest.py` calls
 `pytest.fail()` if `ENVIRONMENT != "test"`. Without setting this env var in
 the CI workflow, every test would fail before even running.
@@ -128,10 +135,13 @@ the CI workflow, every test would fail before even running.
 fail — unit tests mock these calls anyway and never use the real values.
 
 ### 3. CI badge URL requires exact repo path
+
 **Problem:** The CI badge in README uses a hardcoded URL:
+
 ```
 https://github.com/<USERNAME>/<REPO>/actions/workflows/ci.yml/badge.svg
 ```
+
 This must be updated with the actual GitHub username and repository name.
 
 **Solution:** Left `<YOUR-GITHUB-USERNAME>` and `<YOUR-REPO-NAME>` as explicit

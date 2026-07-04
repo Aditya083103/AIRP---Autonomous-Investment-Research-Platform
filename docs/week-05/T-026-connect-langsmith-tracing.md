@@ -14,6 +14,7 @@ agent run is visible in the LangSmith dashboard with correct tags, metadata,
 and latency measurements.
 
 **Acceptance criteria:**
+
 - All 4 agent runs visible in LangSmith with correct tags
 - Tags include `agent_name` and `company_name` per run
 - Latency per agent visible (automatic — LangSmith measures wall-clock time)
@@ -93,21 +94,21 @@ Children   :
 
 ### New files
 
-| File | Path |
-|------|------|
-| Tracing utility | `backend/agents/tracing.py` |
-| Tests | `backend/tests/unit/test_tracing.py` |
-| Docs | `docs/week-05/T-026-connect-langsmith-tracing.md` |
+| File            | Path                                              |
+| --------------- | ------------------------------------------------- |
+| Tracing utility | `backend/agents/tracing.py`                       |
+| Tests           | `backend/tests/unit/test_tracing.py`              |
+| Docs            | `docs/week-05/T-026-connect-langsmith-tracing.md` |
 
 ### Modified files
 
-| File | Change |
-|------|--------|
-| `backend/agents/llm_factory.py` | Add `configure_tracing()` call before LLM construction |
-| `backend/agents/fundamental_analyst.py` | Add `@traced_agent("fundamental_analyst")` to node |
-| `backend/agents/technical_analyst.py` | Add `@traced_agent("technical_analyst")` to node |
-| `backend/agents/sentiment_analyst.py` | Add `@traced_agent("news_sentiment")` to node |
-| `backend/agents/macro_economist.py` | Add `@traced_agent("macro_economist")` to node |
+| File                                    | Change                                                 |
+| --------------------------------------- | ------------------------------------------------------ |
+| `backend/agents/llm_factory.py`         | Add `configure_tracing()` call before LLM construction |
+| `backend/agents/fundamental_analyst.py` | Add `@traced_agent("fundamental_analyst")` to node     |
+| `backend/agents/technical_analyst.py`   | Add `@traced_agent("technical_analyst")` to node       |
+| `backend/agents/sentiment_analyst.py`   | Add `@traced_agent("news_sentiment")` to node          |
+| `backend/agents/macro_economist.py`     | Add `@traced_agent("macro_economist")` to node         |
 
 ---
 
@@ -309,15 +310,15 @@ git branch -d feat/agent-langsmith
 
 ## 13. Acceptance Criteria Mapping
 
-| Criterion | Test(s) | Status |
-|-----------|---------|--------|
-| All 4 agent runs visible (decorator applied) | `test_*_has_wrapped_attribute` × 4 | Verified |
-| Correct tags (agent_name + company_name) | `test_tags_include_agent_name_and_company` | Verified |
-| Latency per agent | Automatic (LangSmith wall-clock) | N/A in tests |
-| Tracing disabled in tests | `test_tracing_disabled_when_key_empty`, `test_in_test_env_is_false` | Verified |
-| configure_tracing called before LLM | `test_configure_tracing_called_before_llm_construction` | Verified |
-| Stale env var overridden | `test_disabled_overrides_stale_env` | Verified |
+| Criterion                                    | Test(s)                                                             | Status       |
+| -------------------------------------------- | ------------------------------------------------------------------- | ------------ |
+| All 4 agent runs visible (decorator applied) | `test_*_has_wrapped_attribute` × 4                                  | Verified     |
+| Correct tags (agent_name + company_name)     | `test_tags_include_agent_name_and_company`                          | Verified     |
+| Latency per agent                            | Automatic (LangSmith wall-clock)                                    | N/A in tests |
+| Tracing disabled in tests                    | `test_tracing_disabled_when_key_empty`, `test_in_test_env_is_false` | Verified     |
+| configure_tracing called before LLM          | `test_configure_tracing_called_before_llm_construction`             | Verified     |
+| Stale env var overridden                     | `test_disabled_overrides_stale_env`                                 | Verified     |
 
 ---
 
-*T-026 complete. Next: T-027 or T-028 (remaining Phase 2 tasks).*
+_T-026 complete. Next: T-027 or T-028 (remaining Phase 2 tasks)._

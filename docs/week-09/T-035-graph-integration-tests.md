@@ -10,12 +10,13 @@
 ## Overview
 
 T-035 adds end-to-end integration tests for the full AIRP LangGraph
-StateGraph.  These tests call `build_graph().invoke()` on a real
+StateGraph. These tests call `build_graph().invoke()` on a real
 compiled graph -- all 12 nodes, real routing functions, real state merging
 -- with only the external API calls (research agents and DB persistence)
 mocked.
 
 **Acceptance criteria (all must pass):**
+
 - Full pipeline runs in <2 minutes on mock data
 - All state fields populated after pipeline completion
 - Error routing verified:
@@ -32,32 +33,32 @@ Marked with `@pytest.mark.integration` (excluded from default pytest run).
 
 ### Test classes (7 classes, 86 test methods)
 
-| Class | What it tests |
-|-------|--------------|
-| `TestHappyPath` | Full pipeline on clean mock data; all fields populated |
-| `TestErrorRoutingFundamentals` | `fetch_financials` returns empty -> error path |
-| `TestErrorRoutingNegativeSentiment` | `sentiment_score = -0.92` -> escalation path |
-| `TestPipelineTiming` | All 3 paths complete in <120 seconds |
-| `TestPlannerAbortPath` | Planner aborts when ticker is missing |
-| `TestStateFieldPopulation` | Every state field present and has correct type |
-| `TestMultipleRuns` | Two runs produce independent results (no state leakage) |
+| Class                               | What it tests                                           |
+| ----------------------------------- | ------------------------------------------------------- |
+| `TestHappyPath`                     | Full pipeline on clean mock data; all fields populated  |
+| `TestErrorRoutingFundamentals`      | `fetch_financials` returns empty -> error path          |
+| `TestErrorRoutingNegativeSentiment` | `sentiment_score = -0.92` -> escalation path            |
+| `TestPipelineTiming`                | All 3 paths complete in <120 seconds                    |
+| `TestPlannerAbortPath`              | Planner aborts when ticker is missing                   |
+| `TestStateFieldPopulation`          | Every state field present and has correct type          |
+| `TestMultipleRuns`                  | Two runs produce independent results (no state leakage) |
 
 ### What is mocked vs real
 
-| Component | Mocked? | Reason |
-|-----------|---------|--------|
-| `run_fundamental_analysis` | Yes | No external APIs in integration tests |
-| `run_technical_analysis` | Yes | No external APIs |
-| `run_sentiment_analysis` | Yes | No external APIs |
-| `run_macro_analysis` | Yes | No external APIs |
-| `_run_persist` | Yes | No DB connection in tests |
-| `export_mermaid_diagram` | Yes | No filesystem writes |
-| `build_graph()` / LangGraph | **No** | Real graph compilation and execution |
-| `planner_node` | **No** | Real validation logic |
-| `research_join_node` | **No** | Real join barrier |
-| `error_handler_node` | **No** | Real flag writing |
-| `sentiment_escalation_node` | **No** | Real flag writing |
-| `route_after_planner/research/contrarian` | **No** | Real routing thresholds |
+| Component                                 | Mocked? | Reason                                |
+| ----------------------------------------- | ------- | ------------------------------------- |
+| `run_fundamental_analysis`                | Yes     | No external APIs in integration tests |
+| `run_technical_analysis`                  | Yes     | No external APIs                      |
+| `run_sentiment_analysis`                  | Yes     | No external APIs                      |
+| `run_macro_analysis`                      | Yes     | No external APIs                      |
+| `_run_persist`                            | Yes     | No DB connection in tests             |
+| `export_mermaid_diagram`                  | Yes     | No filesystem writes                  |
+| `build_graph()` / LangGraph               | **No**  | Real graph compilation and execution  |
+| `planner_node`                            | **No**  | Real validation logic                 |
+| `research_join_node`                      | **No**  | Real join barrier                     |
+| `error_handler_node`                      | **No**  | Real flag writing                     |
+| `sentiment_escalation_node`               | **No**  | Real flag writing                     |
+| `route_after_planner/research/contrarian` | **No**  | Real routing thresholds               |
 
 ---
 
@@ -105,6 +106,7 @@ python -m pytest -m integration -v --tb=short
 ```
 
 Expected output:
+
 ```
 backend/tests/integration/test_graph_integration.py::TestHappyPath::... PASSED
 ...
@@ -112,6 +114,7 @@ backend/tests/integration/test_graph_integration.py::TestHappyPath::... PASSED
 ```
 
 **Key timing check** -- the `TestPipelineTiming` class verifies <120s:
+
 ```bash
 python -m pytest -m integration -v -k "Timing" --tb=short
 ```
@@ -152,7 +155,7 @@ test(graph): add LangGraph end-to-end integration tests (T-035)
 
 **PR Description:**
 
-```markdown
+````markdown
 ## Summary
 
 Implements T-035 LangGraph end-to-end integration tests. Tests run the
@@ -184,6 +187,7 @@ python -m pytest -m integration -v --tb=short
 # Unit tests must still pass
 python -m pytest backend/tests/unit/ -v --tb=short -q
 ```
+````
 
 ## LangSmith Trace
 
@@ -192,6 +196,7 @@ N/A -- no live LLM calls. LANGCHAIN_TRACING_V2=false recommended.
 ## Related Issues
 
 Closes #35
+
 ```
 
 ---
@@ -199,6 +204,7 @@ Closes #35
 ## Commit Message
 
 ```
+
 test(graph): add LangGraph end-to-end integration tests (T-035)
 
 - test_graph_integration.py: 7 test classes, 86 tests
@@ -219,7 +225,8 @@ test(graph): add LangGraph end-to-end integration tests (T-035)
 - @pytest.mark.integration: excluded from default run, explicit -m required
 
 Closes #35
-```
+
+````
 
 ---
 
@@ -228,14 +235,16 @@ Closes #35
 ### Default (unit tests only -- integration excluded)
 ```bash
 python -m pytest backend/tests/unit/ -v -q
-```
+````
 
 ### Integration tests only
+
 ```bash
 python -m pytest -m integration -v --tb=short
 ```
 
 ### Specific test class
+
 ```bash
 python -m pytest -m integration -v -k "TestHappyPath" --tb=short
 python -m pytest -m integration -v -k "TestErrorRoutingFundamentals" --tb=short
@@ -243,10 +252,13 @@ python -m pytest -m integration -v -k "TestPipelineTiming" --tb=short
 ```
 
 ### CI behaviour
+
 Integration tests are excluded from CI by the `addopts` in `pyproject.toml`:
+
 ```toml
 addopts = "-m 'not integration' --tb=short -q"
 ```
+
 CI only runs unit tests. Integration tests run locally before PRs.
 
 ---
@@ -258,6 +270,7 @@ CI only runs unit tests. Integration tests run locally before PRs.
 These tests call `build_graph().invoke()` which is the real LangGraph
 execution engine. That's not a unit -- it's an orchestration integration
 test. The `integration` marker correctly signals that:
+
 1. It tests multiple components working together
 2. It's slower than unit tests (graph compilation + execution)
 3. It should be run before merging, not on every file save
@@ -266,6 +279,7 @@ test. The `integration` marker correctly signals that:
 
 The acceptance criterion says "on mock data" -- not real APIs. Real yFinance
 / NewsAPI / Alpha Vantage calls would make the test suite:
+
 - Slow (network latency)
 - Flaky (API rate limits, network outages)
 - Non-deterministic (real data changes daily)
@@ -277,7 +291,7 @@ data quality.
 ### Why mock `_run_persist` but not the node functions?
 
 `_run_persist` opens a real asyncpg database connection. That would fail
-without a running PostgreSQL. The node *functions* (planner, error_handler,
+without a running PostgreSQL. The node _functions_ (planner, error_handler,
 etc.) don't touch the DB directly -- they just compute and return dicts.
 So we mock only the persistence layer, not the node logic itself.
 
@@ -286,6 +300,7 @@ So we mock only the persistence layer, not the node logic itself.
 The acceptance criterion says "<2 minutes". With mocked agents that return
 in <5ms each, the pipeline should complete in <5 seconds in practice. The
 120-second budget is deliberately generous to account for:
+
 - Cold start / JIT compilation of LangGraph internals
 - Test environment overhead
 - Slow CI machines

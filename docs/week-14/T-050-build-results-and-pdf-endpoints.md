@@ -15,12 +15,14 @@ a client knows a job has reached `status='completed'`, it now has
 three ways to get the actual output.
 
 **Acceptance criteria (all must pass):**
+
 - PDF downloads correctly
 - result JSON matches InvestmentDecision schema
 - history paginates
 
 **Explicitly out of scope for this task** (separate task, per the
 master task list):
+
 - Document upload endpoint (`POST /api/v1/documents/upload`) -> **T-051**
 
 ---
@@ -41,7 +43,7 @@ risk summary, valuation summary), the structured `key_risks`/
   persistence path -- `portfolio_manager_node` already puts the
   complete `InvestmentDecision.model_dump()` dict into
   `state["decision"]` in the same return value that sets
-  `status='completed'`, so this endpoint only ever *reads* something
+  `status='completed'`, so this endpoint only ever _reads_ something
   that already exists.
 - **404** when `job_id` doesn't exist or belongs to a different user
   -- identical not-found semantics to T-048's `GET /status`, for the
@@ -105,15 +107,15 @@ Paginated list of the caller's own past analyses, newest first.
 
 ## Files Changed
 
-| File | Change |
-|------|--------|
-| `backend/services/analysis.py` | **Modified** -- added `AnalysisNotReadyError`, `AnalysisResultData`, `get_analysis_result`, `HistoryEntry`, `HistoryPage`, `get_analysis_history`, `DEFAULT_HISTORY_PAGE_SIZE`, `MAX_HISTORY_PAGE_SIZE` |
-| `backend/models/schemas.py` | **Modified** -- added `InvestmentDecisionResponse`, `HistoryEntryResponse`, `HistoryResponse` |
-| `backend/routers/analysis.py` | **Modified** -- added `GET /{job_id}/result`, `GET /{job_id}/memo/pdf`, `GET /history` |
-| `backend/main.py` | **Modified** -- docstring only (no router-list change; T-050 extends the existing `analysis` router, same as T-048) |
-| `backend/tests/unit/test_analysis_result_history_service.py` | **New** -- service-layer unit tests |
-| `backend/tests/unit/test_analysis_result_history_router.py` | **New** -- HTTP-layer tests, including a real on-disk PDF via `tmp_path` |
-| `docs/week-14/T-050-build-result-and-pdf-endpoints.md` | **New** -- this document |
+| File                                                         | Change                                                                                                                                                                                                  |
+| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `backend/services/analysis.py`                               | **Modified** -- added `AnalysisNotReadyError`, `AnalysisResultData`, `get_analysis_result`, `HistoryEntry`, `HistoryPage`, `get_analysis_history`, `DEFAULT_HISTORY_PAGE_SIZE`, `MAX_HISTORY_PAGE_SIZE` |
+| `backend/models/schemas.py`                                  | **Modified** -- added `InvestmentDecisionResponse`, `HistoryEntryResponse`, `HistoryResponse`                                                                                                           |
+| `backend/routers/analysis.py`                                | **Modified** -- added `GET /{job_id}/result`, `GET /{job_id}/memo/pdf`, `GET /history`                                                                                                                  |
+| `backend/main.py`                                            | **Modified** -- docstring only (no router-list change; T-050 extends the existing `analysis` router, same as T-048)                                                                                     |
+| `backend/tests/unit/test_analysis_result_history_service.py` | **New** -- service-layer unit tests                                                                                                                                                                     |
+| `backend/tests/unit/test_analysis_result_history_router.py`  | **New** -- HTTP-layer tests, including a real on-disk PDF via `tmp_path`                                                                                                                                |
+| `docs/week-14/T-050-build-result-and-pdf-endpoints.md`       | **New** -- this document                                                                                                                                                                                |
 
 No other files were modified. `backend/services/pdf_export.py` (T-043)
 and `backend/services/state_persistence.py` (T-033) are reused as-is
@@ -201,6 +203,7 @@ modifies.
 ### 3. Add the new service-layer functions first, in isolation
 
 Edit `backend/services/analysis.py`:
+
 - Add `AnalysisNotReadyError` (mirrors `backend.services.auth`'s
   existing `InvalidCredentialsError`/`InvalidTokenError` pattern).
 - Add `AnalysisResultData`, `_SQL_LOAD_RESULT`, `get_analysis_result`,
@@ -237,6 +240,7 @@ InvestmentDecision`), `HistoryEntryResponse`, `HistoryResponse`. Update
 ### 6. Add the three new router endpoints
 
 Edit `backend/routers/analysis.py`:
+
 - `GET /history` -- `Query(ge=1, le=MAX_HISTORY_PAGE_SIZE)` for
   `limit`, `Query(ge=0)` for `offset`.
 - `GET /{job_id}/result` -- catches `AnalysisNotReadyError` -> 409;
@@ -301,6 +305,7 @@ ENVIRONMENT=test pytest --cov=backend --cov-report=term-missing -m "not integrat
 ```
 
 ### 12. Manual smoke test (optional, requires a running Postgres + a
+
 completed analysis)
 
 ```bash
@@ -366,6 +371,7 @@ Open a PR on GitHub targeting `main`.
 ## PR Details
 
 **PR title:**
+
 ```
 feat(api): implement analysis result, PDF download, and history endpoints
 ```
@@ -457,4 +463,4 @@ company so subsequent analyses can retrieve it via RAG). Branch:
 
 ---
 
-*End of Document | T-050 Workflow | AIRP Week 14*
+_End of Document | T-050 Workflow | AIRP Week 14_

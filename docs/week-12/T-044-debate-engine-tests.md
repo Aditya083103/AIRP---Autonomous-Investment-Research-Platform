@@ -30,6 +30,7 @@ existing integration test suite genuinely exercises this safely.
 Fixing it is the substantive part of this task's diff.
 
 **Acceptance criteria (all must pass):**
+
 - All agents unit tested
 - Debate loop integration test runs in <5min on mocks
 - \>80% coverage
@@ -71,8 +72,8 @@ inside).
 
 ## Files Changed
 
-| File | Change |
-|------|--------|
+| File                                                  | Change                                                                                                                                                                                                                                                                                                                                                                                                                |
+| ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `backend/tests/integration/test_graph_integration.py` | **Modified** -- added four new Phase 4 agent mock factories; extended `_run_graph()` with four new optional mock parameters (safe defaults, all 13 pre-existing call sites unchanged); added a new `TestPhase4DebateEngine` class covering the T-044 acceptance criteria directly; added an explicit 5-minute timing constant and test; rewrote the module docstring to accurately describe what is and is not mocked |
 
 No other files were modified. The per-agent unit test files
@@ -86,12 +87,12 @@ checked and why no changes were made there.
 
 ### New mock factories (mirroring the existing four research-agent mocks exactly)
 
-| Function | Purpose |
-|----------|---------|
-| `_mock_risk_success(state)` | Returns a complete, schema-valid `RiskAnalysis`-shaped dict: `risk_score=3`, no critical flags. All five required (no-default) fields (`risk_score`, `governance_risk`, `regulatory_risk`, `financial_risk`, `concentration_risk`) are populated with realistic values |
-| `_mock_contrarian_success(state)` | Returns a `ContrarianReport`-shaped dict with `bear_conviction=4` -- deliberately **below** the route-again threshold of 7 (see `backend.graph.routing.route_after_contrarian`), so the pipeline takes exactly one pass through the debate loop before proceeding. Also increments `debate_round_count`, exactly mirroring the real `run_contrarian_analysis` contract |
-| `_mock_valuation_success(state)` | Returns a `ValuationOutput`-shaped dict: `valuation_verdict="undervalued"`, `18.4%` upside. Replaces the entire `run_valuation_analysis` call, so the real function's own internal `fetch_financials`/`fetch_ratios`/`fetch_stock_price`/`_fetch_peer_multiples`/`get_llm` calls never fire |
-| `_mock_portfolio_manager_success(state)` | Returns a complete `InvestmentDecision`-shaped dict: `verdict="BUY"`, `conviction_score=8`, populated `key_risks`/`key_catalysts`/`agent_weights` (the T-041 additions) |
+| Function                                 | Purpose                                                                                                                                                                                                                                                                                                                                                                |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `_mock_risk_success(state)`              | Returns a complete, schema-valid `RiskAnalysis`-shaped dict: `risk_score=3`, no critical flags. All five required (no-default) fields (`risk_score`, `governance_risk`, `regulatory_risk`, `financial_risk`, `concentration_risk`) are populated with realistic values                                                                                                 |
+| `_mock_contrarian_success(state)`        | Returns a `ContrarianReport`-shaped dict with `bear_conviction=4` -- deliberately **below** the route-again threshold of 7 (see `backend.graph.routing.route_after_contrarian`), so the pipeline takes exactly one pass through the debate loop before proceeding. Also increments `debate_round_count`, exactly mirroring the real `run_contrarian_analysis` contract |
+| `_mock_valuation_success(state)`         | Returns a `ValuationOutput`-shaped dict: `valuation_verdict="undervalued"`, `18.4%` upside. Replaces the entire `run_valuation_analysis` call, so the real function's own internal `fetch_financials`/`fetch_ratios`/`fetch_stock_price`/`_fetch_peer_multiples`/`get_llm` calls never fire                                                                            |
+| `_mock_portfolio_manager_success(state)` | Returns a complete `InvestmentDecision`-shaped dict: `verdict="BUY"`, `conviction_score=8`, populated `key_risks`/`key_catalysts`/`agent_weights` (the T-041 additions)                                                                                                                                                                                                |
 
 ### Extended `_run_graph()`
 
@@ -126,18 +127,18 @@ Markdown memo assembly and (best-effort) PDF rendering end-to-end.
 
 ### New `TestPhase4DebateEngine` class
 
-| Test | What it verifies |
-|------|-------------------|
-| `test_debate_rounds_is_non_empty` | **Core T-044 criterion.** The pre-existing `test_debate_rounds_is_list` only checked *type* (a list, possibly empty). This asserts `len(debate_rounds) >= 1` |
-| `test_debate_round_entry_has_round_number` / `_agent_responses` / `_contrarian_text` / `_completed_at` | The transcript entry has the real `DebateRound` shape written by `_debate_loop_impl` -- verified directly against the real function (see "Verification" below), not assumed |
-| `test_debate_round_count_matches_rounds_length` | The scalar counter `route_after_contrarian` reads and the transcript list length agree |
-| `test_portfolio_manager_decision_present` / `_verdict_is_valid` / `_conviction_score_in_range` / `_key_risks_present` / `_agent_weights_present` | **Core T-044 criterion: "Portfolio Manager verdict present."** Strengthens the pre-existing single verdict-presence check with the full decision shape a memo consumer would rely on |
-| `test_final_verdict_mirrors_decision_verdict` | The flat `state["final_verdict"]` convenience field agrees with `state["decision"]["verdict"]` |
-| `test_memo_markdown_present` / `_contains_company_name` / `_contains_verdict` | **Closes a real gap**: nothing in this file asserted `memo_markdown` (T-042) at all before this task, despite the module docstring's claim of exercising "all 15 nodes" |
-| `test_memo_pdf_path_key_present` / `_is_none_or_string` | **Closes a real gap**: same for `memo_pdf_path` (T-043). Explicitly tolerant of `None` -- `pdf_export_node` degrades gracefully when WeasyPrint's system libraries are not installed in the environment running the test, by design |
-| `test_pipeline_still_completes` | `status == "completed"` despite four additional real (mocked-at-the-function-level) nodes now running |
-| `test_pipeline_reaches_pdf_export_as_current_node` | `current_node == "pdf_export"` -- confirms the pipeline actually reached the new final node, not just that it didn't error somewhere earlier |
-| `test_debate_engine_pipeline_under_five_minutes` | **Core T-044 criterion.** Explicit, independently-measured timing assertion against a new `DEBATE_ENGINE_TIMEOUT_S = 300.0` constant, named and documented separately from the stricter pre-existing 2-minute `PIPELINE_TIMEOUT_S` |
+| Test                                                                                                                                             | What it verifies                                                                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `test_debate_rounds_is_non_empty`                                                                                                                | **Core T-044 criterion.** The pre-existing `test_debate_rounds_is_list` only checked _type_ (a list, possibly empty). This asserts `len(debate_rounds) >= 1`                                                                        |
+| `test_debate_round_entry_has_round_number` / `_agent_responses` / `_contrarian_text` / `_completed_at`                                           | The transcript entry has the real `DebateRound` shape written by `_debate_loop_impl` -- verified directly against the real function (see "Verification" below), not assumed                                                         |
+| `test_debate_round_count_matches_rounds_length`                                                                                                  | The scalar counter `route_after_contrarian` reads and the transcript list length agree                                                                                                                                              |
+| `test_portfolio_manager_decision_present` / `_verdict_is_valid` / `_conviction_score_in_range` / `_key_risks_present` / `_agent_weights_present` | **Core T-044 criterion: "Portfolio Manager verdict present."** Strengthens the pre-existing single verdict-presence check with the full decision shape a memo consumer would rely on                                                |
+| `test_final_verdict_mirrors_decision_verdict`                                                                                                    | The flat `state["final_verdict"]` convenience field agrees with `state["decision"]["verdict"]`                                                                                                                                      |
+| `test_memo_markdown_present` / `_contains_company_name` / `_contains_verdict`                                                                    | **Closes a real gap**: nothing in this file asserted `memo_markdown` (T-042) at all before this task, despite the module docstring's claim of exercising "all 15 nodes"                                                             |
+| `test_memo_pdf_path_key_present` / `_is_none_or_string`                                                                                          | **Closes a real gap**: same for `memo_pdf_path` (T-043). Explicitly tolerant of `None` -- `pdf_export_node` degrades gracefully when WeasyPrint's system libraries are not installed in the environment running the test, by design |
+| `test_pipeline_still_completes`                                                                                                                  | `status == "completed"` despite four additional real (mocked-at-the-function-level) nodes now running                                                                                                                               |
+| `test_pipeline_reaches_pdf_export_as_current_node`                                                                                               | `current_node == "pdf_export"` -- confirms the pipeline actually reached the new final node, not just that it didn't error somewhere earlier                                                                                        |
+| `test_debate_engine_pipeline_under_five_minutes`                                                                                                 | **Core T-044 criterion.** Explicit, independently-measured timing assertion against a new `DEBATE_ENGINE_TIMEOUT_S = 300.0` constant, named and documented separately from the stricter pre-existing 2-minute `PIPELINE_TIMEOUT_S`  |
 
 ---
 
@@ -146,14 +147,14 @@ Markdown memo assembly and (best-effort) PDF rendering end-to-end.
 Before writing any new test code, the existing per-agent unit test
 files were audited for line-count ratio and structural completeness:
 
-| File | Source lines | Test lines | Test methods |
-|------|---------------|-------------|----------------|
-| `risk_officer.py` / `test_risk_officer.py` | 875 | 1,151 | 79 |
-| `contrarian_investor.py` / `test_contrarian_investor.py` | 769 | 1,193 | 83 |
-| `valuation_agent.py` / `test_valuation_agent.py` | 956 | 1,118 | 101 |
-| `portfolio_manager.py` / `test_portfolio_manager.py` | 915 | 1,355 | 89 |
-| `memo_generator.py` / `test_memo_generator.py` | 470 | 656 | 67 |
-| `pdf_export.py` / `test_pdf_export.py` | 562 | 660 | 57 |
+| File                                                     | Source lines | Test lines | Test methods |
+| -------------------------------------------------------- | ------------ | ---------- | ------------ |
+| `risk_officer.py` / `test_risk_officer.py`               | 875          | 1,151      | 79           |
+| `contrarian_investor.py` / `test_contrarian_investor.py` | 769          | 1,193      | 83           |
+| `valuation_agent.py` / `test_valuation_agent.py`         | 956          | 1,118      | 101          |
+| `portfolio_manager.py` / `test_portfolio_manager.py`     | 915          | 1,355      | 89           |
+| `memo_generator.py` / `test_memo_generator.py`           | 470          | 656        | 67           |
+| `pdf_export.py` / `test_pdf_export.py`                   | 562          | 660        | 57           |
 
 Every file already has a test-to-source line ratio above 1:1, and each
 correctly mocks its own `get_llm()` call via
@@ -206,17 +207,17 @@ reading the source, but produced by actually running the real logic.
 
 ## AIRP Standards Compliance
 
-| Standard | Status |
-|----------|--------|
-| No `from __future__ import annotations` in production modules | OK -- not present (this is a test file; N/A regardless) |
-| Plain ASCII section comments (`# ---`) | OK -- no Unicode box-drawing, no rupee signs, no em-dashes, no arrows added |
-| No bare `# type: ignore` | OK -- none added |
-| `mypy --strict` safe | OK -- new functions fully annotated; `cast()` used consistently with the file's existing style |
-| All lines <= 88 chars | OK -- verified by direct character-length check |
-| flake8 (bugbear, comprehensions) clean | OK -- no unnecessary dict/list comprehensions with constant values, no f-strings missing placeholders -- both explicitly re-checked before finalising |
-| `ENVIRONMENT=test` guard respected | OK -- unchanged; the file already sets this via `os.environ.setdefault` |
-| `@pytest.mark.integration` | OK -- the new `TestPhase4DebateEngine` class automatically inherits the module-level `pytestmark = pytest.mark.integration`, consistent with every other class in this file |
-| Backward compatibility | OK -- all 13 pre-existing `_run_graph()` call sites verified unchanged; the four new parameters are purely additive with safe defaults |
+| Standard                                                      | Status                                                                                                                                                                      |
+| ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| No `from __future__ import annotations` in production modules | OK -- not present (this is a test file; N/A regardless)                                                                                                                     |
+| Plain ASCII section comments (`# ---`)                        | OK -- no Unicode box-drawing, no rupee signs, no em-dashes, no arrows added                                                                                                 |
+| No bare `# type: ignore`                                      | OK -- none added                                                                                                                                                            |
+| `mypy --strict` safe                                          | OK -- new functions fully annotated; `cast()` used consistently with the file's existing style                                                                              |
+| All lines <= 88 chars                                         | OK -- verified by direct character-length check                                                                                                                             |
+| flake8 (bugbear, comprehensions) clean                        | OK -- no unnecessary dict/list comprehensions with constant values, no f-strings missing placeholders -- both explicitly re-checked before finalising                       |
+| `ENVIRONMENT=test` guard respected                            | OK -- unchanged; the file already sets this via `os.environ.setdefault`                                                                                                     |
+| `@pytest.mark.integration`                                    | OK -- the new `TestPhase4DebateEngine` class automatically inherits the module-level `pytestmark = pytest.mark.integration`, consistent with every other class in this file |
+| Backward compatibility                                        | OK -- all 13 pre-existing `_run_graph()` call sites verified unchanged; the four new parameters are purely additive with safe defaults                                      |
 
 ---
 
@@ -243,12 +244,14 @@ This is the critical verification step for this task -- confirming the
 bug this task found is actually fixed.
 
 **Windows CMD:**
+
 ```cmd
 set ENVIRONMENT=test
 python -m pytest -m integration backend/tests/integration/test_graph_integration.py -v --tb=short
 ```
 
 **Git Bash / Mac / Linux:**
+
 ```bash
 export ENVIRONMENT=test
 python -m pytest -m integration backend/tests/integration/test_graph_integration.py -v --tb=short
@@ -345,6 +348,7 @@ Open a PR on GitHub targeting `main`.
 ## PR Details
 
 **PR title:**
+
 ```
 test(debate): implement test suite for debate loop and advanced agents
 ```
@@ -434,4 +438,4 @@ plan's Phase 5 task breakdown).
 
 ---
 
-*End of Document | T-044 Workflow | AIRP Week 12*
+_End of Document | T-044 Workflow | AIRP Week 12_

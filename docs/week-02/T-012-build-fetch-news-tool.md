@@ -17,12 +17,13 @@ always receives structured, validated data.
 
 **Two tools delivered:**
 
-| Tool | Data returned |
-|------|--------------|
-| `fetch_news` | Full article list with title, URL, description, source, timestamp |
+| Tool                 | Data returned                                                        |
+| -------------------- | -------------------------------------------------------------------- |
+| `fetch_news`         | Full article list with title, URL, description, source, timestamp    |
 | `fetch_news_summary` | Lightweight: headline list only (saves LLM tokens in context window) |
 
 **Key production features:**
+
 - HTTP 429 handled with tenacity exponential back-off (2s → 60s, 3 attempts)
 - `requests.Timeout` and `requests.ConnectionError` also retried
 - Malformed / `[Removed]` articles silently skipped (never crash the agent)
@@ -30,6 +31,7 @@ always receives structured, validated data.
 - `data_warnings` list surfaces non-fatal issues to the agent
 
 **Acceptance criteria:**
+
 - Returns ≥5 articles for known companies (given NewsAPI returns them)
 - HTTP 429 triggers tenacity retry → surfaces `rate_limit_exhausted` error dict
 - Unit tests use only mocked `requests.get` calls — zero real API calls
@@ -38,9 +40,9 @@ always receives structured, validated data.
 
 ## Files Created in This Task
 
-| File | Action | Purpose |
-|------|--------|---------|
-| `backend/tools/news.py` | **CREATE** | Two LangChain tools, Pydantic models, retry logic, parse helpers |
+| File                              | Action     | Purpose                                                                     |
+| --------------------------------- | ---------- | --------------------------------------------------------------------------- |
+| `backend/tools/news.py`           | **CREATE** | Two LangChain tools, Pydantic models, retry logic, parse helpers            |
 | `backend/tests/unit/test_news.py` | **CREATE** | 40+ unit tests — all HTTP mocked, covers retry, malformed data, error paths |
 
 ---
@@ -79,6 +81,7 @@ python -m pytest backend/tests/unit/test_news.py -v
 ```
 
 **Expected output:**
+
 ```
 backend/tests/unit/test_news.py::TestParseArticles::test_returns_list_of_news_articles PASSED
 backend/tests/unit/test_news.py::TestParseArticles::test_skips_removed_placeholder PASSED
@@ -154,6 +157,7 @@ through Pydantic models.
 ### Changes
 
 **`backend/tools/news.py`**
+
 - `NewsArticle` — title, description, url, source_name, published_at, content_snippet
 - `NewsResult` — full result envelope with warnings, metadata, article list
 - `NewsAPIError` / `NewsAPIRateLimitError` — typed exceptions for routing
@@ -165,6 +169,7 @@ through Pydantic models.
 - `fetch_news_summary` `@tool` — headline-only lightweight format
 
 **`backend/tests/unit/test_news.py`**
+
 - 40+ unit tests, all HTTP mocked via `patch("backend.tools.news.requests.get")`
 - Uses `__wrapped__` to bypass tenacity on retry-specific tests
 - `TestParseArticles` — removed, empty, bad date, None description
@@ -201,14 +206,14 @@ Closes #12
 
 ### Key design decisions
 
-| Decision | Rationale |
-|----------|-----------|
-| `_call_newsapi()` separated from `_fetch_news_from_api()` | tenacity `@retry` wraps only the HTTP layer; business logic (query building, parsing) is not retried |
-| `__wrapped__` in tests | tenacity decorates the function; `__wrapped__` gives direct access to the undecorated version so retry tests don't sleep for 60s |
-| `os.environ` first for API key | Allows `os.environ["NEWS_API_KEY"] = "test-key"` in tests without importing settings (which needs a DB URL) |
-| `[Removed]` filter in `_parse_articles` | NewsAPI returns this placeholder for articles that were deleted or deindexed after being cached |
-| `content_snippet` not `content` | NewsAPI free tier truncates content to ~200 chars + `[+XXXX chars]`. Renaming signals to agents that this is NOT the full text |
-| `fetch_news_summary` | News Sentiment Agent's debate responses only need headline sentiment counts — sending 20 full articles wastes ~4000 tokens of context |
+| Decision                                                  | Rationale                                                                                                                             |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `_call_newsapi()` separated from `_fetch_news_from_api()` | tenacity `@retry` wraps only the HTTP layer; business logic (query building, parsing) is not retried                                  |
+| `__wrapped__` in tests                                    | tenacity decorates the function; `__wrapped__` gives direct access to the undecorated version so retry tests don't sleep for 60s      |
+| `os.environ` first for API key                            | Allows `os.environ["NEWS_API_KEY"] = "test-key"` in tests without importing settings (which needs a DB URL)                           |
+| `[Removed]` filter in `_parse_articles`                   | NewsAPI returns this placeholder for articles that were deleted or deindexed after being cached                                       |
+| `content_snippet` not `content`                           | NewsAPI free tier truncates content to ~200 chars + `[+XXXX chars]`. Renaming signals to agents that this is NOT the full text        |
+| `fetch_news_summary`                                      | News Sentiment Agent's debate responses only need headline sentiment counts — sending 20 full articles wastes ~4000 tokens of context |
 
 ### How the retry works
 
@@ -229,11 +234,13 @@ fetch_news.invoke({"company_name": "Infosys"})
 ### NewsAPI query format
 
 For a company with ticker:
+
 ```
 "Tata Consultancy Services" OR TCS
 ```
 
 For a company without ticker:
+
 ```
 "Infosys"
 ```

@@ -17,6 +17,7 @@ unhandled exception), a restart can resume from the last successfully
 persisted checkpoint rather than rerunning all preceding agents.
 
 **Acceptance criteria (all must pass):**
+
 - Interrupted pipeline resumes from last saved node
   (load_state() returns the snapshot; graph runner reads `current_node`)
 - State is visible in DB after each node completes
@@ -30,6 +31,7 @@ persisted checkpoint rather than rerunning all preceding agents.
 ### New file: `backend/services/state_persistence.py`
 
 `StatePersistenceService` -- class with three async methods:
+
 - `save(job_id, node_name, state)` -- serialises state to JSON, executes
   `UPDATE analyses SET state_snapshot = $1, last_completed_node = $2`
 - `load(job_id)` -- reads snapshot from DB, deserialises, returns
@@ -42,6 +44,7 @@ with their own session lifecycle so graph nodes can call them as one-liners.
 ### New migration: `20240108_0000_b2c3d4e5f6a7_add_state_snapshot.py`
 
 Adds two nullable columns to `analyses`:
+
 - `state_snapshot JSONB` -- the full InvestmentState as JSONB
 - `last_completed_node VARCHAR(64)` -- the most recently completed node name
 
@@ -172,6 +175,7 @@ python -m pytest backend/tests/unit/ -v --tb=short -q
 ```
 
 Key new tests to watch:
+
 - `test_state_persistence.py` -- all 80+ T-033 tests
 - `test_graph_skeleton.py` -- must still pass with persistence wrapper
 - `test_parallel_research.py` -- must still pass
@@ -205,7 +209,7 @@ feat(graph): implement InvestmentState persistence to PostgreSQL (T-033)
 
 **PR Description:**
 
-```markdown
+````markdown
 ## Summary
 
 Implements T-033 checkpoint-based state persistence for the AIRP LangGraph
@@ -244,6 +248,7 @@ node instead of rerunning all preceding agents.
 set ENVIRONMENT=test
 python -m pytest backend/tests/unit/ -v --tb=short -q
 ```
+````
 
 All existing tests still pass. 80+ new T-033 tests pass.
 DB calls are fully mocked in unit tests -- no real DB needed.
@@ -255,6 +260,7 @@ N/A -- no live LLM calls in this task.
 ## Related Issues
 
 Closes #33
+
 ```
 
 ---
@@ -262,6 +268,7 @@ Closes #33
 ## Commit Message
 
 ```
+
 feat(graph): implement InvestmentState persistence to PostgreSQL (T-033)
 
 - StatePersistenceService: save/load/mark_failed async methods using
@@ -280,6 +287,7 @@ feat(graph): implement InvestmentState persistence to PostgreSQL (T-033)
   fixture added to graph/routing tests so they pass without a DB
 
 Closes #33
+
 ```
 
 ---
@@ -321,3 +329,4 @@ this runs after every node.
 State snapshots are 1:1 with analyses (one active snapshot per job).
 Adding nullable columns to `analyses` avoids a JOIN on the hot read path
 and keeps the resumption query trivially simple.
+```

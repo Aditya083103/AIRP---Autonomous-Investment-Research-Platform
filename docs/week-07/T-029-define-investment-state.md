@@ -10,23 +10,24 @@
 ## Overview
 
 T-029 defines `InvestmentState` -- the single TypedDict that flows through
-every node in the AIRP LangGraph StateGraph.  This is the foundational
-data contract for Phase 3.  Every agent (Phases 2 and 4) reads from and
-writes to this object.  No agent-to-agent messaging occurs outside of it.
+every node in the AIRP LangGraph StateGraph. This is the foundational
+data contract for Phase 3. Every agent (Phases 2 and 4) reads from and
+writes to this object. No agent-to-agent messaging occurs outside of it.
 
 **Acceptance criteria (all met):**
+
 - State roundtrips through JSON serialisation (verified by 50+ pytest tests)
 - All fields typed (TypedDict with full mypy --strict coverage)
 - Documented in `docs/STATE.md` (new file, field-by-field reference)
 
 **Files produced:**
 
-| File | Action | Description |
-|------|--------|-------------|
-| `backend/graph/state.py` | Create | `InvestmentState` TypedDict + helpers |
-| `backend/tests/unit/test_investment_state.py` | Create | 50+ unit tests |
-| `docs/STATE.md` | Create | Field reference + lifecycle diagram |
-| `docs/week-07/T-029-define-investment-state.md` | Create | This workflow doc |
+| File                                            | Action | Description                           |
+| ----------------------------------------------- | ------ | ------------------------------------- |
+| `backend/graph/state.py`                        | Create | `InvestmentState` TypedDict + helpers |
+| `backend/tests/unit/test_investment_state.py`   | Create | 50+ unit tests                        |
+| `docs/STATE.md`                                 | Create | Field reference + lifecycle diagram   |
+| `docs/week-07/T-029-define-investment-state.md` | Create | This workflow doc                     |
 
 ---
 
@@ -60,6 +61,7 @@ git checkout -b feat/graph-state
 ### 3.1 `backend/graph/state.py`
 
 The complete `InvestmentState` TypedDict with:
+
 - All identity fields (`job_id`, `company_name`, `ticker`, `exchange`, etc.)
 - Pipeline status fields (`status`, `current_node`, `started_at`, etc.)
 - All 8 agent output fields as `Optional[dict[str, Any]]`
@@ -74,6 +76,7 @@ The complete `InvestmentState` TypedDict with:
 - `DebateRound` documentation class
 
 Key design decisions encoded in the file:
+
 - `total=False` -- every field is implicitly Optional; state built incrementally
 - No `from __future__ import annotations` -- breaks Pydantic v2 union resolution
 - Plain ASCII `# ---` section comments -- avoids flake8 E501 from Unicode chars
@@ -83,24 +86,25 @@ Key design decisions encoded in the file:
 
 Test classes:
 
-| Class | What it tests |
-|-------|---------------|
-| `TestMakeInitialState` | Factory produces correct required fields |
-| `TestOptionalFields` | Optional fields absent by default, settable when provided |
-| `TestJsonRoundTrip` | `state_to_json` / `state_from_json` is lossless |
-| `TestPartialStateRoundTrip` | Partially-populated state survives round-trip |
-| `TestFullyPopulatedStateRoundTrip` | All fields set, round-trip works |
-| `TestAgentOutputDictsInState` | All 8 `model.model_dump()` dicts are JSON-safe |
-| `TestDebateRounds` | Debate transcript list survives serialisation |
-| `TestRiskFlags` | `risk_flags` / `critical_flags` are mutable and round-trip |
-| `TestVersionField` | `version` is always `1` on initial state |
-| `TestStateFromJson` | Deserialiser returns usable dict |
-| `TestEdgeCases` | Empty strings, zero counts, datetime in agent dicts |
-| `TestDebateRoundDocumentation` | `DebateRound` class is importable with docstring |
+| Class                              | What it tests                                              |
+| ---------------------------------- | ---------------------------------------------------------- |
+| `TestMakeInitialState`             | Factory produces correct required fields                   |
+| `TestOptionalFields`               | Optional fields absent by default, settable when provided  |
+| `TestJsonRoundTrip`                | `state_to_json` / `state_from_json` is lossless            |
+| `TestPartialStateRoundTrip`        | Partially-populated state survives round-trip              |
+| `TestFullyPopulatedStateRoundTrip` | All fields set, round-trip works                           |
+| `TestAgentOutputDictsInState`      | All 8 `model.model_dump()` dicts are JSON-safe             |
+| `TestDebateRounds`                 | Debate transcript list survives serialisation              |
+| `TestRiskFlags`                    | `risk_flags` / `critical_flags` are mutable and round-trip |
+| `TestVersionField`                 | `version` is always `1` on initial state                   |
+| `TestStateFromJson`                | Deserialiser returns usable dict                           |
+| `TestEdgeCases`                    | Empty strings, zero counts, datetime in agent dicts        |
+| `TestDebateRoundDocumentation`     | `DebateRound` class is importable with docstring           |
 
 ### 3.3 `docs/STATE.md`
 
 Full field reference with:
+
 - Why TypedDict not Pydantic (comparison table)
 - Full lifecycle ASCII diagram
 - Field reference table for every field group
@@ -182,12 +186,13 @@ Expected: all existing tests continue to pass.
 
 ## 5. mypy Notes
 
-The file uses `total=False` on `InvestmentState` (a TypedDict).  Under
+The file uses `total=False` on `InvestmentState` (a TypedDict). Under
 `mypy --strict`, accessing keys on a `total=False` TypedDict returns
 `Optional[T]` for every field -- which is correct behaviour.
 
 The `cast()` in `state_from_json` tells mypy that the JSON-parsed `dict`
-is an `InvestmentState`.  This is safe because:
+is an `InvestmentState`. This is safe because:
+
 1. The content was originally produced by `state_to_json` from a typed state
 2. The `assert isinstance(raw, dict)` guard rejects non-dict JSON
 
@@ -281,13 +286,13 @@ After the PR is merged to main:
 ### total=False
 
 `InvestmentState` uses `total=False` so all fields are implicitly Optional
-at the TypedDict level.  This matches how LangGraph populates state:
-incrementally, one node at a time.  Accessing a key that has not been set
+at the TypedDict level. This matches how LangGraph populates state:
+incrementally, one node at a time. Accessing a key that has not been set
 returns `None` via `.get()`.
 
-### No from __future__ import annotations
+### No from **future** import annotations
 
-This is an AIRP-wide rule established in T-010.  The annotations import
+This is an AIRP-wide rule established in T-010. The annotations import
 causes Pydantic v2 to receive forward references (strings) instead of
 actual types during model construction, which breaks union type resolution.
 The state module imports output model classes indirectly through tests, so
@@ -296,8 +301,8 @@ this rule applies here too.
 ### Plain ASCII section comments
 
 Unicode box-drawing characters (`───`, `═══`) caused repeated flake8 E501
-line-length failures in T-022 and T-023.  Starting T-024, all new files use
-`# ---` plain ASCII section dividers.  `state.py` follows this convention.
+line-length failures in T-022 and T-023. Starting T-024, all new files use
+`# ---` plain ASCII section dividers. `state.py` follows this convention.
 
 ### cast() over type: ignore
 
@@ -309,6 +314,6 @@ becomes unnecessary when packages are installed triggers a new mypy error.
 ### version field
 
 The `version: int` field starts at `1` and must be incremented whenever the
-state schema changes (fields added or removed).  Future Planner nodes can
+state schema changes (fields added or removed). Future Planner nodes can
 read `state.get("version", 0)` to detect old snapshots from PostgreSQL and
 backfill any newly added fields before passing state to agents.

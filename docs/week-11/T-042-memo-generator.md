@@ -27,6 +27,7 @@ deterministically so the memo never fails to render -- even if the
 decision itself is incomplete or carries an error.
 
 **Acceptance criteria (all must pass):**
+
 - Memo generated for TCS
 - All sections populated
 - Readable by a non-technical person
@@ -35,14 +36,14 @@ decision itself is incomplete or carries an error.
 
 ## Files Changed
 
-| File | Change |
-|------|--------|
-| `backend/services/memo_generator.py` | **New** -- the full memo assembly module: 7 section builders, the top-level `_build_memo_markdown` assembler, a no-decision fallback, and the `generate_investment_memo` LangGraph node entry point |
-| `backend/graph/nodes.py` | **Modified** -- added `NODE_REPORT_GENERATOR`, `_report_generator_impl`, and `report_generator_node` (same `_persist_after(profile_node(...))` composition as every other sequential node); added the `memo_generator` import |
-| `backend/graph/graph.py` | **Modified** -- registered `report_generator` node; rewired the tail edge from `portfolio_manager -> END` to `portfolio_manager -> report_generator -> END` (14 nodes total, was 13); updated all node-count docstrings/comments/log messages |
-| `backend/graph/graph_visualisation.py` | **Modified** -- docstring updated to describe the new final node |
-| `backend/tests/unit/test_memo_generator.py` | **New** -- unit tests covering every section builder, full assembly, the no-decision fallback, and the LangGraph node contract |
-| `backend/tests/unit/test_graph_skeleton.py` | **Modified** -- node count assertion updated from 13 to 14; new registration, mermaid, edge, literal-value, and direct node-behaviour tests added for `report_generator` |
+| File                                        | Change                                                                                                                                                                                                                                        |
+| ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `backend/services/memo_generator.py`        | **New** -- the full memo assembly module: 7 section builders, the top-level `_build_memo_markdown` assembler, a no-decision fallback, and the `generate_investment_memo` LangGraph node entry point                                           |
+| `backend/graph/nodes.py`                    | **Modified** -- added `NODE_REPORT_GENERATOR`, `_report_generator_impl`, and `report_generator_node` (same `_persist_after(profile_node(...))` composition as every other sequential node); added the `memo_generator` import                 |
+| `backend/graph/graph.py`                    | **Modified** -- registered `report_generator` node; rewired the tail edge from `portfolio_manager -> END` to `portfolio_manager -> report_generator -> END` (14 nodes total, was 13); updated all node-count docstrings/comments/log messages |
+| `backend/graph/graph_visualisation.py`      | **Modified** -- docstring updated to describe the new final node                                                                                                                                                                              |
+| `backend/tests/unit/test_memo_generator.py` | **New** -- unit tests covering every section builder, full assembly, the no-decision fallback, and the LangGraph node contract                                                                                                                |
+| `backend/tests/unit/test_graph_skeleton.py` | **Modified** -- node count assertion updated from 13 to 14; new registration, mermaid, edge, literal-value, and direct node-behaviour tests added for `report_generator`                                                                      |
 
 ---
 
@@ -54,23 +55,23 @@ A pure-Python, zero-LLM, zero-third-party-dependency formatting module
 (only `logging`, `datetime`, and `typing` from the standard library).
 Structure:
 
-| Function | Purpose |
-|----------|---------|
-| `_non_empty(...)` | Returns text if non-empty, else a readable fallback string -- the building block every section uses so a partially-populated decision never renders a blank or "None" section |
-| `_format_conviction_label(...)` | Translates the raw 1-10 conviction score into a plain-English label (`"8/10 (high conviction)"`, `"5/10 (moderate conviction)"`, `"2/10 (low conviction -- treat with caution)"`) |
-| `_format_agent_weights_table(...)` | Renders `agent_weights` as a small Markdown table with human-readable committee-member names instead of raw `agent_name` strings; falls back to explanatory text if weighting was unavailable |
-| `_build_header_section(...)` | Title, recommendation/conviction/price-target/time-horizon summary table |
-| `_build_executive_summary_section(...)` | Section 1 |
-| `_build_thesis_section(...)` | Section 2 -- prepends a plain-English one-line framing of what BUY/HOLD/SELL means before the Portfolio Manager's own debate-grounded thesis text |
-| `_build_bull_case_section(...)` | Section 3 -- bull case prose plus `key_catalysts[]` as bullets |
-| `_build_bear_case_section(...)` | Section 4 -- bear case prose plus the Portfolio Manager's `contrarian_response` under a "How the committee addressed this" subheading |
-| `_build_risk_section(...)` | Section 5 -- risk summary prose plus `key_risks[]` as a numbered list |
-| `_build_valuation_section(...)` | Section 6 -- valuation summary prose plus the formatted price target |
-| `_build_recommendation_section(...)` | Section 7 -- final verdict restated, the dashboard `summary` line, time horizon, debate round count, and the agent-weights table |
-| `_build_disclaimer_section(...)` | Standard "not financial advice, for portfolio demonstration purposes" footer on every memo |
-| `_build_memo_markdown(...)` | Top-level assembler: calls all of the above in order and joins them. Never raises -- every field access goes through `_non_empty` or an explicit `.get(...)` with a default |
-| `_build_no_decision_memo(...)` | Fallback used when `state["decision"]` is entirely absent (e.g. an earlier pipeline node failed). Still a complete, readable document explaining the analysis could not be completed -- never an empty string |
-| `generate_investment_memo(state)` | The LangGraph node entry point. Reads `state["decision"]`, `state["company_name"]`, `state["ticker"]`; returns `{"memo_markdown": "..."}`. Wrapped in a try/except so any unexpected failure (e.g. a malformed decision dict) still degrades to the no-decision fallback rather than raising |
+| Function                                | Purpose                                                                                                                                                                                                                                                                                      |
+| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `_non_empty(...)`                       | Returns text if non-empty, else a readable fallback string -- the building block every section uses so a partially-populated decision never renders a blank or "None" section                                                                                                                |
+| `_format_conviction_label(...)`         | Translates the raw 1-10 conviction score into a plain-English label (`"8/10 (high conviction)"`, `"5/10 (moderate conviction)"`, `"2/10 (low conviction -- treat with caution)"`)                                                                                                            |
+| `_format_agent_weights_table(...)`      | Renders `agent_weights` as a small Markdown table with human-readable committee-member names instead of raw `agent_name` strings; falls back to explanatory text if weighting was unavailable                                                                                                |
+| `_build_header_section(...)`            | Title, recommendation/conviction/price-target/time-horizon summary table                                                                                                                                                                                                                     |
+| `_build_executive_summary_section(...)` | Section 1                                                                                                                                                                                                                                                                                    |
+| `_build_thesis_section(...)`            | Section 2 -- prepends a plain-English one-line framing of what BUY/HOLD/SELL means before the Portfolio Manager's own debate-grounded thesis text                                                                                                                                            |
+| `_build_bull_case_section(...)`         | Section 3 -- bull case prose plus `key_catalysts[]` as bullets                                                                                                                                                                                                                               |
+| `_build_bear_case_section(...)`         | Section 4 -- bear case prose plus the Portfolio Manager's `contrarian_response` under a "How the committee addressed this" subheading                                                                                                                                                        |
+| `_build_risk_section(...)`              | Section 5 -- risk summary prose plus `key_risks[]` as a numbered list                                                                                                                                                                                                                        |
+| `_build_valuation_section(...)`         | Section 6 -- valuation summary prose plus the formatted price target                                                                                                                                                                                                                         |
+| `_build_recommendation_section(...)`    | Section 7 -- final verdict restated, the dashboard `summary` line, time horizon, debate round count, and the agent-weights table                                                                                                                                                             |
+| `_build_disclaimer_section(...)`        | Standard "not financial advice, for portfolio demonstration purposes" footer on every memo                                                                                                                                                                                                   |
+| `_build_memo_markdown(...)`             | Top-level assembler: calls all of the above in order and joins them. Never raises -- every field access goes through `_non_empty` or an explicit `.get(...)` with a default                                                                                                                  |
+| `_build_no_decision_memo(...)`          | Fallback used when `state["decision"]` is entirely absent (e.g. an earlier pipeline node failed). Still a complete, readable document explaining the analysis could not be completed -- never an empty string                                                                                |
+| `generate_investment_memo(state)`       | The LangGraph node entry point. Reads `state["decision"]`, `state["company_name"]`, `state["ticker"]`; returns `{"memo_markdown": "..."}`. Wrapped in a try/except so any unexpected failure (e.g. a malformed decision dict) still degrades to the no-decision fallback rather than raising |
 
 ### Why Markdown, not HTML or PDF directly?
 
@@ -157,22 +158,22 @@ documentation accurate.
 
 ## Tests
 
-| Test class | What it covers |
-|------------|-----------------|
-| `TestNonEmpty` | Text passthrough, whitespace stripping, fallback on `None`/empty/whitespace-only input, custom fallback text |
-| `TestFormatConvictionLabel` | High/moderate/low conviction label bands, numeric score always included |
-| `TestFormatAgentWeightsTable` | Markdown table renders correctly, all 7 committee members present with human-readable names, empty/all-zero weights produce explanatory fallback text instead of an empty table |
-| `TestBuildHeaderSection` | Company/ticker/verdict/price-target present, missing price target shows "Not available", timestamp present, correct Markdown H1 |
-| `TestBuildExecutiveSummarySection` | Content passthrough, empty-input fallback, section header present |
-| `TestBuildThesisSection` | Plain-English framing differs correctly per verdict (BUY/HOLD/SELL), provided thesis text is preserved |
-| `TestBuildBullCaseSection` | Bull case text present, catalysts rendered as bullets when present, no empty "Potential catalysts" subheading when the list is empty |
-| `TestBuildBearCaseSection` | Bear case text present, contrarian response present, empty-response fallback text |
-| `TestBuildRiskSection` | Risk summary present, key risks rendered as a numbered list, no empty subheading when the list is empty |
-| `TestBuildValuationSection` | Valuation summary present, price target present when available, no dangling "Implied price target" line when `None` |
-| `TestBuildRecommendationSection` | Verdict and summary present, time horizon present, correct singular/plural "round(s) of committee debate" grammar, agent-weights table embedded |
-| `TestBuildMemoMarkdown` | Full assembly returns a non-empty string; **all 7 required section headings present** (the "all sections populated" acceptance criterion, checked directly); disclaimer present; BUY/HOLD/SELL decisions all render correctly; a near-empty decision still renders without raising; **readability check** -- plain-English verdict framing present, no raw `{` JSON artifacts, no bare `None` leaking into text; key risks appear as a numbered list; key catalysts appear as bullets |
-| `TestBuildNoDecisionMemo` | Non-empty fallback document, company/ticker present, "could not be completed" notice present, disclaimer present |
-| `TestGenerateInvestmentMemoNode` | Node returns `{"memo_markdown": str}`; **full TCS end-to-end test** asserting company name, ticker, and all 7 section headings are present (the primary acceptance criterion, exercised through the actual node entry point); missing/`None` decision triggers the fallback memo; missing `company_name` handled gracefully; a deliberately malformed decision dict (`agent_weights` as a string instead of a dict) does not raise, confirming the try/except fallback path; input state dict is never mutated; the node's return value contains exactly one key (`memo_markdown`) as a proper partial-state update |
+| Test class                         | What it covers                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `TestNonEmpty`                     | Text passthrough, whitespace stripping, fallback on `None`/empty/whitespace-only input, custom fallback text                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `TestFormatConvictionLabel`        | High/moderate/low conviction label bands, numeric score always included                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `TestFormatAgentWeightsTable`      | Markdown table renders correctly, all 7 committee members present with human-readable names, empty/all-zero weights produce explanatory fallback text instead of an empty table                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `TestBuildHeaderSection`           | Company/ticker/verdict/price-target present, missing price target shows "Not available", timestamp present, correct Markdown H1                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `TestBuildExecutiveSummarySection` | Content passthrough, empty-input fallback, section header present                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `TestBuildThesisSection`           | Plain-English framing differs correctly per verdict (BUY/HOLD/SELL), provided thesis text is preserved                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `TestBuildBullCaseSection`         | Bull case text present, catalysts rendered as bullets when present, no empty "Potential catalysts" subheading when the list is empty                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `TestBuildBearCaseSection`         | Bear case text present, contrarian response present, empty-response fallback text                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `TestBuildRiskSection`             | Risk summary present, key risks rendered as a numbered list, no empty subheading when the list is empty                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `TestBuildValuationSection`        | Valuation summary present, price target present when available, no dangling "Implied price target" line when `None`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `TestBuildRecommendationSection`   | Verdict and summary present, time horizon present, correct singular/plural "round(s) of committee debate" grammar, agent-weights table embedded                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `TestBuildMemoMarkdown`            | Full assembly returns a non-empty string; **all 7 required section headings present** (the "all sections populated" acceptance criterion, checked directly); disclaimer present; BUY/HOLD/SELL decisions all render correctly; a near-empty decision still renders without raising; **readability check** -- plain-English verdict framing present, no raw `{` JSON artifacts, no bare `None` leaking into text; key risks appear as a numbered list; key catalysts appear as bullets                                                                                                                               |
+| `TestBuildNoDecisionMemo`          | Non-empty fallback document, company/ticker present, "could not be completed" notice present, disclaimer present                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `TestGenerateInvestmentMemoNode`   | Node returns `{"memo_markdown": str}`; **full TCS end-to-end test** asserting company name, ticker, and all 7 section headings are present (the primary acceptance criterion, exercised through the actual node entry point); missing/`None` decision triggers the fallback memo; missing `company_name` handled gracefully; a deliberately malformed decision dict (`agent_weights` as a string instead of a dict) does not raise, confirming the try/except fallback path; input state dict is never mutated; the node's return value contains exactly one key (`memo_markdown`) as a proper partial-state update |
 
 All tests are pure-Python with zero mocking required -- `memo_generator.py`
 has no LLM calls, no database calls, and no third-party imports, so
@@ -197,9 +198,9 @@ stub nodes" docstring) and three new direct node-behaviour tests
 **Why a separate `services/memo_generator.py` module instead of folding
 this into `portfolio_manager.py`?**
 Single responsibility, and a meaningful boundary for T-043. The
-Portfolio Manager's job (T-041) is to *decide* -- verdict, conviction,
+Portfolio Manager's job (T-041) is to _decide_ -- verdict, conviction,
 narrative synthesis grounded in debate. The memo generator's job
-(T-042) is to *format* an already-finished decision for a human reader.
+(T-042) is to _format_ an already-finished decision for a human reader.
 Keeping them separate means T-043 (PDF export) only needs to depend on
 `memo_generator.py`'s Markdown output, not on the Portfolio Manager's
 LLM-calling internals at all. It also means `memo_generator.py` can be
@@ -250,18 +251,18 @@ prove this defence works, not just that the happy path is correct.
 
 ## AIRP Standards Compliance
 
-| Standard | Status |
-|----------|--------|
-| No `from __future__ import annotations` in production modules | OK -- not present in `memo_generator.py` |
-| Plain ASCII section comments (`# ---`) | OK -- no Unicode box-drawing, no rupee signs, no em-dashes, no arrows in the new file |
-| No bare `# type: ignore` | OK -- none added anywhere in this task's files |
-| `mypy --strict` safe | OK -- every function fully annotated with explicit parameter and return types |
-| Tools/agents never raise -- graceful degradation on bad input | OK -- `generate_investment_memo` never raises; verified for missing decision, `None` decision, missing company name, and a deliberately malformed `agent_weights` value |
-| `@traced_agent` / LangSmith | N/A -- `report_generator_node` makes no LLM calls, nothing to trace (consistent with `debate_loop_node`'s T-040 precedent for zero-LLM nodes) |
-| Persistence wrapper applied (T-033 pattern) | OK -- `_persist_after(profile_node(...))` composition, identical to every other sequential node |
-| All lines <= 88 chars | OK -- verified by direct character-length check (not byte-length, to correctly account for the project's pre-existing Unicode characters elsewhere in the codebase) |
-| flake8 (bugbear, comprehensions) clean | OK -- no `getattr` with constant string, no bare `pytest.raises(Exception)`, no unnecessary dict/list comprehensions with constant values |
-| `ENVIRONMENT=test` guard respected | OK -- new test file sets `ENVIRONMENT=test` via `os.environ.setdefault` before any backend import, consistent with every other test module; the autouse `require_test_environment` fixture in `conftest.py` applies automatically |
+| Standard                                                      | Status                                                                                                                                                                                                                            |
+| ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| No `from __future__ import annotations` in production modules | OK -- not present in `memo_generator.py`                                                                                                                                                                                          |
+| Plain ASCII section comments (`# ---`)                        | OK -- no Unicode box-drawing, no rupee signs, no em-dashes, no arrows in the new file                                                                                                                                             |
+| No bare `# type: ignore`                                      | OK -- none added anywhere in this task's files                                                                                                                                                                                    |
+| `mypy --strict` safe                                          | OK -- every function fully annotated with explicit parameter and return types                                                                                                                                                     |
+| Tools/agents never raise -- graceful degradation on bad input | OK -- `generate_investment_memo` never raises; verified for missing decision, `None` decision, missing company name, and a deliberately malformed `agent_weights` value                                                           |
+| `@traced_agent` / LangSmith                                   | N/A -- `report_generator_node` makes no LLM calls, nothing to trace (consistent with `debate_loop_node`'s T-040 precedent for zero-LLM nodes)                                                                                     |
+| Persistence wrapper applied (T-033 pattern)                   | OK -- `_persist_after(profile_node(...))` composition, identical to every other sequential node                                                                                                                                   |
+| All lines <= 88 chars                                         | OK -- verified by direct character-length check (not byte-length, to correctly account for the project's pre-existing Unicode characters elsewhere in the codebase)                                                               |
+| flake8 (bugbear, comprehensions) clean                        | OK -- no `getattr` with constant string, no bare `pytest.raises(Exception)`, no unnecessary dict/list comprehensions with constant values                                                                                         |
+| `ENVIRONMENT=test` guard respected                            | OK -- new test file sets `ENVIRONMENT=test` via `os.environ.setdefault` before any backend import, consistent with every other test module; the autouse `require_test_environment` fixture in `conftest.py` applies automatically |
 
 ---
 
@@ -293,12 +294,14 @@ docs/week-11/T-042-memo-generator.md            (new)
 ### 3. Set environment and run the new test file
 
 **Windows CMD:**
+
 ```cmd
 set ENVIRONMENT=test
 python -m pytest backend/tests/unit/test_memo_generator.py -v --tb=short
 ```
 
 **Git Bash / Mac / Linux:**
+
 ```bash
 export ENVIRONMENT=test
 python -m pytest backend/tests/unit/test_memo_generator.py -v --tb=short
@@ -384,6 +387,7 @@ Open a PR on GitHub targeting `main`.
 ## PR Details
 
 **PR title:**
+
 ```
 feat(report): implement structured Investment Memo generator with full analysis
 ```
@@ -476,4 +480,4 @@ over REST and WebSocket endpoints.
 
 ---
 
-*End of Document | T-042 Workflow | AIRP Week 11*
+_End of Document | T-042 Workflow | AIRP Week 11_

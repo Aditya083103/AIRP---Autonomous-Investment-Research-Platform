@@ -15,6 +15,7 @@ committee. The file covers persona, tools, scoring logic, output schema,
 example JSON output, and known limitations for each agent.
 
 **Acceptance criteria:**
+
 - `AGENTS.md` has a section for each agent
 - Example JSON output included for each Phase 2 agent
 - Existing empty stub replaced with complete content
@@ -52,10 +53,10 @@ git checkout -b feat/agent-docs
 
 ## 3. File to Create / Replace
 
-| Action | Path |
-|--------|------|
-| Replace existing stub | `docs/AGENTS.md` |
-| New workflow doc | `docs/week-05/T-028-document-agent-system.md` |
+| Action                | Path                                          |
+| --------------------- | --------------------------------------------- |
+| Replace existing stub | `docs/AGENTS.md`                              |
+| New workflow doc      | `docs/week-05/T-028-document-agent-system.md` |
 
 The `docs/week-05/` folder already exists from T-024 through T-027.
 
@@ -65,18 +66,18 @@ The `docs/week-05/` folder already exists from T-024 through T-027.
 
 `AGENTS.md` contains 10 sections:
 
-| Section | Content |
-|---------|---------|
-| 1. System Overview | Agent table with state keys and LangGraph nodes |
-| 2. Agent Base Contract | `AgentOutput` fields, error convention, serialisation |
-| 3. Fundamental Analyst | Persona, tools, scoring logic, full schema table, example JSON, limitations |
-| 4. Technical Analyst | Persona, tools, indicator computation table, schema table, example JSON, limitations |
-| 5. News Sentiment Agent | Persona, tools, three-layer scoring architecture, schema table, example JSON, limitations |
-| 6. Macro Economist | Persona, tools, classification tables, sector impact rules, schema table, 2× example JSON, limitations |
-| 7. Agents 5–8 Stubs | Mandate and output model descriptions for Risk Officer, Contrarian, Valuation, Portfolio Manager |
-| 8. LangGraph Execution Order | ASCII pipeline diagram + state key table |
-| 9. Error Handling Convention | Six rules covering never-raise, ChromaDB non-fatal, LLM fallback |
-| 10. LangSmith Tracing Tags | Tags, metadata, and `.env` setup |
+| Section                      | Content                                                                                                |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------ |
+| 1. System Overview           | Agent table with state keys and LangGraph nodes                                                        |
+| 2. Agent Base Contract       | `AgentOutput` fields, error convention, serialisation                                                  |
+| 3. Fundamental Analyst       | Persona, tools, scoring logic, full schema table, example JSON, limitations                            |
+| 4. Technical Analyst         | Persona, tools, indicator computation table, schema table, example JSON, limitations                   |
+| 5. News Sentiment Agent      | Persona, tools, three-layer scoring architecture, schema table, example JSON, limitations              |
+| 6. Macro Economist           | Persona, tools, classification tables, sector impact rules, schema table, 2× example JSON, limitations |
+| 7. Agents 5–8 Stubs          | Mandate and output model descriptions for Risk Officer, Contrarian, Valuation, Portfolio Manager       |
+| 8. LangGraph Execution Order | ASCII pipeline diagram + state key table                                                               |
+| 9. Error Handling Convention | Six rules covering never-raise, ChromaDB non-fatal, LLM fallback                                       |
+| 10. LangSmith Tracing Tags   | Tags, metadata, and `.env` setup                                                                       |
 
 ---
 
@@ -151,7 +152,9 @@ and LangSmith tracing tag reference.
 Documentation-only change. All existing tests pass unchanged:
 
 ```
+
 python -m pytest backend/tests/unit/ -v --tb=short
+
 ```
 
 No Python source files modified.
@@ -190,17 +193,17 @@ git branch -d feat/agent-docs
 
 ## 12. Acceptance Criteria Mapping
 
-| Criterion | How verified |
-|-----------|-------------|
-| Section for each agent | Sections 3–6 (Phase 2) + Section 7 (Phase 4 stubs) |
-| Example JSON output included | Sections 3–6 each have `json` code block |
+| Criterion                             | How verified                                        |
+| ------------------------------------- | --------------------------------------------------- |
+| Section for each agent                | Sections 3–6 (Phase 2) + Section 7 (Phase 4 stubs)  |
+| Example JSON output included          | Sections 3–6 each have `json` code block            |
 | Banking rate-hike headwind documented | Section 6 sector impact table + second example JSON |
-| Known limitations documented | Each agent section has explicit limitations list |
-| Error convention documented | Section 9 |
-| LangSmith tracing documented | Section 10 |
+| Known limitations documented          | Each agent section has explicit limitations list    |
+| Error convention documented           | Section 9                                           |
+| LangSmith tracing documented          | Section 10                                          |
 
 ---
 
-*T-028 complete. Phase 2 documentation is done.*
-*Phase 2 is now fully complete (T-021 through T-028).*
-*Next: T-029 — LangGraph Planner node (Phase 3 begins).*
+_T-028 complete. Phase 2 documentation is done._
+_Phase 2 is now fully complete (T-021 through T-028)._
+_Next: T-029 — LangGraph Planner node (Phase 3 begins)._

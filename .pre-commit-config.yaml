@@ -22,9 +22,9 @@ repos:
       - id: flake8
         files: ^backend/
         additional_dependencies:
-          - flake8-bugbear       # opinionated bug-prone pattern detection
+          - flake8-bugbear # opinionated bug-prone pattern detection
           - flake8-comprehensions # C4xx: unnecessary comprehensions
-          - flake8-docstrings    # D1xx: missing docstrings (pydocstyle)
+          - flake8-docstrings # D1xx: missing docstrings (pydocstyle)
 
   # ── Static type checking ───────────────────────────────────────────────────
   - repo: https://github.com/pre-commit/mirrors-mypy
@@ -72,7 +72,7 @@ repos:
       #   pre-commit run --all-files --hook-stage manual
       # CI does not invoke pre-commit, so commit-time enforcement is unaffected.
       - id: trailing-whitespace
-        exclude: \.md$              # allow trailing spaces in Markdown (line break)
+        exclude: \.md$ # allow trailing spaces in Markdown (line break)
         stages: [manual]
       - id: end-of-file-fixer
         stages: [manual]
@@ -84,4 +84,4 @@ repos:
       - id: check-json
       - id: check-toml
       - id: check-merge-conflict
-      - id: detect-private-key      # blocks accidental secret commits
+      - id: detect-private-key # blocks accidental secret commits

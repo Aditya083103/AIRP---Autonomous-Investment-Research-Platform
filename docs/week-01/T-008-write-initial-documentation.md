@@ -1,16 +1,16 @@
 # T-008 — Write Initial Documentation
 
-| Field             | Detail                                      |
-|-------------------|---------------------------------------------|
-| **Task ID**       | T-008                                       |
-| **Phase**         | 0 — Project Setup & Standards               |
-| **Week**          | 1                                           |
-| **Branch**        | `setup/docs`                                |
-| **Commit prefix** | `docs: add initial project documentation`   |
-| **PR Title**      | `docs: add architecture, contributing, and coding standards docs` |
-| **Priority**      | 🟡 High                                     |
-| **Est. Hours**    | 3                                           |
-| **Status**        | 🔲 To Do → ✅ Complete                       |
+| Field             | Detail                                                                                 |
+| ----------------- | -------------------------------------------------------------------------------------- |
+| **Task ID**       | T-008                                                                                  |
+| **Phase**         | 0 — Project Setup & Standards                                                          |
+| **Week**          | 1                                                                                      |
+| **Branch**        | `setup/docs`                                                                           |
+| **Commit prefix** | `docs: add initial project documentation`                                              |
+| **PR Title**      | `docs: add architecture, contributing, and coding standards docs`                      |
+| **Priority**      | 🟡 High                                                                                |
+| **Est. Hours**    | 3                                                                                      |
+| **Status**        | 🔲 To Do → ✅ Complete                                                                 |
 | **Depends on**    | T-001 (repo), T-002 (folder structure), T-005 (.env.example), T-006 (APIS.md scaffold) |
 
 ---
@@ -31,27 +31,27 @@ from earlier tasks (T-003 and T-006). This task creates the two missing ones
 
 ## Acceptance Criteria
 
-| Criteria | Status |
-|---|---|
-| `docs/ARCHITECTURE.md` exists and contains full system architecture | 🔲 |
-| `docs/CONTRIBUTING.md` exists and covers setup, workflow, branching, PRs, testing | 🔲 |
-| `docs/CODING_STANDARDS.md` exists (already written in T-003) | ✅ |
-| `docs/APIS.md` exists (already written in T-006) | ✅ |
-| All four docs are linked from `README.md` Documentation table | 🔲 |
-| `README.md` Phase 0 status updated to ✅ Complete | 🔲 |
-| Task doc (`T-008-write-initial-documentation.md`) created in `docs/week-01/` | 🔲 |
-| PR merged via squash and merge; closes the T-008 issue | 🔲 |
+| Criteria                                                                          | Status |
+| --------------------------------------------------------------------------------- | ------ |
+| `docs/ARCHITECTURE.md` exists and contains full system architecture               | 🔲     |
+| `docs/CONTRIBUTING.md` exists and covers setup, workflow, branching, PRs, testing | 🔲     |
+| `docs/CODING_STANDARDS.md` exists (already written in T-003)                      | ✅     |
+| `docs/APIS.md` exists (already written in T-006)                                  | ✅     |
+| All four docs are linked from `README.md` Documentation table                     | 🔲     |
+| `README.md` Phase 0 status updated to ✅ Complete                                 | 🔲     |
+| Task doc (`T-008-write-initial-documentation.md`) created in `docs/week-01/`      | 🔲     |
+| PR merged via squash and merge; closes the T-008 issue                            | 🔲     |
 
 ---
 
 ## Files Produced by This Task
 
-| File | Action | Description |
-|---|---|---|
-| `docs/ARCHITECTURE.md` | **CREATE** | Full system architecture — 5 layers, 8 agents, request flow, InvestmentState design, debate engine, deployment |
-| `docs/CONTRIBUTING.md` | **CREATE** | Prerequisites, Docker setup, manual setup, workflow, branching, commits, PRs, testing, agent conventions, troubleshooting |
-| `README.md` | **UPDATE** | Add `CONTRIBUTING.md` to docs table; update Phase 0 status to ✅ Complete |
-| `docs/week-01/T-008-write-initial-documentation.md` | **CREATE** | This file |
+| File                                                | Action     | Description                                                                                                               |
+| --------------------------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `docs/ARCHITECTURE.md`                              | **CREATE** | Full system architecture — 5 layers, 8 agents, request flow, InvestmentState design, debate engine, deployment            |
+| `docs/CONTRIBUTING.md`                              | **CREATE** | Prerequisites, Docker setup, manual setup, workflow, branching, commits, PRs, testing, agent conventions, troubleshooting |
+| `README.md`                                         | **UPDATE** | Add `CONTRIBUTING.md` to docs table; update Phase 0 status to ✅ Complete                                                 |
+| `docs/week-01/T-008-write-initial-documentation.md` | **CREATE** | This file                                                                                                                 |
 
 `docs/CODING_STANDARDS.md` and `docs/APIS.md` are **not modified** — they were
 completed in T-003 and T-006 respectively and are already production-quality.
@@ -132,13 +132,13 @@ Two changes to `README.md`:
 ```markdown
 ## Documentation
 
-| Doc | Contents |
-|-----|----------|
-| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Full system architecture — layers, request flow, state design, design decisions |
-| [CONTRIBUTING.md](docs/CONTRIBUTING.md) | Local setup, branch strategy, commit format, PR process, testing guide |
-| [CODING_STANDARDS.md](docs/CODING_STANDARDS.md) | Naming conventions, linting rules, pre-commit setup, CI checks |
-| [AGENTS.md](docs/AGENTS.md) | Each agent's persona, tools, output schema, example output |
-| [APIS.md](docs/APIS.md) | External APIs, free tier limits, env variable names, rate limit strategy |
+| Doc                                             | Contents                                                                        |
+| ----------------------------------------------- | ------------------------------------------------------------------------------- |
+| [ARCHITECTURE.md](docs/ARCHITECTURE.md)         | Full system architecture — layers, request flow, state design, design decisions |
+| [CONTRIBUTING.md](docs/CONTRIBUTING.md)         | Local setup, branch strategy, commit format, PR process, testing guide          |
+| [CODING_STANDARDS.md](docs/CODING_STANDARDS.md) | Naming conventions, linting rules, pre-commit setup, CI checks                  |
+| [AGENTS.md](docs/AGENTS.md)                     | Each agent's persona, tools, output schema, example output                      |
+| [APIS.md](docs/APIS.md)                         | External APIs, free tier limits, env variable names, rate limit strategy        |
 ```
 
 **Change 2 — Status table** (Phase 0 → ✅ Complete):
@@ -260,6 +260,7 @@ marks Phase 0 as complete.
 ## Testing
 
 Documentation-only PR — no source code changed. CI passes because:
+
 - No Python files modified (black, isort, flake8, mypy, pytest not affected)
 - No TypeScript files modified (tsc, eslint, vite build not affected)
 - pre-commit Markdown checks pass
@@ -298,6 +299,7 @@ After the PR is merged:
 
 `docs/ARCHITECTURE.md` will need to be updated as the system is built.
 Key update points:
+
 - **After T-029** — update InvestmentState TypedDict definition with real field types
 - **After T-034** — replace ASCII pipeline diagram with the auto-exported Mermaid diagram
 - **After T-073** — update deployment section with real Render and Vercel URLs
@@ -308,4 +310,4 @@ It is the primary reference for technical reviewers visiting the repo.
 
 ---
 
-*End of T-008 — AIRP Project Documentation | Phase 0, Week 1*
+_End of T-008 — AIRP Project Documentation | Phase 0, Week 1_

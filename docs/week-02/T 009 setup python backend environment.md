@@ -13,6 +13,7 @@
 This task sets up the full Python dependency stack for the AIRP backend. By the end, `pip install -r requirements.txt` installs every package the backend will ever need, and `python -m pytest` passes with the requirements gate tests that confirm the environment is correctly configured.
 
 **Acceptance criteria:**
+
 - `pip install -r requirements.txt` succeeds with no errors
 - `python -m pytest` returns no errors
 - All imports in `test_requirements.py` pass
@@ -21,14 +22,14 @@ This task sets up the full Python dependency stack for the AIRP backend. By the 
 
 ## Files Changed / Created in This Task
 
-| File | Action | Purpose |
-|------|--------|---------|
-| `backend/requirements.txt` | **CREATE** | All production dependencies, pinned to exact versions |
-| `backend/requirements-dev.txt` | **UPDATE** | Dev-only deps; `langchain-anthropic` added |
-| `backend/tests/conftest.py` | **UPDATE** | Richer shared fixtures; `test_settings`, `clean_env`, sample data builders |
-| `backend/tests/unit/test_requirements.py` | **CREATE** | Acceptance gate — verifies every package imports correctly |
-| `.env.test` | **CREATE** | Test environment variables for pytest |
-| `pyproject.toml` | **UPDATE** | Coverage threshold raised from 0 → 60; `.env.test` wired in |
+| File                                      | Action     | Purpose                                                                    |
+| ----------------------------------------- | ---------- | -------------------------------------------------------------------------- |
+| `backend/requirements.txt`                | **CREATE** | All production dependencies, pinned to exact versions                      |
+| `backend/requirements-dev.txt`            | **UPDATE** | Dev-only deps; `langchain-anthropic` added                                 |
+| `backend/tests/conftest.py`               | **UPDATE** | Richer shared fixtures; `test_settings`, `clean_env`, sample data builders |
+| `backend/tests/unit/test_requirements.py` | **CREATE** | Acceptance gate — verifies every package imports correctly                 |
+| `.env.test`                               | **CREATE** | Test environment variables for pytest                                      |
+| `pyproject.toml`                          | **UPDATE** | Coverage threshold raised from 0 → 60; `.env.test` wired in                |
 
 ---
 
@@ -49,6 +50,7 @@ git push -u origin develop
 ```
 
 > **Branch strategy going forward:**
+>
 > - `main` → production-ready, only receives weekly merges from `develop`
 > - `develop` → integration branch; all feature PRs target this branch
 > - `feat/*`, `fix/*`, `chore/*` → short-lived, branched off `develop`
@@ -105,9 +107,11 @@ pip install -r backend/requirements-dev.txt
 ```
 
 **Expected output:** Long install log ending with:
+
 ```
 Successfully installed anthropic-0.27.0 chromadb-0.5.0 fastapi-0.110.0 ...
 ```
+
 No red errors. Warnings about dependency conflicts are worth noting but
 should not block the task — check them against the pinned versions.
 
@@ -132,11 +136,11 @@ python -m pytest
 If any import test fails, the error message tells you which package to
 fix:
 
-| Error message | Fix |
-|---------------|-----|
-| `ModuleNotFoundError: No module named 'langchain_groq'` | `pip install langchain-groq==0.2.0` |
-| `AssertionError: Pydantic v2 required; got v1.x` | `pip install 'pydantic>=2.0.0,<3.0.0'` |
-| `Tests must run with ENVIRONMENT=test` | `export ENVIRONMENT=test` |
+| Error message                                           | Fix                                    |
+| ------------------------------------------------------- | -------------------------------------- |
+| `ModuleNotFoundError: No module named 'langchain_groq'` | `pip install langchain-groq==0.2.0`    |
+| `AssertionError: Pydantic v2 required; got v1.x`        | `pip install 'pydantic>=2.0.0,<3.0.0'` |
+| `Tests must run with ENVIRONMENT=test`                  | `export ENVIRONMENT=test`              |
 
 ---
 
@@ -203,6 +207,7 @@ Click it. Fill in the PR form:
 ---
 
 **PR Title:**
+
 ```
 feat(deps): add production requirements and T-009 environment tests
 ```
@@ -212,7 +217,7 @@ feat(deps): add production requirements and T-009 environment tests
 
 **PR Description:**
 
-```markdown
+````markdown
 ## Summary
 
 Completes T-009 (Phase 1, Week 2). Adds `backend/requirements.txt` with
@@ -248,6 +253,7 @@ pip install -r backend/requirements.txt
 pip install -r backend/requirements-dev.txt
 python -m pytest --cov=backend --cov-report=term-missing
 ```
+````
 
 All 25 import tests pass. Coverage ≥ 60%.
 
@@ -269,6 +275,7 @@ backend/tests/unit/test_config.py ............                    [100%]
 ## Related Issues
 
 Closes #9
+
 ```
 
 ---
@@ -299,10 +306,12 @@ At the end of each week, after all that week's feature branches are merged
 into `develop`, open a PR from `develop` → `main`:
 
 ```
+
 PR title: chore(release): merge week-2 into main (T-009)
 Base: main
 Compare: develop
-```
+
+````
 
 Use **"Create a merge commit"** (not squash) so `main` retains the full
 history of individual feature squashes.
@@ -319,7 +328,7 @@ WeasyPrint requires system libraries (Cairo, Pango). On Ubuntu/WSL2:
 sudo apt-get update
 sudo apt-get install -y python3-dev libcairo2-dev libpango1.0-dev libgdk-pixbuf2.0-dev libffi-dev shared-mime-info
 pip install weasyprint==62.3
-```
+````
 
 ### `chromadb` install fails on Windows
 
@@ -364,5 +373,5 @@ Next session: T-010 — Build yFinance stock price tool
 
 ---
 
-*T-009 complete. The backend environment is fully configured.
-Next: T-010 — implement the first LangChain data tool (`fetch_stock_price`).*
+_T-009 complete. The backend environment is fully configured.
+Next: T-010 — implement the first LangChain data tool (`fetch_stock_price`)._

@@ -16,27 +16,28 @@ fully-typed `TranscriptResult` Pydantic model.
 
 The tool supports two data paths:
 
-| Path | Trigger | Cache? |
-|------|---------|--------|
-| **Screener.in scrape** | No `pdf_bytes` / `pdf_path` supplied | ✅ Redis 1h TTL |
-| **PDF upload** | `pdf_bytes` (raw bytes from upload) or `pdf_path` (disk path) | ❌ Never cached |
+| Path                   | Trigger                                                       | Cache?          |
+| ---------------------- | ------------------------------------------------------------- | --------------- |
+| **Screener.in scrape** | No `pdf_bytes` / `pdf_path` supplied                          | ✅ Redis 1h TTL |
+| **PDF upload**         | `pdf_bytes` (raw bytes from upload) or `pdf_path` (disk path) | ❌ Never cached |
 
 **Two tools delivered:**
 
-| Tool | Data returned |
-|------|--------------|
+| Tool                        | Data returned                                                                                                                    |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
 | `fetch_earnings_transcript` | Full `TranscriptResult` — `transcript_text`, `transcript_chunk`, `source`, `quarter`, `year`, `char_count`, `cached`, `warnings` |
-| `fetch_transcript_chunk` | Lightweight: `transcript_chunk` + metadata only (saves LLM tokens in the debate viewer) |
+| `fetch_transcript_chunk`    | Lightweight: `transcript_chunk` + metadata only (saves LLM tokens in the debate viewer)                                          |
 
 **Screener.in scrape strategy (three fallbacks in order):**
 
-| Strategy | How |
-|---------|-----|
-| 1. `div.concall-content` | Direct CSS selector for embedded transcript block |
+| Strategy                     | How                                                                                   |
+| ---------------------------- | ------------------------------------------------------------------------------------- |
+| 1. `div.concall-content`     | Direct CSS selector for embedded transcript block                                     |
 | 2. Keyword-based largest div | Finds the widest `<div>` containing earnings-call keywords (operator, CFO, CEO, etc.) |
-| 3. Linked PDF on page | Follows `<a href="*.pdf">` links on the concalls page and extracts text via pdfminer |
+| 3. Linked PDF on page        | Follows `<a href="*.pdf">` links on the concalls page and extracts text via pdfminer  |
 
 **Key production features:**
+
 - `_company_to_slug` resolves common aliases (Infosys → INFY, TCS → TCS,
   Reliance → RELIANCE) via an override table before falling back to the
   ticker symbol.
@@ -57,6 +58,7 @@ The tool supports two data paths:
   as a fallback; raises `PDFExtractionError` if neither is available.
 
 **Acceptance criteria (from task spec):**
+
 - Returns transcript text for Infosys, TCS, Reliance (scrape path) ✅
 - PDF upload path works (`pdf_bytes` / `pdf_path` both tested) ✅
 - Fails gracefully if scrape is blocked — returns error dict, never raises ✅
@@ -66,10 +68,10 @@ The tool supports two data paths:
 
 ## Files Created in This Task
 
-| File | Action | Purpose |
-|------|--------|---------|
-| `backend/tools/earnings_transcript.py` | **CREATE** | Two LangChain tools, `TranscriptResult` / `TranscriptChunk` models, Screener.in scraper with three-strategy fallback, pdfminer PDF extractor, slug resolver, quarter parser |
-| `backend/tests/unit/test_earnings_transcript.py` | **CREATE** | 40 unit tests — all HTTP mocked, all PDF extraction mocked, covers scrape strategies, PDF paths, cache, error dicts, chunk cap, model validation |
+| File                                             | Action     | Purpose                                                                                                                                                                     |
+| ------------------------------------------------ | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `backend/tools/earnings_transcript.py`           | **CREATE** | Two LangChain tools, `TranscriptResult` / `TranscriptChunk` models, Screener.in scraper with three-strategy fallback, pdfminer PDF extractor, slug resolver, quarter parser |
+| `backend/tests/unit/test_earnings_transcript.py` | **CREATE** | 40 unit tests — all HTTP mocked, all PDF extraction mocked, covers scrape strategies, PDF paths, cache, error dicts, chunk cap, model validation                            |
 
 > **Note on pdfminer.six availability.** pdfminer.six is a transitive
 > dependency of weasyprint (already in `requirements.txt`), so it is
@@ -118,6 +120,7 @@ ENVIRONMENT=test python -m pytest backend/tests/unit/test_earnings_transcript.py
 ```
 
 Expected output:
+
 ```
 backend/tests/unit/test_earnings_transcript.py::TestCompanyToSlug::test_exact_lowercase_override PASSED
 backend/tests/unit/test_earnings_transcript.py::TestCompanyToSlug::test_exact_override_with_full_name PASSED
@@ -167,13 +170,14 @@ CI will trigger automatically on push.
 ### Step 6 — Open Pull Request on GitHub
 
 **PR Title:**
+
 ```
 feat(data): implement earnings transcript fetcher (Screener scrape + PDF upload)
 ```
 
 **PR Description (copy–paste):**
 
-```markdown
+````markdown
 ## Summary
 
 Implements T-015: `fetch_earnings_transcript` and `fetch_transcript_chunk`
@@ -208,6 +212,7 @@ python -m pytest backend/tests/unit/test_earnings_transcript.py -v
 python -m pytest --tb=short
 # → all passed, 0 regressions
 ```
+````
 
 ## LangSmith Trace
 
@@ -221,6 +226,7 @@ Terminal output showing `40 passed` with test class names visible.
 ## Related Issues
 
 Closes #15
+
 ```
 
 ---
@@ -242,16 +248,18 @@ so the three-strategy fallback covers the realistic range of page layouts.
 ### Three-strategy scraper design
 
 ```
+
 _scrape_screener_transcript(company_name, ticker, base_url)
-    │
-    ├── 1. _http_get(url)  →  BeautifulSoup parse
-    │       ├── Strategy 1: soup.select_one("div.concall-content") → text
-    │       ├── Strategy 2: find largest <div> with keyword match → text
-    │       └── Strategy 3: find <a href="*.pdf"> → fetch PDF → extract text
-    │
-    ├── any TranscriptBlockedError (403/429/503) → re-raised → caller → error dict
-    ├── no text found → TranscriptScrapeError → caller → error dict
-    └── success → (transcript_text, quarter, year, warnings)
+│
+├── 1. _http_get(url) → BeautifulSoup parse
+│ ├── Strategy 1: soup.select_one("div.concall-content") → text
+│ ├── Strategy 2: find largest <div> with keyword match → text
+│ └── Strategy 3: find <a href="*.pdf"> → fetch PDF → extract text
+│
+├── any TranscriptBlockedError (403/429/503) → re-raised → caller → error dict
+├── no text found → TranscriptScrapeError → caller → error dict
+└── success → (transcript_text, quarter, year, warnings)
+
 ```
 
 Strategy 1 is zero-overhead when the selector matches. Strategy 2 is a
@@ -270,17 +278,19 @@ proper NSE ticker.
 ### Cache strategy
 
 ```
+
 _fetch_earnings_transcript(company_name, ticker, ...)
-    │
-    ├── pdf_bytes provided → extract → return (no cache)
-    ├── pdf_path provided  → extract → return (no cache)
-    │
-    ├── cache_get_json("airp:transcript:tcs") → hit → return cached=True
-    │
-    └── _scrape_screener_transcript(...)
-            └── success → result
-                    ├── len(text) > 100 → cache_set_json(key, result, ttl=3600)
-                    └── len(text) ≤ 100 → skip cache (don't pollute with empty)
+│
+├── pdf_bytes provided → extract → return (no cache)
+├── pdf_path provided → extract → return (no cache)
+│
+├── cache_get_json("airp:transcript:tcs") → hit → return cached=True
+│
+└── _scrape_screener_transcript(...)
+└── success → result
+├── len(text) > 100 → cache_set_json(key, result, ttl=3600)
+└── len(text) ≤ 100 → skip cache (don't pollute with empty)
+
 ```
 
 PDF results are not cached because the PDF bytes came from the user's
@@ -292,26 +302,28 @@ hour for news headlines).
 ### Output model structure
 
 ```
+
 TranscriptResult
 ├── company_name: str
 ├── ticker: str
-├── exchange: str                ("NSE")
-├── transcript_text: str         full raw transcript
-├── transcript_chunk: str        first max_chunk_chars characters
-├── source: str                  "screener" | "pdf_upload" | "pdf_path"
-├── quarter: str                 e.g. "Q3 FY2024" (empty if not found)
-├── year: str                    e.g. "2024"     (empty if not found)
-├── char_count: int              len(transcript_text)
-├── fetched_at: datetime         UTC
+├── exchange: str ("NSE")
+├── transcript_text: str full raw transcript
+├── transcript_chunk: str first max_chunk_chars characters
+├── source: str "screener" | "pdf_upload" | "pdf_path"
+├── quarter: str e.g. "Q3 FY2024" (empty if not found)
+├── year: str e.g. "2024" (empty if not found)
+├── char_count: int len(transcript_text)
+├── fetched_at: datetime UTC
 ├── cached: bool
 └── warnings: list[str]
 
-TranscriptChunk  (lightweight)
+TranscriptChunk (lightweight)
 ├── company_name, ticker, transcript_chunk
 ├── quarter, year, source, char_count
 ├── fetched_at, cached, warnings
 └── (no transcript_text — omitted to save LLM tokens)
-```
+
+````
 
 ### How the News Sentiment Agent uses this tool (Phase 2 — T-023)
 
@@ -331,7 +343,7 @@ else:
     transcript_chunk = result["transcript_chunk"]  # first 4000 chars
     quarter = result["quarter"]                    # e.g. "Q3 FY2024"
     # Embed chunk into agent prompt for RAG-style context injection
-```
+````
 
 ### ChromaDB integration (T-016)
 

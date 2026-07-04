@@ -19,11 +19,11 @@ sentence narrative summary.
 
 ## 2. Files Delivered
 
-| File | Description |
-|------|-------------|
-| `backend/agents/technical_analyst.py` | Agent implementation |
-| `backend/tests/unit/test_technical_analyst.py` | Unit tests (~90 tests) |
-| `docs/week-04/T-023-build-technical-analyst-agent.md` | This document |
+| File                                                  | Description            |
+| ----------------------------------------------------- | ---------------------- |
+| `backend/agents/technical_analyst.py`                 | Agent implementation   |
+| `backend/tests/unit/test_technical_analyst.py`        | Unit tests (~90 tests) |
+| `docs/week-04/T-023-build-technical-analyst-agent.md` | This document          |
 
 ---
 
@@ -103,20 +103,22 @@ Computed for n = 21 (1m), 63 (3m), 126 (6m), 252 (1y) trading days.
 
 Five binary checks, each contributes 1 bullish or 1 bearish point:
 
-| Check | Bullish | Bearish |
-|-------|---------|---------|
-| Price vs MA-50 | price > MA-50 | price < MA-50 |
-| Price vs MA-200 | price > MA-200 | price < MA-200 |
-| MA cross | MA-50 > MA-200 (golden) | MA-50 < MA-200 (death) |
-| RSI | 30 ≤ RSI ≤ 70 | RSI < 30 **or** RSI > 75 (exhaustion) |
-| 3m momentum | > 0% | < 0% |
+| Check           | Bullish                 | Bearish                               |
+| --------------- | ----------------------- | ------------------------------------- |
+| Price vs MA-50  | price > MA-50           | price < MA-50                         |
+| Price vs MA-200 | price > MA-200          | price < MA-200                        |
+| MA cross        | MA-50 > MA-200 (golden) | MA-50 < MA-200 (death)                |
+| RSI             | 30 ≤ RSI ≤ 70           | RSI < 30 **or** RSI > 75 (exhaustion) |
+| 3m momentum     | > 0%                    | < 0%                                  |
 
 **Decision:**
+
 - `BUY` if bullish_count ≥ 4
 - `SELL` if bearish_count ≥ 4
 - `HOLD` otherwise
 
 **Strength (1–10):**
+
 - BUY/SELL: `min(10, 5 + count)` → range 6–10
 - HOLD: `max(1, min(7, 3 + |bull - bear|))` → range 3–7
 
@@ -127,17 +129,17 @@ range represents a mildly overbought condition, not exhaustion.
 
 ## 6. Acceptance Criteria Verification
 
-| Criterion | Status | Test |
-|-----------|--------|------|
-| RSI computed correctly vs manual | ✅ | `TestComputeRSI.test_rsi_known_result` — RSI ≈ 71.43 |
-| SMA-50 computed correctly | ✅ | `TestComputeSMA.test_sma_50_on_260_closes` — 3234.5 |
-| SMA-200 computed correctly | ✅ | `TestComputeSMA.test_sma_200_on_260_closes` — 3159.5 |
-| TCS output validated | ✅ | `TestRunTechnicalAnalysisNode.test_tcs_state` |
-| Infosys output validated | ✅ | `TestRunTechnicalAnalysisNode.test_infy_state` |
-| Reliance output validated | ✅ | `TestRunTechnicalAnalysisNode.test_reliance_state` |
-| Signal covers all 3 outcomes | ✅ | `TestDetermineSignal` |
-| Never raises | ✅ | `test_never_raises_on_catastrophic_failure` |
-| LangSmith trace visible | ✅ | Auto via LangChain instrumentation |
+| Criterion                        | Status | Test                                                 |
+| -------------------------------- | ------ | ---------------------------------------------------- |
+| RSI computed correctly vs manual | ✅     | `TestComputeRSI.test_rsi_known_result` — RSI ≈ 71.43 |
+| SMA-50 computed correctly        | ✅     | `TestComputeSMA.test_sma_50_on_260_closes` — 3234.5  |
+| SMA-200 computed correctly       | ✅     | `TestComputeSMA.test_sma_200_on_260_closes` — 3159.5 |
+| TCS output validated             | ✅     | `TestRunTechnicalAnalysisNode.test_tcs_state`        |
+| Infosys output validated         | ✅     | `TestRunTechnicalAnalysisNode.test_infy_state`       |
+| Reliance output validated        | ✅     | `TestRunTechnicalAnalysisNode.test_reliance_state`   |
+| Signal covers all 3 outcomes     | ✅     | `TestDetermineSignal`                                |
+| Never raises                     | ✅     | `test_never_raises_on_catastrophic_failure`          |
+| LangSmith trace visible          | ✅     | Auto via LangChain instrumentation                   |
 
 ---
 
@@ -229,7 +231,7 @@ feat(agents): build Technical Analyst agent (T-023)
 
 ### Description
 
-```markdown
+````markdown
 ## Summary
 
 Implements the Technical Analyst — the second AIRP investment committee agent.
@@ -267,6 +269,7 @@ set ENVIRONMENT=test
 python -m pytest backend/tests/unit/test_technical_analyst.py -v
 # ~90 passed
 ```
+````
 
 ## LangSmith Trace
 
@@ -275,7 +278,8 @@ Automatic via LangChain instrumentation. No additional code required.
 ## Related Issues
 
 Closes #23
-```
+
+````
 
 ---
 
@@ -297,4 +301,4 @@ builder.add_node("technical_analyst", run_technical_analysis)
 # Error check:
 #   if state["technical"]["error"] is not None:
 #       # degrade gracefully
-```
+````

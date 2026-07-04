@@ -16,25 +16,27 @@ returns `list[Send]` -- LangGraph dispatches all four Sends concurrently in
 the same super-step.
 
 **Acceptance criteria (all met):**
+
 - All 4 agents run concurrently (verified by timing test)
 - Total time < max(individual agent times) + 5s overhead
 - Mermaid diagram still correct; no compile errors
 
 **Files produced / modified:**
 
-| File | Action | Description |
-|------|--------|-------------|
-| `backend/graph/nodes.py` | Create | Node functions for all 9 agents (T-030 base) |
-| `backend/graph/routing.py` | Create | `route_after_planner` returns `list[Send]` |
-| `backend/graph/graph.py` | Create | StateGraph with Send API fan-out |
-| `backend/tests/unit/test_parallel_research.py` | Create | Parallel execution tests |
-| `docs/week-07/T-031-parallel-research-execution.md` | Create | This file |
+| File                                                | Action | Description                                  |
+| --------------------------------------------------- | ------ | -------------------------------------------- |
+| `backend/graph/nodes.py`                            | Create | Node functions for all 9 agents (T-030 base) |
+| `backend/graph/routing.py`                          | Create | `route_after_planner` returns `list[Send]`   |
+| `backend/graph/graph.py`                            | Create | StateGraph with Send API fan-out             |
+| `backend/tests/unit/test_parallel_research.py`      | Create | Parallel execution tests                     |
+| `docs/week-07/T-031-parallel-research-execution.md` | Create | This file                                    |
 
 ---
 
 ## How the Send API Works
 
 In LangGraph 0.2.x, a conditional edge function can return either:
+
 - A `str` key that maps to a node via the routing dict (normal routing)
 - A `list[Send]` for parallel fan-out (bypasses the routing dict)
 
@@ -63,10 +65,11 @@ node). LangGraph waits for all 4 to complete before executing it.
 
 **State merge:**
 Each research agent writes a distinct key:
+
 - `fundamental_analyst` -> `{"fundamental": ...}`
-- `technical_analyst`   -> `{"technical": ...}`
-- `sentiment_analyst`   -> `{"sentiment": ...}`
-- `macro_economist`     -> `{"macro": ...}`
+- `technical_analyst` -> `{"technical": ...}`
+- `sentiment_analyst` -> `{"sentiment": ...}`
+- `macro_economist` -> `{"macro": ...}`
 
 Since keys are non-overlapping, LangGraph merges these partial dicts into
 shared state without conflict. No custom reducer needed.
@@ -83,6 +86,7 @@ where PARALLEL_OVERHEAD_S = 5.0 seconds
 
 The timing test uses mocked agents with `time.sleep()` at different
 durations (0.15s to 0.5s) and verifies:
+
 1. Total elapsed < sequential sum (proves parallelism is real)
 2. Total elapsed < max(individual) + 5.0s (proves overhead is bounded)
 
@@ -156,6 +160,7 @@ pre-commit run --files \
 ```
 
 **Windows alternative:**
+
 ```bash
 python -m black backend/graph/ backend/tests/unit/test_parallel_research.py
 python -m isort backend/graph/ backend/tests/unit/test_parallel_research.py
@@ -201,6 +206,7 @@ for s in result:
 ```
 
 Expected output:
+
 ```
 <class 'list'>
   Send -> fundamental_analyst
@@ -246,6 +252,7 @@ whatever langgraph exports.
 
 `Send(node, dict(state))` passes a shallow copy of the state to each
 research node. This is correct because:
+
 1. Research nodes only READ from the state they receive
 2. They WRITE to their own output key (fundamental / technical / etc.)
 3. LangGraph merges these writes back into the canonical state
@@ -256,6 +263,7 @@ LangGraph's Pregel runtime mutates it while dispatching.
 ### PARALLEL_OVERHEAD_S = 5.0
 
 Five seconds of overhead budget for:
+
 - Thread/async task scheduling by LangGraph's Pregel runtime
 - State serialisation/deserialisation between super-steps
 - Python GIL contention during concurrent execution
@@ -268,6 +276,7 @@ In testing with mocked agents (sleep-based), overhead is typically
 
 `route_after_research` is not called as a conditional edge in T-031
 (the join is handled implicitly by the 4 edges into contrarian). It is:
+
 1. Exposed in the public API for Phase 4 use (T-037 adds explicit join)
 2. Used in tests to verify its error-logging behaviour
 3. Available as a utility for any node that wants to inspect research
@@ -334,6 +343,7 @@ Full suite passes:
     python -m pytest -v
 
 Timing acceptance criterion:
+
 - Test agents sleep 0.15s to 0.5s (sum=1.15s, max=0.5s)
 - Elapsed < 0.5 + 5.0 = 5.5s budget (passes)
 - Elapsed < 1.15s sequential sum (proves parallelism)

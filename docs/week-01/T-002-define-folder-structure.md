@@ -1,13 +1,13 @@
 # T-002 — Define Folder Structure
 
-| Field | Detail |
-|-------|--------|
-| **Task ID** | T-002 |
-| **Phase** | 0 — Project Setup & Standards |
-| **Week** | 1 |
-| **Branch** | `setup/folder-structure` |
-| **Status** | ✅ Completed |
-| **Merged into** | `main` |
+| Field           | Detail                        |
+| --------------- | ----------------------------- |
+| **Task ID**     | T-002                         |
+| **Phase**       | 0 — Project Setup & Standards |
+| **Week**        | 1                             |
+| **Branch**      | `setup/folder-structure`      |
+| **Status**      | ✅ Completed                  |
+| **Merged into** | `main`                        |
 
 ---
 
@@ -22,13 +22,13 @@ folders that will be populated in later phases.
 
 ## Acceptance Criteria
 
-| Criteria | Status |
-|----------|--------|
-| All folders present per project spec | ✅ |
-| Each folder has a `.gitkeep` or README stub | ✅ |
-| README stubs describe what each folder contains | ✅ |
-| pre-commit hooks pass cleanly | ✅ |
-| PR merged via squash and merge | ✅ |
+| Criteria                                        | Status |
+| ----------------------------------------------- | ------ |
+| All folders present per project spec            | ✅     |
+| Each folder has a `.gitkeep` or README stub     | ✅     |
+| README stubs describe what each folder contains | ✅     |
+| pre-commit hooks pass cleanly                   | ✅     |
+| PR merged via squash and merge                  | ✅     |
 
 ---
 
@@ -67,38 +67,39 @@ airp/
 
 ## Files Created
 
-| File | Type | Purpose |
-|------|------|---------|
-| `backend/agents/README.md` | README stub | Documents all 8 agent files and their structure |
-| `backend/graph/README.md` | README stub | Documents LangGraph state and routing files |
-| `backend/routers/README.md` | README stub | Documents all FastAPI route handlers |
-| `backend/models/README.md` | README stub | Documents ORM models and Pydantic schemas |
-| `backend/services/README.md` | README stub | Documents business logic layer |
-| `backend/tools/README.md` | README stub | Documents LangChain tool definitions per data source |
-| `backend/db/README.md` | README stub | Documents database client files |
-| `backend/tests/README.md` | README stub | Documents test structure and how to run tests |
-| `backend/tests/unit/.gitkeep` | Placeholder | Tracks empty folder until Phase 1 tests are added |
-| `backend/tests/integration/.gitkeep` | Placeholder | Tracks empty folder until Phase 1 tests are added |
-| `frontend/src/components/README.md` | README stub | Documents component sub-folder structure |
-| `frontend/src/components/ui/README.md` | README stub | Primitive UI components |
-| `frontend/src/components/layout/README.md` | README stub | Structural layout components |
-| `frontend/src/components/charts/README.md` | README stub | Recharts data visualisation components |
-| `frontend/src/pages/README.md` | README stub | All page routes documented |
-| `frontend/src/hooks/README.md` | README stub | Custom React hooks documented |
-| `frontend/src/api/README.md` | README stub | API client functions documented |
-| `frontend/src/types/README.md` | README stub | TypeScript types documented |
-| `frontend/public/README.md` | README stub | Static assets folder |
-| `scripts/README.md` | README stub | Dev utility scripts |
-| `docs/CODING_STANDARDS.md` | Updated stub | Branch naming, commit format, file naming conventions |
-| `docs/AGENTS.md` | Updated stub | Agent committee table with phase timeline |
-| `docs/APIS.md` | Updated stub | All external APIs with free limits and env var names |
-| `docs/ARCHITECTURE.md` | Updated stub | System layer overview |
+| File                                       | Type         | Purpose                                               |
+| ------------------------------------------ | ------------ | ----------------------------------------------------- |
+| `backend/agents/README.md`                 | README stub  | Documents all 8 agent files and their structure       |
+| `backend/graph/README.md`                  | README stub  | Documents LangGraph state and routing files           |
+| `backend/routers/README.md`                | README stub  | Documents all FastAPI route handlers                  |
+| `backend/models/README.md`                 | README stub  | Documents ORM models and Pydantic schemas             |
+| `backend/services/README.md`               | README stub  | Documents business logic layer                        |
+| `backend/tools/README.md`                  | README stub  | Documents LangChain tool definitions per data source  |
+| `backend/db/README.md`                     | README stub  | Documents database client files                       |
+| `backend/tests/README.md`                  | README stub  | Documents test structure and how to run tests         |
+| `backend/tests/unit/.gitkeep`              | Placeholder  | Tracks empty folder until Phase 1 tests are added     |
+| `backend/tests/integration/.gitkeep`       | Placeholder  | Tracks empty folder until Phase 1 tests are added     |
+| `frontend/src/components/README.md`        | README stub  | Documents component sub-folder structure              |
+| `frontend/src/components/ui/README.md`     | README stub  | Primitive UI components                               |
+| `frontend/src/components/layout/README.md` | README stub  | Structural layout components                          |
+| `frontend/src/components/charts/README.md` | README stub  | Recharts data visualisation components                |
+| `frontend/src/pages/README.md`             | README stub  | All page routes documented                            |
+| `frontend/src/hooks/README.md`             | README stub  | Custom React hooks documented                         |
+| `frontend/src/api/README.md`               | README stub  | API client functions documented                       |
+| `frontend/src/types/README.md`             | README stub  | TypeScript types documented                           |
+| `frontend/public/README.md`                | README stub  | Static assets folder                                  |
+| `scripts/README.md`                        | README stub  | Dev utility scripts                                   |
+| `docs/CODING_STANDARDS.md`                 | Updated stub | Branch naming, commit format, file naming conventions |
+| `docs/AGENTS.md`                           | Updated stub | Agent committee table with phase timeline             |
+| `docs/APIS.md`                             | Updated stub | All external APIs with free limits and env var names  |
+| `docs/ARCHITECTURE.md`                     | Updated stub | System layer overview                                 |
 
 ---
 
 ## Problems Encountered & Solutions
 
 ### 1. Uncommitted changes in source control before starting
+
 **Problem:** After copying files from T-001, source control showed modified files
 before the T-002 branch was even created. This was caused by the `end-of-file-fixer`
 hook from T-001 modifying files after staging but before the commit completed —
@@ -109,6 +110,7 @@ seeing `"files were modified by this hook"`. The two-attempt pattern is normal
 pre-commit behaviour.
 
 ### 2. `end-of-file-fixer` aborting the T-002 commit
+
 **Problem:** Same as above — 7 README stubs were missing trailing newlines,
 causing the first commit attempt to abort.
 
@@ -116,13 +118,16 @@ causing the first commit attempt to abort.
 message. All hooks passed on the second attempt.
 
 ### 3. LF/CRLF line ending warnings on Windows
+
 **Problem:** Git warned about LF being replaced by CRLF on multiple files.
 While harmless, it creates noise in every `git add` output.
 
 **Solution:** Set the global Git config once:
+
 ```bash
 git config --global core.autocrlf true
 ```
+
 This tells Git to automatically convert LF to CRLF on checkout (Windows) and
 back to LF on commit — the correct setting for Windows developers working on
 a cross-platform project.
@@ -132,14 +137,15 @@ a cross-platform project.
 ## Key Decisions
 
 **Why README stubs instead of `.gitkeep` everywhere?**
-Every folder's README explains *what belongs there*, *when it gets populated*,
-and *what naming conventions to follow*. This means any engineer (or future-you
+Every folder's README explains _what belongs there_, _when it gets populated_,
+and _what naming conventions to follow_. This means any engineer (or future-you
 returning after a break) can navigate the repo without needing external context.
 `.gitkeep` is used only for the `tests/unit/` and `tests/integration/` folders
 where a README in the parent `tests/` already explains the structure.
 
 **Why a `dev-log/` folder inside `docs/`?**
 A task-by-task development log serves three purposes:
+
 1. Documents decisions and problems encountered for future reference
 2. Demonstrates engineering discipline to recruiters reviewing the repo
 3. Provides context for AI coding sessions — paste the relevant task log
@@ -161,5 +167,5 @@ onwards, all feature branches will merge into `develop` first, with
   tracked file. README stubs are preferable to `.gitkeep` wherever meaningful
   documentation can be added.
 - The two-commit pattern with pre-commit hooks (`commit → hooks fix files →
-  add → commit again`) will happen frequently. It is not an error — it is the
+add → commit again`) will happen frequently. It is not an error — it is the
   hooks doing their job.

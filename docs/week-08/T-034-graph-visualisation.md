@@ -10,11 +10,12 @@
 ## Overview
 
 T-034 auto-exports the AIRP LangGraph Mermaid diagram to
-`docs/GRAPH_DIAGRAM.md` on every `build_graph()` call.  The diagram is
+`docs/GRAPH_DIAGRAM.md` on every `build_graph()` call. The diagram is
 always in sync with the actual graph topology -- no manual update needed
 when nodes or edges change.
 
 **Acceptance criteria (both must pass):**
+
 - `docs/GRAPH_DIAGRAM.md` updated after every graph compile
 - Diagram shows all 12 nodes and their edges correctly
 
@@ -36,14 +37,14 @@ when nodes or edges change.
 5. Returns the Path written, or `None` on I/O error or in test environment.
 
 **I/O failures are non-fatal** -- caught and logged at WARNING level,
-never re-raised.  Graph compilation always succeeds.
+never re-raised. Graph compilation always succeeds.
 
 **In ENVIRONMENT=test** the export is skipped entirely (returns None
 immediately) so tests never write to the working tree.
 
 `resolve_diagram_path()` -- resolves the absolute path to
 `docs/GRAPH_DIAGRAM.md` by walking up `_LEVELS_UP=3` parent directories
-from the source file.  Importable for use in scripts and tests.
+from the source file. Importable for use in scripts and tests.
 
 ### Modified: `backend/graph/graph.py`
 
@@ -58,13 +59,14 @@ export_mermaid_diagram(compiled)
 
 ### New file: `docs/GRAPH_DIAGRAM.md`
 
-Seed file committed to the repository.  Automatically overwritten on the
-first `build_graph()` call in a non-test environment.  Contains the full
+Seed file committed to the repository. Automatically overwritten on the
+first `build_graph()` call in a non-test environment. Contains the full
 12-node diagram as of T-032/T-033.
 
 ### New file: `backend/tests/unit/test_graph_visualisation.py`
 
 60+ unit tests across 8 test classes covering:
+
 - `resolve_diagram_path()` -- absolute, correct suffix, deterministic
 - `export_mermaid_diagram()` skip path in test env
 - `export_mermaid_diagram()` success path (fully mocked FS)
@@ -128,6 +130,7 @@ python -m pytest backend/tests/unit/ -v --tb=short -q
 ```
 
 Key new tests to watch:
+
 - `test_graph_visualisation.py` -- all 60+ T-034 tests
 - `test_graph_skeleton.py` -- still passes (export is mocked in test env)
 - `test_parallel_research.py` -- still passes
@@ -171,7 +174,7 @@ feat(graph): auto-export Mermaid diagram to docs/GRAPH_DIAGRAM.md (T-034)
 
 **PR Description:**
 
-```markdown
+````markdown
 ## Summary
 
 Implements T-034 graph visualisation export. Every call to `build_graph()`
@@ -202,6 +205,7 @@ sync with the graph topology automatically -- no manual maintenance needed.
 set ENVIRONMENT=test
 python -m pytest backend/tests/unit/ -v --tb=short -q
 ```
+````
 
 All 60+ new tests pass. All existing tests still pass.
 Filesystem is fully mocked in tests -- no real file writes.
@@ -213,6 +217,7 @@ N/A -- no LLM calls in this task.
 ## Related Issues
 
 Closes #34
+
 ```
 
 ---
@@ -220,6 +225,7 @@ Closes #34
 ## Commit Message
 
 ```
+
 feat(graph): auto-export Mermaid diagram to docs/GRAPH_DIAGRAM.md (T-034)
 
 - graph_visualisation.py: export_mermaid_diagram() calls
@@ -234,6 +240,7 @@ feat(graph): auto-export Mermaid diagram to docs/GRAPH_DIAGRAM.md (T-034)
 - test_graph_visualisation.py: 60+ unit tests; FS fully mocked
 
 Closes #34
+
 ```
 
 ---
@@ -274,3 +281,4 @@ for a documentation issue.
 Walking up 3 levels from the file gives `{repo_root}`.  This approach
 works regardless of the current working directory and is safe for both
 direct `python` invocations and pytest runs.
+```

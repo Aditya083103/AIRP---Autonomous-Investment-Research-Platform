@@ -16,23 +16,24 @@ as an optional gap-filler.
 
 **Two tools delivered:**
 
-| Tool | Data returned |
-|------|--------------|
-| `fetch_ratios` | Full `RatiosModel` — all six ratios, inputs, sources map, data warnings |
-| `fetch_ratios_summary` | Lightweight: ticker, verdict ratios, warnings only (saves LLM tokens) |
+| Tool                   | Data returned                                                           |
+| ---------------------- | ----------------------------------------------------------------------- |
+| `fetch_ratios`         | Full `RatiosModel` — all six ratios, inputs, sources map, data warnings |
+| `fetch_ratios_summary` | Lightweight: ticker, verdict ratios, warnings only (saves LLM tokens)   |
 
 **Six ratios computed:**
 
-| Ratio | Formula | Source |
-|-------|---------|--------|
-| P/E | Price ÷ EPS | yFinance (`info`) |
-| P/B | Price ÷ Book Value per Share | yFinance (`info`) |
-| ROE % | Net Income ÷ Total Equity × 100 | yFinance (income + balance) |
-| ROCE % | EBIT ÷ (Total Assets − Current Liabilities) × 100 | yFinance (balance + income) |
-| Debt/Equity | Total Debt ÷ Total Equity | yFinance (balance) |
-| EV/EBITDA | (Market Cap + Debt − Cash) ÷ EBITDA | yFinance (`info` + balance) |
+| Ratio       | Formula                                           | Source                      |
+| ----------- | ------------------------------------------------- | --------------------------- |
+| P/E         | Price ÷ EPS                                       | yFinance (`info`)           |
+| P/B         | Price ÷ Book Value per Share                      | yFinance (`info`)           |
+| ROE %       | Net Income ÷ Total Equity × 100                   | yFinance (income + balance) |
+| ROCE %      | EBIT ÷ (Total Assets − Current Liabilities) × 100 | yFinance (balance + income) |
+| Debt/Equity | Total Debt ÷ Total Equity                         | yFinance (balance)          |
+| EV/EBITDA   | (Market Cap + Debt − Cash) ÷ EBITDA               | yFinance (`info` + balance) |
 
 **Key production features:**
+
 - yFinance is primary; Alpha Vantage gap-fills `None` values and cross-checks
   computed ratios (flags divergence > 25% as a `data_warning`)
 - Alpha Vantage path is fully optional — skipped when `ALPHA_VANTAGE_KEY` is
@@ -45,6 +46,7 @@ as an optional gap-filler.
   always returns a dict the agent can inspect
 
 **Acceptance criteria:**
+
 - All six ratios match manual calculation within ±0.5% for TCS.NS, INFY.NS,
   RELIANCE.NS (verified in standalone math check — see Architecture Notes)
 - Returns a structured error dict (never raises) when yFinance has no data
@@ -64,12 +66,12 @@ as an optional gap-filler.
 
 Files changed in that branch:
 
-| File | Fix |
-|------|-----|
-| `pyproject.toml` | Extend mypy override to `backend.tests.*` (was `tests.*` — wrong module path) |
-| `backend/tests/unit/test_news.py` | Add `# type: ignore[attr-defined]` to four `__wrapped__` calls; add `-> Any` to three `_patch_get` helpers |
-| `backend/tests/unit/test_financials.py` | Narrow `revenue_crores: float \| None` with `assert revenue_inr is not None` before multiplication |
-| `frontend/vite.config.ts` | Replace `import { fileURLToPath, URL } from "node:url"` with DOM-global `URL` + `.pathname` — zero package.json change |
+| File                                    | Fix                                                                                                                    |
+| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `pyproject.toml`                        | Extend mypy override to `backend.tests.*` (was `tests.*` — wrong module path)                                          |
+| `backend/tests/unit/test_news.py`       | Add `# type: ignore[attr-defined]` to four `__wrapped__` calls; add `-> Any` to three `_patch_get` helpers             |
+| `backend/tests/unit/test_financials.py` | Narrow `revenue_crores: float \| None` with `assert revenue_inr is not None` before multiplication                     |
+| `frontend/vite.config.ts`               | Replace `import { fileURLToPath, URL } from "node:url"` with DOM-global `URL` + `.pathname` — zero package.json change |
 
 Commit for the fix branch:
 
@@ -112,10 +114,10 @@ Open a PR targeting `main`, verify CI is green, merge. Then continue with T-013 
 
 ## Files Created in This Task
 
-| File | Action | Purpose |
-|------|--------|---------|
-| `backend/tools/ratios.py` | **CREATE** | Two LangChain tools, Pydantic models, yFinance + Alpha Vantage fetchers, ratio math |
-| `backend/tests/unit/test_ratios.py` | **CREATE** | 30+ unit tests — all external calls mocked, covers all six ratios + edge cases |
+| File                                | Action     | Purpose                                                                             |
+| ----------------------------------- | ---------- | ----------------------------------------------------------------------------------- |
+| `backend/tools/ratios.py`           | **CREATE** | Two LangChain tools, Pydantic models, yFinance + Alpha Vantage fetchers, ratio math |
+| `backend/tests/unit/test_ratios.py` | **CREATE** | 30+ unit tests — all external calls mocked, covers all six ratios + edge cases      |
 
 ---
 
@@ -154,6 +156,7 @@ python -m pytest backend/tests/unit/test_ratios.py -v
 ```
 
 **Expected output:**
+
 ```
 backend/tests/unit/test_ratios.py::TestRatioHelpers::test_ratio_returns_none_when_denominator_zero PASSED
 backend/tests/unit/test_ratios.py::TestComputeRatios::test_all_six_ratios_tcs[TCS.NS] PASSED
@@ -239,6 +242,7 @@ path still returns all six ratios.
 ### Changes
 
 **`backend/tools/ratios.py`**
+
 - `RatioInputs` — frozen Pydantic model for all raw values needed across six ratios
 - `RatiosModel` — result envelope: six ratios, enterprise_value, inputs used,
   sources map (which source provided each value), fetched_at, data_warnings
@@ -259,6 +263,7 @@ path still returns all six ratios.
 - `fetch_ratios_summary` `@tool` — lightweight: ticker + six ratio values + warnings
 
 **`backend/tests/unit/test_ratios.py`**
+
 - 30+ unit tests, all external calls mocked
 - `TestRatioHelpers` — `_ratio`: zero denom, None inputs, valid case
 - `TestSafeInfoGet` / `TestStatementGet` — missing keys, None df, correct extraction
@@ -305,6 +310,7 @@ All six ratios were verified against hand-calculated values using mock inputs
 that mirror the structure of real yFinance data for Indian IT stocks:
 
 **TCS.NS** (mock inputs — illustrative, not live data):
+
 - Price: 3,800 · EPS: 130 · BVPS: 270 → **PE 29.23, PB 14.07**
 - Net Income: 46,000 Cr · Equity: 90,000 Cr → **ROE 51.11%**
 - EBIT: 58,000 Cr · Total Assets: 1,45,000 Cr · CL: 35,000 Cr → **ROCE 52.73%**
@@ -320,11 +326,13 @@ percentage points to account for float representation.
 ### Why `_percentage()` matters
 
 Naïve implementation:
+
 ```python
 roe = round(net_income / equity, 4) * 100  # → 51.0 (wrong)
 ```
 
 Correct implementation:
+
 ```python
 def _percentage(num, denom):
     r = _ratio(num, denom)

@@ -15,6 +15,7 @@ indicators. This is a second, transcript-style view of the exact same
 no new backend contract is introduced.
 
 **Acceptance criteria:**
+
 - [x] All debate rounds visible (all 3 round sections always render, even empty)
 - [x] Agent colours consistent (one stable accent per committee seat)
 - [x] Messages expand/collapse (long messages collapse by default with a toggle)
@@ -40,7 +41,7 @@ docs/week-17/T-060-Build-Debate-Viewer.md             (new, this file)
 
 - **`debateTranscript.ts`** is the pure-function counterpart to
   `lib/agentProgress.ts` (T-059). Where `agentProgress.ts` collapses
-  each agent down to its *latest* event (for a progress card),
+  each agent down to its _latest_ event (for a progress card),
   `debateTranscript.ts` keeps **every** event as its own message, in
   arrival order — a debate-loop agent (Risk Officer, Contrarian
   Investor) that speaks twice must appear as two transcript entries,
@@ -50,8 +51,8 @@ docs/week-17/T-060-Build-Debate-Viewer.md             (new, this file)
   viewer.
 - **Colour-per-agent** is a dedicated palette (`AGENT_ACCENTS` in
   `DebateMessageCard.tsx`) distinct from `AgentCard.tsx`'s
-  per-*round* accent — the whole point of the debate viewer is telling
-  8 individual voices apart *within* a round, so agents sharing a
+  per-_round_ accent — the whole point of the debate viewer is telling
+  8 individual voices apart _within_ a round, so agents sharing a
   round must not share a colour the way they intentionally do on the
   progress board.
 - **Expand/collapse** triggers only past a 160-character threshold
@@ -173,6 +174,7 @@ feat(frontend): add Debate Viewer timeline (T-060)
 
 ```markdown
 ## Summary
+
 Adds the Debate Viewer — a timeline/chat UI that shows the 8-agent
 committee "speaking" in arrival order, colour-coded per agent, grouped
 into the same 3 execution rounds AgentProgressBoard uses, with
@@ -180,6 +182,7 @@ expand/collapse for long messages. Wired into AnalysisResultPage
 behind a new "Agent progress" / "Debate transcript" tab switch.
 
 ## Changes
+
 - Add `lib/debateTranscript.ts`: pure derivation of an ordered,
   per-round transcript from the existing `AgentStreamEvent[]` stream
   (keeps every event, unlike `agentProgress.ts`'s "latest per agent"
@@ -197,6 +200,7 @@ behind a new "Agent progress" / "Debate transcript" tab switch.
   tab-switch tests in `AnalysisResultPage.test.tsx`.
 
 ## Testing
+
 - `npm run type-check` — passes
 - `npm run lint` (`--max-warnings 0`) — passes
 - `npm run format:check` — passes
@@ -212,13 +216,16 @@ behind a new "Agent progress" / "Debate transcript" tab switch.
 - `npm run build` — passes
 
 ## LangSmith Trace
+
 N/A — frontend-only change, no agent/graph behaviour touched.
 
 ## Screenshots
+
 _Add a screenshot of the "Debate transcript" tab with a few completed
 agent events, and one at mobile width (375px), before merging._
 
 ## Related Issues
+
 Closes #T-060
 ```
 

@@ -10,12 +10,13 @@
 ## Overview
 
 T-037 builds the **Risk Officer agent** -- the fifth of eight investment
-committee agents in AIRP.  The Risk Officer is a paranoid risk manager who
+committee agents in AIRP. The Risk Officer is a paranoid risk manager who
 reads all four research agent outputs (Fundamental, Technical, Sentiment,
 Macro) and produces a structured `RiskAnalysis` with named risk flags,
 sub-scores, and a recommendation to the Portfolio Manager.
 
 **Acceptance criteria (all must pass):**
+
 - Agent correctly flags known-risky companies (SEBI keyword, fraud probe,
   high D/E, negative FCF)
 - Outputs structured `RiskAnalysis` Pydantic model with all required fields
@@ -27,11 +28,11 @@ sub-scores, and a recommendation to the Portfolio Manager.
 
 ## Files Changed
 
-| File | Change |
-|------|--------|
-| `backend/agents/risk_officer.py` | **New** -- full Risk Officer agent |
-| `backend/tests/unit/test_risk_officer.py` | **New** -- 76 unit tests |
-| `backend/graph/nodes.py` | **Modified** -- replaced stub `_risk_impl` with real delegate |
+| File                                      | Change                                                        |
+| ----------------------------------------- | ------------------------------------------------------------- |
+| `backend/agents/risk_officer.py`          | **New** -- full Risk Officer agent                            |
+| `backend/tests/unit/test_risk_officer.py` | **New** -- 76 unit tests                                      |
+| `backend/graph/nodes.py`                  | **Modified** -- replaced stub `_risk_impl` with real delegate |
 
 ---
 
@@ -43,13 +44,13 @@ Two-stage pipeline (same pattern as all AIRP research agents):
 
 **Stage 1 -- Deterministic scoring (no LLM)**
 
-| Function | Purpose |
-|----------|---------|
-| `_collect_all_text(...)` | Flattens all research dicts into one lowercase string for keyword scanning |
-| `_extract_sentinel_flags(...)` | Keyword-based detection of fraud, regulatory, governance signals |
-| `_score_risk(...)` | Computes four sub-scores + weighted composite `risk_score` |
-| `_determine_concentration_flags(...)` | Extracts concrete concentration risk flags |
-| `_determine_risk_recommendation(...)` | Maps `risk_score` → `proceed_with_caution` / `monitor_closely` / `avoid` |
+| Function                              | Purpose                                                                    |
+| ------------------------------------- | -------------------------------------------------------------------------- |
+| `_collect_all_text(...)`              | Flattens all research dicts into one lowercase string for keyword scanning |
+| `_extract_sentinel_flags(...)`        | Keyword-based detection of fraud, regulatory, governance signals           |
+| `_score_risk(...)`                    | Computes four sub-scores + weighted composite `risk_score`                 |
+| `_determine_concentration_flags(...)` | Extracts concrete concentration risk flags                                 |
+| `_determine_risk_recommendation(...)` | Maps `risk_score` → `proceed_with_caution` / `monitor_closely` / `avoid`   |
 
 **Scoring logic (`_score_risk`):**
 
@@ -75,7 +76,8 @@ risk_score = round(
 **Stage 2 -- LLM narrative synthesis**
 
 The LLM (Groq in dev, Claude in demo) receives pre-computed scores and
-sentinel flags.  It synthesises:
+sentinel flags. It synthesises:
+
 - `governance_flags[]` -- specific governance concerns with evidence
 - `regulatory_risks[]` -- regulatory / legal exposures
 - `fraud_indicators[]` -- accounting or conduct red flags
@@ -97,7 +99,7 @@ LLM availability.
   ceo resign, rights issue dilution, preferential allotment ...
 
 **Error convention:**
-Never raises.  On any failure, `RiskAnalysis.error` is set and
+Never raises. On any failure, `RiskAnalysis.error` is set and
 `risk_score` defaults to 5 (unknown/neutral).
 
 ---
@@ -120,6 +122,7 @@ def _risk_impl(state: InvestmentState) -> dict[str, Any]:
 ```
 
 Added import:
+
 ```python
 from backend.agents.risk_officer import run_risk_analysis
 ```
@@ -134,20 +137,20 @@ apply.
 
 76 unit tests across 12 test classes:
 
-| Class | Tests | What it covers |
-|-------|-------|----------------|
-| `TestCollectAllText` | 5 | String flattening, list fields, case normalisation |
-| `TestExtractSentinelFlags` | 8 | Keyword detection; SEBI → regulatory; fraud → fraud; pledging → governance |
-| `TestScoreRisk` | 10 | Clean/risky companies; D/E bands; FCF impact; red flag counts; bounds |
-| `TestDetermineConcentrationFlags` | 6 | Macro headwinds, sector impact, SELL signal, high D/E |
-| `TestDetermineRiskRecommendation` | 3 | Band mapping: 1-3 → proceed, 4-6 → monitor, 7-10 → avoid |
-| `TestBuildRiskPrompt` | 8 | Company name, scores, red flags, headwinds, ASCII-only, N/A formatting |
-| `TestRunRiskAnalysisCore` | 11 | Clean/risky company; SEBI flag; fraud → critical; frozen model; JSON-safe; empty research; LLM errors |
-| `TestRunRiskAnalysisNode` | 9 | State in/out; required keys; missing ticker; None research; JSON-safe |
-| `TestRiskAnalysisSchemaValidation` | 8 | Pydantic bounds (score 0 rejected, 11 rejected); defaults; frozen; round-trip |
-| `TestSystemPrompt` | 5 | Content checks; ASCII-only; mentions key dimensions |
-| `TestTracingIntegration` | 2 | `__wrapped__` present; callable |
-| (standalone tests) | 1 | `_determine_risk_recommendation` edge cases |
+| Class                              | Tests | What it covers                                                                                        |
+| ---------------------------------- | ----- | ----------------------------------------------------------------------------------------------------- |
+| `TestCollectAllText`               | 5     | String flattening, list fields, case normalisation                                                    |
+| `TestExtractSentinelFlags`         | 8     | Keyword detection; SEBI → regulatory; fraud → fraud; pledging → governance                            |
+| `TestScoreRisk`                    | 10    | Clean/risky companies; D/E bands; FCF impact; red flag counts; bounds                                 |
+| `TestDetermineConcentrationFlags`  | 6     | Macro headwinds, sector impact, SELL signal, high D/E                                                 |
+| `TestDetermineRiskRecommendation`  | 3     | Band mapping: 1-3 → proceed, 4-6 → monitor, 7-10 → avoid                                              |
+| `TestBuildRiskPrompt`              | 8     | Company name, scores, red flags, headwinds, ASCII-only, N/A formatting                                |
+| `TestRunRiskAnalysisCore`          | 11    | Clean/risky company; SEBI flag; fraud → critical; frozen model; JSON-safe; empty research; LLM errors |
+| `TestRunRiskAnalysisNode`          | 9     | State in/out; required keys; missing ticker; None research; JSON-safe                                 |
+| `TestRiskAnalysisSchemaValidation` | 8     | Pydantic bounds (score 0 rejected, 11 rejected); defaults; frozen; round-trip                         |
+| `TestSystemPrompt`                 | 5     | Content checks; ASCII-only; mentions key dimensions                                                   |
+| `TestTracingIntegration`           | 2     | `__wrapped__` present; callable                                                                       |
+| (standalone tests)                 | 1     | `_determine_risk_recommendation` edge cases                                                           |
 
 ---
 
@@ -156,22 +159,22 @@ apply.
 **Why keyword scanning before the LLM?**
 Deterministic detection guarantees that SEBI notices and fraud keywords
 always surface in `critical_flags` regardless of LLM behaviour or quota
-errors.  The LLM cannot "miss" a SEBI investigation if the keyword scanner
+errors. The LLM cannot "miss" a SEBI investigation if the keyword scanner
 already found it.
 
 **Why merge LLM output with sentinel flags?**
-The LLM may expand on, confirm, or refute sentinel flags.  Merging (union,
+The LLM may expand on, confirm, or refute sentinel flags. Merging (union,
 deduplicated by 60-char prefix) ensures we get the richest possible flag
 list without duplicates.
 
 **Why four separate sub-scores?**
 The Portfolio Manager and Contrarian Investor agents downstream can inspect
 individual dimensions (e.g. "high governance risk but low financial risk")
-rather than a single opaque number.  This mirrors how real investment
+rather than a single opaque number. This mirrors how real investment
 committees communicate risk.
 
 **Why is `risk_recommendation` validated on the LLM's output?**
-The LLM may hallucinate an invalid string.  If the returned recommendation
+The LLM may hallucinate an invalid string. If the returned recommendation
 is not one of the three allowed values, the deterministic score-based
 recommendation is used instead.
 
@@ -179,17 +182,17 @@ recommendation is used instead.
 
 ## AIRP Standards Compliance
 
-| Standard | Status |
-|----------|--------|
-| No `from __future__ import annotations` | OK -- not present |
-| Plain ASCII section comments (`# ---`) | OK -- no Unicode box-drawing |
-| No bare `# type: ignore` | OK -- none in agent; `[misc]` only in frozen model tests |
-| No `type: ignore` that becomes unnecessary when packages installed | OK -- removed; uses `hasattr` pattern |
-| Tools never raise -- return error model on failure | OK |
-| `@traced_agent` applied to LangGraph node | OK |
-| `_run_risk_analysis_core` separated for testability | OK |
-| All lines <= 88 bytes | OK |
-| Two-stage pipeline: deterministic then LLM | OK |
+| Standard                                                           | Status                                                   |
+| ------------------------------------------------------------------ | -------------------------------------------------------- |
+| No `from __future__ import annotations`                            | OK -- not present                                        |
+| Plain ASCII section comments (`# ---`)                             | OK -- no Unicode box-drawing                             |
+| No bare `# type: ignore`                                           | OK -- none in agent; `[misc]` only in frozen model tests |
+| No `type: ignore` that becomes unnecessary when packages installed | OK -- removed; uses `hasattr` pattern                    |
+| Tools never raise -- return error model on failure                 | OK                                                       |
+| `@traced_agent` applied to LangGraph node                          | OK                                                       |
+| `_run_risk_analysis_core` separated for testability                | OK                                                       |
+| All lines <= 88 bytes                                              | OK                                                       |
+| Two-stage pipeline: deterministic then LLM                         | OK                                                       |
 
 ---
 
@@ -216,12 +219,14 @@ backend/graph/nodes.py                  (modified -- replace stub)
 ### 3. Set environment and run tests
 
 **Windows CMD:**
+
 ```cmd
 set ENVIRONMENT=test
 python -m pytest backend/tests/unit/test_risk_officer.py -v --tb=short
 ```
 
 **Git Bash / Mac / Linux:**
+
 ```bash
 export ENVIRONMENT=test
 python -m pytest backend/tests/unit/test_risk_officer.py -v --tb=short
@@ -246,7 +251,7 @@ git add backend/agents/risk_officer.py \
 git commit -m "feat(agents): add Risk Officer agent with deterministic scoring and LLM synthesis"
 ```
 
-Black / isort may auto-fix formatting.  If the commit is rejected by
+Black / isort may auto-fix formatting. If the commit is rejected by
 pre-commit hooks:
 
 ```bash
@@ -267,6 +272,7 @@ Open a PR on GitHub targeting `main`.
 ## PR Details
 
 **PR title:**
+
 ```
 feat(agents): T-037 Risk Officer agent with deterministic risk scoring
 ```
@@ -277,7 +283,7 @@ feat(agents): T-037 Risk Officer agent with deterministic risk scoring
 ## Summary
 
 Implements the Risk Officer agent (T-037) -- the fifth of eight investment
-committee agents.  The Risk Officer reads all four research agent outputs and
+committee agents. The Risk Officer reads all four research agent outputs and
 produces a structured `RiskAnalysis` with governance flags, regulatory risks,
 fraud indicators, concentration risks, and a composite risk score.
 

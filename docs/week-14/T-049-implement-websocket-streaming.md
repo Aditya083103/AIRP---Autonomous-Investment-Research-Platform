@@ -16,17 +16,19 @@ analysis progress from `pending` to `completed` (or `failed`) without
 ever issuing a second HTTP request.
 
 **Acceptance criteria (all must pass):**
+
 - WebSocket sends event per agent completion
 - frontend receives and displays in order
 - connection closes cleanly
 
 **Explicitly out of scope for this task** (separate Phase 5 tasks, per
 the master task list):
+
 - `GET /analysis/{job_id}/result`, `GET /analysis/{job_id}/memo/pdf`,
   `GET /history` -> **T-050**
 - Document upload endpoint -> later T-05x
 - Any change to how LangGraph nodes compute their own output -- T-049
-  only *reads* the same state `_persist_after` (T-033) already builds
+  only _reads_ the same state `_persist_after` (T-033) already builds
   and persists; no agent or routing logic changed
 
 ---
@@ -52,7 +54,7 @@ LangGraph node finishing (already a fire-and-forget event via T-033's
   event loop that created it (a `_Subscriber` dataclass), because...
 - **`publish_event(job_id, event)`** -- fans an event out to every
   subscriber of `job_id` via `loop.call_soon_threadsafe(queue.put_nowait,
-  event)`. This is **not** `asyncio.Lock` + `asyncio.run()` (the first
+event)`. This is **not** `asyncio.Lock` + `asyncio.run()` (the first
   draft of this module): `publish_event` is called from a LangGraph
   node running on a worker thread, while `subscribe`/`unsubscribe` run
   on FastAPI's main event loop thread -- `asyncio.Lock`/`asyncio.Queue`
@@ -117,6 +119,7 @@ WS /api/v1/analysis/{job_id}/stream
 ```
 
 On connect:
+
 1. Authenticates via a `token` query parameter (browsers cannot set
    custom WebSocket handshake headers, so the existing
    `OAuth2PasswordBearer`-based `get_current_user` dependency is
@@ -141,7 +144,7 @@ for the connection's full lifetime -- that would hold a pooled Neon
 connection open for the entire ~90 second streaming duration even
 though the DB is only touched once, up front. Instead it's a narrow,
 manually-scoped `async with AsyncSessionLocal()` block around just the
-auth + snapshot phase. `settings` *is* injected via the normal
+auth + snapshot phase. `settings` _is_ injected via the normal
 `Depends(get_settings_dependency)`, since it's an immutable in-memory
 value with no pooled resource behind it.
 
@@ -210,27 +213,27 @@ and displays in order") a genuine, runnable consumer today:
   `is_final` when the job is already terminal, and -- the core of the
   task -- events published after connect are forwarded **in publish
   order**, the connection closes with code `1000` after the final
-  event, and events for a *different* job_id never leak into the
+  event, and events for a _different_ job_id never leak into the
   wrong subscriber's stream.
 
 ---
 
 ## Files Changed
 
-| File | Change |
-|------|--------|
-| `backend/services/ws_broadcaster.py` | **New** -- in-process pub/sub registry |
-| `backend/graph/nodes.py` | **Modified** -- `_run_broadcast`, `_build_output_preview`, `_summarise_agent_output`; `_persist_after` now also broadcasts |
-| `backend/routers/websocket.py` | **New** -- `WS /{job_id}/stream` |
-| `backend/models/schemas.py` | **Modified** -- added `AgentStreamEventResponse` |
-| `backend/main.py` | **Modified** -- registers the new router |
-| `backend/routers/__init__.py` | **Modified** -- docstring only |
-| `frontend/src/hooks/useAnalysisStream.ts` | **New** -- WebSocket-consuming React hook |
-| `frontend/src/components/AgentProgressDemo.tsx` | **New** -- minimal demo viewer |
-| `backend/tests/unit/test_ws_broadcaster.py` | **New** |
-| `backend/tests/unit/test_ws_broadcast_nodes.py` | **New** |
-| `backend/tests/unit/test_websocket_router.py` | **New** |
-| `docs/week-14/T-049-implement-websocket-streaming.md` | **New** -- this document |
+| File                                                  | Change                                                                                                                     |
+| ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `backend/services/ws_broadcaster.py`                  | **New** -- in-process pub/sub registry                                                                                     |
+| `backend/graph/nodes.py`                              | **Modified** -- `_run_broadcast`, `_build_output_preview`, `_summarise_agent_output`; `_persist_after` now also broadcasts |
+| `backend/routers/websocket.py`                        | **New** -- `WS /{job_id}/stream`                                                                                           |
+| `backend/models/schemas.py`                           | **Modified** -- added `AgentStreamEventResponse`                                                                           |
+| `backend/main.py`                                     | **Modified** -- registers the new router                                                                                   |
+| `backend/routers/__init__.py`                         | **Modified** -- docstring only                                                                                             |
+| `frontend/src/hooks/useAnalysisStream.ts`             | **New** -- WebSocket-consuming React hook                                                                                  |
+| `frontend/src/components/AgentProgressDemo.tsx`       | **New** -- minimal demo viewer                                                                                             |
+| `backend/tests/unit/test_ws_broadcaster.py`           | **New**                                                                                                                    |
+| `backend/tests/unit/test_ws_broadcast_nodes.py`       | **New**                                                                                                                    |
+| `backend/tests/unit/test_websocket_router.py`         | **New**                                                                                                                    |
+| `docs/week-14/T-049-implement-websocket-streaming.md` | **New** -- this document                                                                                                   |
 
 No other files were modified. `backend/services/state_persistence.py`
 (T-033) and `backend/services/analysis.py` (T-047/T-048) are reused
@@ -266,7 +269,7 @@ for a dict mutated from multiple OS threads.
 **Why pair each subscriber with its own event loop instead of a
 shared one?** `loop.call_soon_threadsafe(queue.put_nowait, event)` is
 asyncio's own documented mechanism for scheduling a callback onto a
-*specific* loop from any other thread -- captured once, at subscribe
+_specific_ loop from any other thread -- captured once, at subscribe
 time, via `asyncio.get_running_loop()` (which always runs on the route
 handler's loop). This avoids ever touching an `asyncio.Queue` directly
 from the wrong thread.
@@ -279,7 +282,7 @@ Browsers cannot set custom headers on a WebSocket handshake --
 standard, documented workaround; `settings` is still injected the
 normal way via `Depends(get_settings_dependency)` since per-route
 `Depends()` parameters work identically on WebSocket and HTTP routes
-in FastAPI (only *global* `dependencies=[...]` on the app/router
+in FastAPI (only _global_ `dependencies=[...]` on the app/router
 constructor fail to propagate to WebSocket routes, which this router
 does not use).
 
@@ -307,7 +310,7 @@ separately since a failure can occur at any node and has no later
 **Why a custom close code (4404) instead of denying the handshake
 outright?** Starlette supports rejecting a WebSocket connection before
 `accept()`, but the browser-side `WebSocket` API surfaces almost no
-detail about *why* a handshake was denied. Accepting first and closing
+detail about _why_ a handshake was denied. Accepting first and closing
 with an application-specific code in the 4000-4999 range (reserved by
 the WebSocket spec for exactly this) lets a future frontend distinguish
 "bad token" from "not found" from a normal, successful completion.
@@ -357,6 +360,7 @@ on it.
 ### 4. Wire the broadcaster into `backend/graph/nodes.py`
 
 Edit `backend/graph/nodes.py`:
+
 - Add `_NODE_OUTPUT_STATE_FIELD`, `_OUTPUT_PREVIEW_MAX_CHARS`,
   `_truncate_preview`, `_build_output_preview`,
   `_summarise_agent_output`, and `_run_broadcast` immediately after
@@ -523,6 +527,7 @@ Open a PR on GitHub targeting `main`.
 ## PR Details
 
 **PR title:**
+
 ```
 feat(api): implement WebSocket endpoint for real-time agent progress streaming
 ```
@@ -565,7 +570,7 @@ the pipeline reaches its true terminal node (pdf_export) or fails.
 - backend/models/schemas.py -- added AgentStreamEventResponse
   (documents the WS message contract in /docs; the route itself sends
   the TypedDict directly for minimal per-event overhead)
-- backend/main.py, backend/routers/__init__.py -- register the new
+- backend/main.py, backend/routers/**init**.py -- register the new
   router
 - frontend/src/hooks/useAnalysisStream.ts (new) -- WebSocket-consuming
   React hook with runtime payload validation, ahead of the Phase 6
@@ -624,4 +629,4 @@ Next task: **T-050 -- Build result and PDF endpoints**
 
 ---
 
-*End of Document | T-049 Workflow | AIRP Week 14*
+_End of Document | T-049 Workflow | AIRP Week 14_

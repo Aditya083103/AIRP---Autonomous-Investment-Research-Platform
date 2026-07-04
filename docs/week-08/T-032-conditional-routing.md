@@ -10,23 +10,24 @@
 ## Overview
 
 T-032 adds production-grade conditional routing to the AIRP LangGraph
-StateGraph.  Two new routing behaviours are introduced:
+StateGraph. Two new routing behaviours are introduced:
 
 1. **Financials error path** -- if `fetch_financials` returns empty data
    (API rate limit, unknown ticker, network failure), `route_after_research`
    detects `fundamental["error"]` is non-null and routes to a dedicated
-   `error_handler_node`.  The error handler marks the pipeline as degraded
+   `error_handler_node`. The error handler marks the pipeline as degraded
    (NOT failed -- the pipeline continues), writes flags to `risk_flags` and
    `critical_flags`, and forwards to the contrarian node so the committee
    can still produce a cautious memo.
 
 2. **Negative sentiment escalation** -- if `sentiment["sentiment_score"] < -0.8`
-   the news environment is severely negative.  `route_after_research` routes
+   the news environment is severely negative. `route_after_research` routes
    to a `sentiment_escalation_node` which appends
    `NEGATIVE_SENTIMENT_REQUIRES_ADDITIONAL_RESEARCH` to both `risk_flags`
    and `critical_flags`, then forwards to contrarian.
 
 **Acceptance criteria (all must pass):**
+
 - Error path routes correctly for mocked failures
   (`fundamental["error"]` non-null -> `error_handler` node -> continues)
 - Escalation triggers on negative sentiment threshold
@@ -37,15 +38,15 @@ StateGraph.  Two new routing behaviours are introduced:
 
 **Files produced / modified:**
 
-| File | Action | Description |
-|------|--------|-------------|
-| `backend/graph/routing.py` | Modify | Add `ROUTE_ERROR`, `ROUTE_ESCALATE_SENTIMENT`, `NEGATIVE_SENTIMENT_THRESHOLD`, `ESCALATION_FLAG_NEGATIVE_SENTIMENT`, and update `route_after_research` with T-032 logic |
-| `backend/graph/nodes.py` | Modify | Add `NODE_ERROR_HANDLER`, `NODE_SENTIMENT_ESCALATION`, `error_handler_node`, `sentiment_escalation_node` |
-| `backend/graph/graph.py` | Modify | Register 2 new nodes, wire conditional edges from research join, wire forward edges from routing nodes to contrarian |
-| `backend/tests/unit/test_routing.py` | Create | 100+ unit tests for T-032 routing logic, node functions, and end-to-end paths |
-| `backend/tests/unit/test_graph_skeleton.py` | Modify | Update node count assertions from 9 to 11; add new node names to `_ALL_NODE_NAMES` |
-| `backend/tests/unit/test_parallel_research.py` | Modify | Update node count assertions from 9 to 11; add new node names to `_ALL_NODE_NAMES` |
-| `docs/week-08/T-032-conditional-routing.md` | Create | This file |
+| File                                           | Action | Description                                                                                                                                                             |
+| ---------------------------------------------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `backend/graph/routing.py`                     | Modify | Add `ROUTE_ERROR`, `ROUTE_ESCALATE_SENTIMENT`, `NEGATIVE_SENTIMENT_THRESHOLD`, `ESCALATION_FLAG_NEGATIVE_SENTIMENT`, and update `route_after_research` with T-032 logic |
+| `backend/graph/nodes.py`                       | Modify | Add `NODE_ERROR_HANDLER`, `NODE_SENTIMENT_ESCALATION`, `error_handler_node`, `sentiment_escalation_node`                                                                |
+| `backend/graph/graph.py`                       | Modify | Register 2 new nodes, wire conditional edges from research join, wire forward edges from routing nodes to contrarian                                                    |
+| `backend/tests/unit/test_routing.py`           | Create | 100+ unit tests for T-032 routing logic, node functions, and end-to-end paths                                                                                           |
+| `backend/tests/unit/test_graph_skeleton.py`    | Modify | Update node count assertions from 9 to 11; add new node names to `_ALL_NODE_NAMES`                                                                                      |
+| `backend/tests/unit/test_parallel_research.py` | Modify | Update node count assertions from 9 to 11; add new node names to `_ALL_NODE_NAMES`                                                                                      |
+| `docs/week-08/T-032-conditional-routing.md`    | Create | This file                                                                                                                                                               |
 
 ---
 
@@ -67,8 +68,8 @@ research join
 ```
 
 **Design rationale:** The Fundamental Analyst is the primary quantitative
-anchor.  Running valuation on top of missing fundamental data produces
-unreliable output.  The error_handler does NOT terminate -- it marks the
+anchor. Running valuation on top of missing fundamental data produces
+unreliable output. The error_handler does NOT terminate -- it marks the
 gap and lets the committee produce a memo flagged "data incomplete".
 
 ### Escalation Path (negative sentiment)
@@ -86,15 +87,15 @@ research join
 ```
 
 **Design rationale:** Score -0.8 is two standard deviations below the
-typical range for Indian blue-chips.  At this level the news environment
+typical range for Indian blue-chips. At this level the news environment
 suggests active management misconduct, fraud allegations, or regulatory
-action.  The escalation flag causes downstream agents to apply maximum
+action. The escalation flag causes downstream agents to apply maximum
 caution without forking the pipeline.
 
 ### Priority: Error before Escalation
 
 If both conditions are true (fundamental error AND sentiment < -0.8),
-the error path takes priority.  `route_after_research` checks fundamentals
+the error path takes priority. `route_after_research` checks fundamentals
 first, sentiment second.
 
 ---
@@ -197,7 +198,7 @@ find backend/graph backend/tests -name "*.pyc" -delete 2>/dev/null; true
 python -m pytest backend/tests/unit/ -v --tb=short -q
 ```
 
-Expected: all tests pass, no failures.  Key tests to watch:
+Expected: all tests pass, no failures. Key tests to watch:
 
 - `test_routing.py` -- all 100+ T-032 routing tests
 - `test_graph_skeleton.py::TestNodeRegistration::test_exactly_nine_content_nodes`
@@ -251,7 +252,7 @@ feat(graph): implement conditional routing logic (T-032)
 
 **PR Description:**
 
-```markdown
+````markdown
 ## Summary
 
 Implements T-032 conditional routing logic in the AIRP LangGraph StateGraph.
@@ -288,6 +289,7 @@ negative news environments (score < -0.8).
 export ENVIRONMENT=test
 python -m pytest backend/tests/unit/ -v --tb=short
 ```
+````
 
 All 100+ new tests pass. All existing T-030 and T-031 tests still pass.
 graph compilation succeeds with 11 content nodes. Mermaid diagram updated.
@@ -305,6 +307,7 @@ nodes wired between the research join and the contrarian node.
 ## Related Issues
 
 Closes #32
+
 ```
 
 ---
@@ -312,6 +315,7 @@ Closes #32
 ## Commit Message
 
 ```
+
 feat(graph): implement conditional routing logic (T-032)
 
 - route_after_research routes to error_handler when fundamental["error"]
@@ -330,6 +334,7 @@ feat(graph): implement conditional routing logic (T-032)
   boundary values, priority, and end-to-end graph invocation
 
 Closes #32
+
 ```
 
 ---
@@ -383,3 +388,4 @@ is not considered "breaching" the threshold.
 | `backend/tests/unit/test_graph_skeleton.py` | +10 | Node count 9->11, new node names in `_ALL_NODE_NAMES` |
 | `backend/tests/unit/test_parallel_research.py` | +10 | Node count 9->11, new node names in `_ALL_NODE_NAMES` |
 | `docs/week-08/T-032-conditional-routing.md` | New | This document |
+```

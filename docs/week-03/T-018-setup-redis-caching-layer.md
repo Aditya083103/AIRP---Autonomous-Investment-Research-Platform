@@ -17,13 +17,13 @@ logic.
 
 ### Acceptance Criteria (all met)
 
-| Criterion | How it is satisfied |
-|-----------|---------------------|
-| Cached calls return in `<10 ms` | Redis GET is O(1); decorator short-circuits before any network call |
+| Criterion                                                      | How it is satisfied                                                                         |
+| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| Cached calls return in `<10 ms`                                | Redis GET is O(1); decorator short-circuits before any network call                         |
 | TTLs respected: stock=15 min, news=1 h, macro=24 h, ratios=1 h | `STOCK_TTL=900`, `NEWS_TTL=3600`, `RATIOS_TTL=3600`, `MACRO_TTL=86400` in `redis_client.py` |
-| Tests verify cache hits | `TestCachedDecoratorCacheHit` — wrapped function call count = 0 on hit |
-| Tests verify cache misses | `TestCachedDecoratorCacheMiss` — live function called + result cached |
-| Tests verify TTL forwarding | `TestCachedDecoratorTTL` — parametrised over all four TTL constants |
+| Tests verify cache hits                                        | `TestCachedDecoratorCacheHit` — wrapped function call count = 0 on hit                      |
+| Tests verify cache misses                                      | `TestCachedDecoratorCacheMiss` — live function called + result cached                       |
+| Tests verify TTL forwarding                                    | `TestCachedDecoratorTTL` — parametrised over all four TTL constants                         |
 
 ---
 
@@ -39,18 +39,18 @@ git checkout -b feat/data-redis-cache
 
 ### 2. Files changed
 
-| Action | File |
-|--------|------|
-| **New** | `backend/db/redis_client.py` |
-| **Updated** | `backend/db/__init__.py` |
-| **Updated** | `backend/tools/cache.py` |
-| **Updated** | `backend/tools/stock_price.py` |
-| **Updated** | `backend/tools/news.py` |
-| **Updated** | `backend/tools/ratios.py` |
-| **Updated** | `backend/tools/macro.py` |
-| **New** | `backend/tests/unit/test_redis_client.py` |
-| **Updated** | `backend/tests/unit/test_cache.py` |
-| **New** | `docs/week-04/T-018-setup-redis-caching-layer.md` |
+| Action      | File                                              |
+| ----------- | ------------------------------------------------- |
+| **New**     | `backend/db/redis_client.py`                      |
+| **Updated** | `backend/db/__init__.py`                          |
+| **Updated** | `backend/tools/cache.py`                          |
+| **Updated** | `backend/tools/stock_price.py`                    |
+| **Updated** | `backend/tools/news.py`                           |
+| **Updated** | `backend/tools/ratios.py`                         |
+| **Updated** | `backend/tools/macro.py`                          |
+| **New**     | `backend/tests/unit/test_redis_client.py`         |
+| **Updated** | `backend/tests/unit/test_cache.py`                |
+| **New**     | `docs/week-04/T-018-setup-redis-caching-layer.md` |
 
 ### 3. Run pre-commit and tests
 
@@ -92,7 +92,7 @@ feat(data): setup Redis caching layer with @cached decorator (T-018)
 
 ### Description
 
-```markdown
+````markdown
 ## Summary
 
 Promotes the minimal T-014 Redis helper into a production-grade caching
@@ -119,14 +119,14 @@ the cache with the correct per-resource TTLs.
   compatibility with `macro.py`.
 - **`backend/tools/stock_price.py`**: `_fetch_stock_cached` wraps
   `_fetch_stock_data` with `@cached(key="airp:stock:{ticker}:{period}",
-  ttl=STOCK_TTL)`. `_fetch_from_yfinance` legacy alias preserved for
+ttl=STOCK_TTL)`. `_fetch_from_yfinance` legacy alias preserved for
   existing tests.
 - **`backend/tools/news.py`**: `_fetch_news_cached` wraps
   `_fetch_news_from_api` with `@cached(key="airp:news:{company_name}",
-  ttl=NEWS_TTL)`.
+ttl=NEWS_TTL)`.
 - **`backend/tools/ratios.py`**: `_fetch_ratios_cached` wraps
   `_fetch_ratios_from_sources` with `@cached(key="airp:ratios:{ticker}",
-  ttl=RATIOS_TTL)`. Both `fetch_ratios` and `fetch_ratios_summary` use the
+ttl=RATIOS_TTL)`. Both `fetch_ratios` and `fetch_ratios_summary` use the
   cache.
 - **`backend/tools/macro.py`**: updated to import `MACRO_TTL` from cache
   module; `_cache_ttl()` falls back to it instead of the private
@@ -146,6 +146,7 @@ python -m pytest backend/tests/unit/test_redis_client.py -v
 python -m pytest backend/tests/unit/test_cache.py -v
 python -m pytest --tb=short -q --cov=backend --cov-report=term-missing
 ```
+````
 
 All tests run offline with no live Redis server (ENVIRONMENT=test bypasses
 the connection entirely; fake clients injected via `unittest.mock.patch`).
@@ -161,6 +162,7 @@ N/A — no UI changes.
 ## Related Issues
 
 Closes #18
+
 ```
 
 ---
@@ -170,15 +172,17 @@ Closes #18
 ### Module dependency graph (T-018)
 
 ```
-backend/db/redis_client.py       ← no AIRP deps; pure Redis + stdlib
-        ↑
-backend/tools/cache.py           ← imports from redis_client (TTLs + client)
-        ↑
-backend/tools/stock_price.py     ← imports cached, STOCK_TTL from cache
-backend/tools/news.py            ← imports cached, NEWS_TTL from cache
-backend/tools/ratios.py          ← imports cached, RATIOS_TTL from cache
-backend/tools/macro.py           ← imports MACRO_TTL, cache_get_json,
-                                   cache_set_json from cache (manual style)
+
+backend/db/redis_client.py ← no AIRP deps; pure Redis + stdlib
+↑
+backend/tools/cache.py ← imports from redis_client (TTLs + client)
+↑
+backend/tools/stock_price.py ← imports cached, STOCK_TTL from cache
+backend/tools/news.py ← imports cached, NEWS_TTL from cache
+backend/tools/ratios.py ← imports cached, RATIOS_TTL from cache
+backend/tools/macro.py ← imports MACRO_TTL, cache_get_json,
+cache_set_json from cache (manual style)
+
 ```
 
 `macro.py` still uses the manual `cache_get_json` / `cache_set_json` pattern
@@ -201,6 +205,7 @@ instance is shared with other services.
 ### Graceful degradation chain
 
 ```
+
 get_redis_client() called
 │
 ├── ENVIRONMENT=test? → return None (tests always hermetic)
@@ -208,7 +213,8 @@ get_redis_client() called
 ├── REDIS_URL empty? → latch flag, return None
 ├── redis.Redis.from_url(url) raises? → latch flag, return None
 └── client.ping() raises? → latch flag, return None
-    └── PING passes → memoise client, return it
+└── PING passes → memoise client, return it
+
 ```
 
 A `None` client propagates through `cache_get_json` → returns `None` (miss)
@@ -218,19 +224,21 @@ data as if the cache were not there.
 ### `@cached` decorator behaviour
 
 ```
+
 @cached(key="airp:stock:{ticker}:{period}", ttl=STOCK_TTL)
 def _fetch_stock_cached(ticker: str, period: str) -> dict[str, Any]:
-    return _fetch_stock_data(ticker=ticker, period=period)
+return _fetch_stock_data(ticker=ticker, period=period)
 
 Call: _fetch_stock_cached(ticker="TCS.NS", period="1y")
 
-  1. Resolve key: "airp:stock:{ticker}:{period}" → "airp:stock:TCS.NS:1y"
-  2. cache_get_json("airp:stock:TCS.NS:1y")
-     ├── HIT  → return cached dict immediately (0 yFinance calls)
-     └── MISS → call _fetch_stock_data(ticker="TCS.NS", period="1y")
-                 ├── Result has "error" key? → return without caching
-                 └── Success → cache_set_json(key, result, 900)
-                               return result
+1. Resolve key: "airp:stock:{ticker}:{period}" → "airp:stock:TCS.NS:1y"
+2. cache_get_json("airp:stock:TCS.NS:1y")
+   ├── HIT → return cached dict immediately (0 yFinance calls)
+   └── MISS → call _fetch_stock_data(ticker="TCS.NS", period="1y")
+   ├── Result has "error" key? → return without caching
+   └── Success → cache_set_json(key, result, 900)
+   return result
+
 ```
 
 ### Why errors are not cached
@@ -271,10 +279,14 @@ should resolve on the next request.
 ## EOD Update Template
 
 ```
+
 EOD Update [Date]:
 Completed: T-018
 Merged to main: feat/data-redis-cache
 Current week: 4 │ Current phase: 1
 Blocker (if any): None
 Next session: T-019 (earnings transcript caching / Phase 1 wrap-up)
+
+```
+
 ```

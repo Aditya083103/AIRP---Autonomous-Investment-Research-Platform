@@ -26,6 +26,7 @@ containing the final `BUY` / `HOLD` / `SELL` verdict, a `conviction_score`
 `key_risks[]`, and `key_catalysts[]`.
 
 **Acceptance criteria (all must pass):**
+
 - Portfolio Manager's decision references specific points from the debate
 - Conviction score correlates with quality of analysis
 
@@ -33,13 +34,13 @@ containing the final `BUY` / `HOLD` / `SELL` verdict, a `conviction_score`
 
 ## Files Changed
 
-| File | Change |
-|------|--------|
-| `backend/agents/output_models.py` | **Modified** -- added `time_horizon`, `key_risks`, `key_catalysts` fields to `InvestmentDecision` |
-| `backend/agents/portfolio_manager.py` | **New** -- the full Portfolio Manager agent: deterministic verdict/conviction/weights/horizon/risks/catalysts engine plus LLM narrative synthesis |
-| `backend/graph/nodes.py` | **Modified** -- `_portfolio_manager_impl` now delegates to `run_portfolio_manager_decision` instead of the T-032 stub; import added |
-| `backend/graph/graph.py` | **Modified** -- docstring/comment updates only; topology and wiring were already correct from T-031/T-032 (no edge changes needed) |
-| `backend/tests/unit/test_portfolio_manager.py` | **New** -- unit test suite covering every deterministic helper, the full core agent, the LangGraph node, schema validation, and tracing |
+| File                                           | Change                                                                                                                                            |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `backend/agents/output_models.py`              | **Modified** -- added `time_horizon`, `key_risks`, `key_catalysts` fields to `InvestmentDecision`                                                 |
+| `backend/agents/portfolio_manager.py`          | **New** -- the full Portfolio Manager agent: deterministic verdict/conviction/weights/horizon/risks/catalysts engine plus LLM narrative synthesis |
+| `backend/graph/nodes.py`                       | **Modified** -- `_portfolio_manager_impl` now delegates to `run_portfolio_manager_decision` instead of the T-032 stub; import added               |
+| `backend/graph/graph.py`                       | **Modified** -- docstring/comment updates only; topology and wiring were already correct from T-031/T-032 (no edge changes needed)                |
+| `backend/tests/unit/test_portfolio_manager.py` | **New** -- unit test suite covering every deterministic helper, the full core agent, the LangGraph node, schema validation, and tracing           |
 
 ---
 
@@ -52,16 +53,16 @@ A two-stage pipeline, following the same pattern established by
 
 **Stage 1 -- Deterministic decision (no LLM, fully testable in isolation):**
 
-| Function | Purpose |
-|----------|---------|
-| `_compute_agent_weights(...)` | Assigns a 0.0-1.0 weight to each of the 7 prior agents (fundamental and valuation weighted highest, sentiment lowest), zeroing and redistributing weight away from any agent that errored or produced no output, so weights always sum to 1.0 |
-| `_determine_verdict(...)` | Two hard gates (risk_score >= 8 forces SELL; overvalued + weak fundamentals forces SELL) followed by a weighted bullish/bearish point tally across all six other agents, with a soft downgrade rule that pulls a marginal BUY down to HOLD when heavy critical flags are present |
-| `_score_conviction(...)` | **The core acceptance-criterion function.** Starts at a neutral baseline and adjusts based on signal *agreement* across agents, the Contrarian's credibility (`bear_conviction`), missing/errored data, critical flag count, and how many debate rounds were needed -- NOT on how strongly bullish or bearish the signals are |
-| `_determine_time_horizon(...)` | Chooses a holding-period phrase based on what is actually driving the verdict: technically-led calls get 3-6 months, high-margin-of-safety DCF-led BUYs get 3-5 years, everything else gets the standard 12-month review cycle |
-| `_build_price_target(...)` | Formats the Valuation Agent's `intrinsic_value_per_share` into a price-target string paired with the time horizon; returns `None` when no intrinsic value is available |
-| `_build_key_risks(...)` | Builds the structured `key_risks[]` list: Risk Officer's `critical_flags` first, then the Contrarian's `strongest_argument` and `overlooked_risks`, then any remaining state-level critical flags, de-duplicated and capped at 6 |
-| `_build_key_catalysts(...)` | Builds `key_catalysts[]` from macro tailwinds, a DCF-upside re-rating catalyst (when margin of safety is high/moderate), macro headwinds framed as "monitor" items, and fundamental strengths, capped at 5 |
-| `_extract_debate_highlights(...)` | Converts `state["debate_rounds"]` into one human-readable `"Round N: <contrarian challenge>"` line per round, used to ground the LLM prompt in real debate content instead of letting it invent plausible-sounding detail |
+| Function                          | Purpose                                                                                                                                                                                                                                                                                                                       |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `_compute_agent_weights(...)`     | Assigns a 0.0-1.0 weight to each of the 7 prior agents (fundamental and valuation weighted highest, sentiment lowest), zeroing and redistributing weight away from any agent that errored or produced no output, so weights always sum to 1.0                                                                                 |
+| `_determine_verdict(...)`         | Two hard gates (risk_score >= 8 forces SELL; overvalued + weak fundamentals forces SELL) followed by a weighted bullish/bearish point tally across all six other agents, with a soft downgrade rule that pulls a marginal BUY down to HOLD when heavy critical flags are present                                              |
+| `_score_conviction(...)`          | **The core acceptance-criterion function.** Starts at a neutral baseline and adjusts based on signal _agreement_ across agents, the Contrarian's credibility (`bear_conviction`), missing/errored data, critical flag count, and how many debate rounds were needed -- NOT on how strongly bullish or bearish the signals are |
+| `_determine_time_horizon(...)`    | Chooses a holding-period phrase based on what is actually driving the verdict: technically-led calls get 3-6 months, high-margin-of-safety DCF-led BUYs get 3-5 years, everything else gets the standard 12-month review cycle                                                                                                |
+| `_build_price_target(...)`        | Formats the Valuation Agent's `intrinsic_value_per_share` into a price-target string paired with the time horizon; returns `None` when no intrinsic value is available                                                                                                                                                        |
+| `_build_key_risks(...)`           | Builds the structured `key_risks[]` list: Risk Officer's `critical_flags` first, then the Contrarian's `strongest_argument` and `overlooked_risks`, then any remaining state-level critical flags, de-duplicated and capped at 6                                                                                              |
+| `_build_key_catalysts(...)`       | Builds `key_catalysts[]` from macro tailwinds, a DCF-upside re-rating catalyst (when margin of safety is high/moderate), macro headwinds framed as "monitor" items, and fundamental strengths, capped at 5                                                                                                                    |
+| `_extract_debate_highlights(...)` | Converts `state["debate_rounds"]` into one human-readable `"Round N: <contrarian challenge>"` line per round, used to ground the LLM prompt in real debate content instead of letting it invent plausible-sounding detail                                                                                                     |
 
 **Stage 2 -- LLM narrative synthesis:**
 
@@ -82,7 +83,7 @@ falls back to a fully deterministic summary built directly from the
 Stage 1 numbers, including a guaranteed `contrarian_response` that names
 the strongest argument even without LLM assistance.
 
-### Why conviction tracks *quality*, not *direction*
+### Why conviction tracks _quality_, not _direction_
 
 A literal reading of "conviction score correlates with quality of
 analysis" ruled out the simplest implementation (conviction = strength
@@ -165,22 +166,22 @@ it is now fully implemented as of T-041.
 
 ## Tests
 
-| Test class | What it covers |
-|------------|-----------------|
-| `TestComputeAgentWeights` | Weights sum to 1.0, all 7 agents present, errored/empty agents zeroed and redistributed, all-agents-failed degenerate case, fundamental/valuation outweigh sentiment |
-| `TestDetermineVerdict` | Strong bull -> BUY, prohibitive risk hard gate -> SELL, overvalued+weak-fundamentals hard gate -> SELL, weak bearish profile, mixed signals -> HOLD, strong Contrarian downgrades a marginal BUY, verdict always in the allowed set across multiple profiles including the empty-state edge case |
-| `TestScoreConviction` | Bounds check, the core quality-vs-direction acceptance criterion (clean profile beats conflicting profile at the same nominal verdict), missing data reduces conviction, more debate rounds reduce conviction, high bear_conviction reduces conviction, critical flags reduce conviction |
-| `TestDetermineTimeHorizon` | HOLD -> quarterly review, technically-driven BUY -> short horizon, high-margin-of-safety BUY -> long horizon, default case -> 12 months |
-| `TestBuildPriceTarget` | Missing intrinsic value -> None, correct formatting, non-numeric input handled gracefully |
-| `TestBuildKeyRisks` | Critical flags prioritised first, strongest_argument included, capped at 6, fallback text when nothing found, de-duplication across overlapping sources |
-| `TestBuildKeyCatalysts` | Macro tailwinds included, DCF-upside catalyst generated, capped at 5, fallback text when nothing found |
-| `TestExtractDebateHighlights` | Empty rounds -> empty list, one/two rounds produce correctly-numbered highlights, highlight text contains the actual contrarian challenge |
-| `TestBuildPortfolioManagerPrompt` | Prompt contains company/ticker, the predetermined verdict/conviction (so the LLM is told, not asked), debate highlights, the Contrarian's strongest argument, key_risks/key_catalysts, and handles a fully-empty state without raising |
-| `TestRunPortfolioManagerCore` | Returns `InvestmentDecision`, verdict/conviction within bounds, investment_thesis references a named debate round, contrarian_response is always populated, LLM failure produces a valid non-raising fallback with `error is None`, malformed LLM JSON falls back gracefully, empty research dicts handled, key_risks/key_catalysts/time_horizon always populated |
-| `TestRunPortfolioManagerDecisionNode` | Full LangGraph node contract: `decision`/`final_verdict`/`conviction_score`/`price_target` keys present, all `InvestmentDecision` fields present in the dumped dict, missing-ticker error path, `None` research dicts handled, JSON-serialisable output, end-to-end strong-bull-state -> BUY with conviction >= 6, end-to-end high-risk-state -> SELL, end-to-end debate-round reference check |
-| `TestInvestmentDecisionSchemaValidation` | `conviction_score` bounds (1-10) rejected outside range, new field defaults (`time_horizon="12 months"`, empty `key_risks`/`key_catalysts`), `debate_rounds_used >= 1` enforced, model is frozen, `model_dump()` round-trips the new fields correctly, `verdict` is a required field |
-| `TestSystemPrompt` | Non-empty, mentions RULES/OUTPUT SCHEMA/JSON, ASCII-only, mentions `contrarian_response` and `investment_thesis`, mentions "debate" |
-| `TestTracingIntegration` | `@traced_agent` applied (`__wrapped__` present and callable) |
+| Test class                               | What it covers                                                                                                                                                                                                                                                                                                                                                                                 |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `TestComputeAgentWeights`                | Weights sum to 1.0, all 7 agents present, errored/empty agents zeroed and redistributed, all-agents-failed degenerate case, fundamental/valuation outweigh sentiment                                                                                                                                                                                                                           |
+| `TestDetermineVerdict`                   | Strong bull -> BUY, prohibitive risk hard gate -> SELL, overvalued+weak-fundamentals hard gate -> SELL, weak bearish profile, mixed signals -> HOLD, strong Contrarian downgrades a marginal BUY, verdict always in the allowed set across multiple profiles including the empty-state edge case                                                                                               |
+| `TestScoreConviction`                    | Bounds check, the core quality-vs-direction acceptance criterion (clean profile beats conflicting profile at the same nominal verdict), missing data reduces conviction, more debate rounds reduce conviction, high bear_conviction reduces conviction, critical flags reduce conviction                                                                                                       |
+| `TestDetermineTimeHorizon`               | HOLD -> quarterly review, technically-driven BUY -> short horizon, high-margin-of-safety BUY -> long horizon, default case -> 12 months                                                                                                                                                                                                                                                        |
+| `TestBuildPriceTarget`                   | Missing intrinsic value -> None, correct formatting, non-numeric input handled gracefully                                                                                                                                                                                                                                                                                                      |
+| `TestBuildKeyRisks`                      | Critical flags prioritised first, strongest_argument included, capped at 6, fallback text when nothing found, de-duplication across overlapping sources                                                                                                                                                                                                                                        |
+| `TestBuildKeyCatalysts`                  | Macro tailwinds included, DCF-upside catalyst generated, capped at 5, fallback text when nothing found                                                                                                                                                                                                                                                                                         |
+| `TestExtractDebateHighlights`            | Empty rounds -> empty list, one/two rounds produce correctly-numbered highlights, highlight text contains the actual contrarian challenge                                                                                                                                                                                                                                                      |
+| `TestBuildPortfolioManagerPrompt`        | Prompt contains company/ticker, the predetermined verdict/conviction (so the LLM is told, not asked), debate highlights, the Contrarian's strongest argument, key_risks/key_catalysts, and handles a fully-empty state without raising                                                                                                                                                         |
+| `TestRunPortfolioManagerCore`            | Returns `InvestmentDecision`, verdict/conviction within bounds, investment_thesis references a named debate round, contrarian_response is always populated, LLM failure produces a valid non-raising fallback with `error is None`, malformed LLM JSON falls back gracefully, empty research dicts handled, key_risks/key_catalysts/time_horizon always populated                              |
+| `TestRunPortfolioManagerDecisionNode`    | Full LangGraph node contract: `decision`/`final_verdict`/`conviction_score`/`price_target` keys present, all `InvestmentDecision` fields present in the dumped dict, missing-ticker error path, `None` research dicts handled, JSON-serialisable output, end-to-end strong-bull-state -> BUY with conviction >= 6, end-to-end high-risk-state -> SELL, end-to-end debate-round reference check |
+| `TestInvestmentDecisionSchemaValidation` | `conviction_score` bounds (1-10) rejected outside range, new field defaults (`time_horizon="12 months"`, empty `key_risks`/`key_catalysts`), `debate_rounds_used >= 1` enforced, model is frozen, `model_dump()` round-trips the new fields correctly, `verdict` is a required field                                                                                                           |
+| `TestSystemPrompt`                       | Non-empty, mentions RULES/OUTPUT SCHEMA/JSON, ASCII-only, mentions `contrarian_response` and `investment_thesis`, mentions "debate"                                                                                                                                                                                                                                                            |
+| `TestTracingIntegration`                 | `@traced_agent` applied (`__wrapped__` present and callable)                                                                                                                                                                                                                                                                                                                                   |
 
 All LLM calls are mocked via `@patch("backend.agents.portfolio_manager.get_llm")`,
 following the identical pattern used in `test_contrarian_investor.py` and
@@ -245,18 +246,18 @@ weight distribution's interpretability).
 
 ## AIRP Standards Compliance
 
-| Standard | Status |
-|----------|--------|
-| No `from __future__ import annotations` in production modules | OK -- not present in `portfolio_manager.py` |
-| Plain ASCII section comments (`# ---`) | OK -- no Unicode box-drawing, no rupee signs, no em-dashes, no arrows in the new file |
-| No bare `# type: ignore` | OK -- none added; the one `type: ignore[misc]` in the test file's frozen-model mutation test follows the documented exception for that pattern |
-| `mypy --strict` safe | OK -- every new function fully annotated with explicit parameter and return types; `cast()`/explicit `Optional` used where needed, no untyped defs |
-| Tools/agents never raise -- graceful degradation on bad input | OK -- `_run_portfolio_manager_core` never raises; verified for missing ticker, `None` research dicts, empty research dicts, LLM exceptions, and malformed LLM JSON |
-| `@traced_agent` / LangSmith | OK -- `run_portfolio_manager_decision` is wrapped with `@traced_agent("portfolio_manager")`, verified by `TestTracingIntegration` |
-| Persistence wrapper applied (T-033 pattern) | OK -- unchanged; `portfolio_manager_node` in `nodes.py` keeps its existing `_persist_after(profile_node(...))` composition |
-| All lines <= 88 chars | OK -- verified directly against the new files |
-| flake8 (bugbear, comprehensions) clean | OK -- no `getattr` with constant string, no bare `pytest.raises(Exception)`, exception types are specific in test fallback paths |
-| `ENVIRONMENT=test` guard respected | OK -- new test file uses the same `os.environ.setdefault("ENVIRONMENT", "test")` pattern as every other agent test module, and the autouse `require_test_environment` fixture in `conftest.py` applies automatically |
+| Standard                                                      | Status                                                                                                                                                                                                               |
+| ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| No `from __future__ import annotations` in production modules | OK -- not present in `portfolio_manager.py`                                                                                                                                                                          |
+| Plain ASCII section comments (`# ---`)                        | OK -- no Unicode box-drawing, no rupee signs, no em-dashes, no arrows in the new file                                                                                                                                |
+| No bare `# type: ignore`                                      | OK -- none added; the one `type: ignore[misc]` in the test file's frozen-model mutation test follows the documented exception for that pattern                                                                       |
+| `mypy --strict` safe                                          | OK -- every new function fully annotated with explicit parameter and return types; `cast()`/explicit `Optional` used where needed, no untyped defs                                                                   |
+| Tools/agents never raise -- graceful degradation on bad input | OK -- `_run_portfolio_manager_core` never raises; verified for missing ticker, `None` research dicts, empty research dicts, LLM exceptions, and malformed LLM JSON                                                   |
+| `@traced_agent` / LangSmith                                   | OK -- `run_portfolio_manager_decision` is wrapped with `@traced_agent("portfolio_manager")`, verified by `TestTracingIntegration`                                                                                    |
+| Persistence wrapper applied (T-033 pattern)                   | OK -- unchanged; `portfolio_manager_node` in `nodes.py` keeps its existing `_persist_after(profile_node(...))` composition                                                                                           |
+| All lines <= 88 chars                                         | OK -- verified directly against the new files                                                                                                                                                                        |
+| flake8 (bugbear, comprehensions) clean                        | OK -- no `getattr` with constant string, no bare `pytest.raises(Exception)`, exception types are specific in test fallback paths                                                                                     |
+| `ENVIRONMENT=test` guard respected                            | OK -- new test file uses the same `os.environ.setdefault("ENVIRONMENT", "test")` pattern as every other agent test module, and the autouse `require_test_environment` fixture in `conftest.py` applies automatically |
 
 ---
 
@@ -287,12 +288,14 @@ docs/week-11/T-041-portfolio-manager.md            (new)
 ### 3. Set environment and run the new test file
 
 **Windows CMD:**
+
 ```cmd
 set ENVIRONMENT=test
 python -m pytest backend/tests/unit/test_portfolio_manager.py -v --tb=short
 ```
 
 **Git Bash / Mac / Linux:**
+
 ```bash
 export ENVIRONMENT=test
 python -m pytest backend/tests/unit/test_portfolio_manager.py -v --tb=short
@@ -381,6 +384,7 @@ Open a PR on GitHub targeting `main`.
 ## PR Details
 
 **PR title:**
+
 ```
 feat(agents): implement Portfolio Manager as final decision synthesiser
 ```
@@ -466,4 +470,4 @@ Backend) can be built on top of a complete agent pipeline.
 
 ---
 
-*End of Document | T-041 Workflow | AIRP Week 11*
+_End of Document | T-041 Workflow | AIRP Week 11_

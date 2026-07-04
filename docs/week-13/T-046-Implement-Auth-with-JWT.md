@@ -14,6 +14,7 @@ T-046 implements self-hosted authentication: `POST /auth/register`,
 self-issued JWT access tokens.
 
 **Acceptance criteria (all must pass):**
+
 - Register -> login -> access protected route works end-to-end
 - Invalid token returns 401
 
@@ -26,11 +27,11 @@ and `.env.example` were inspected and found to be built entirely around
 **Clerk** as the auth provider: `clerk_user_id` was the canonical,
 unique identity column, `CLERK_SECRET_KEY`/`CLERK_PUBLISHABLE_KEY`/
 `CLERK_JWT_ISSUER` were already wired in `config.py` with comments
-explicitly stating Clerk is *"required in Phase 5"*, and there was no
+explicitly stating Clerk is _"required in Phase 5"_, and there was no
 `password_hash` column anywhere.
 
 This directly conflicts with T-046's literal task description: bcrypt-
-hashed passwords and self-issued JWTs are a *self-hosted* auth model,
+hashed passwords and self-issued JWTs are a _self-hosted_ auth model,
 incompatible with a `users` table designed around an external identity
 provider owning authentication. Rather than silently picking one
 interpretation, this was flagged explicitly and confirmed: **build
@@ -57,6 +58,7 @@ systems, not one.
 ### Schema migration: `users` table, Clerk -> self-hosted
 
 **`backend/models/orm.py`** -- `User` model rewritten:
+
 - `clerk_user_id` removed entirely
 - `email` is now `nullable=False, unique=True, index=True` -- the
   canonical login identity (previously this role belonged to
@@ -70,6 +72,7 @@ systems, not one.
 
 **`backend/migrations/versions/20260624_0000_c3d4e5f6a7b8_migrate_users_to_self_hosted_auth.py`**
 (new) -- the actual Alembic migration:
+
 - Drops `ix_users_clerk_user_id` and the `clerk_user_id` column
 - Drops the old non-unique `ix_users_email` index, replaces it with a
   unique constraint (`uq_users_email`) and a new unique index
@@ -95,6 +98,7 @@ Pydantic v2 request/response schemas, kept separate from `orm.py`
 deliberately -- these are the API contract, not the database schema,
 and mixing them invites accidentally serialising `password_hash` into
 a response:
+
 - `UserRegisterRequest` -- email (`EmailStr`), password (8-72 chars,
   rejects whitespace-only), optional display_name
 - `UserLoginRequest` -- email, password
@@ -111,6 +115,7 @@ a response:
 ### `backend/services/auth.py` (new)
 
 Pure business logic, no FastAPI imports, fully testable in isolation:
+
 - `hash_password()` / `verify_password()` -- bcrypt via passlib's
   `CryptContext`; `verify_password` catches `ValueError` on a malformed
   hash and returns `False` rather than raising, so a corrupted
@@ -132,6 +137,7 @@ Pure business logic, no FastAPI imports, fully testable in isolation:
 
 `get_current_user()` -- the dependency every protected route adds to
 its signature:
+
 - Uses `fastapi.security.OAuth2PasswordBearer(tokenUrl="/auth/login")`,
   which wires up the "Authorize" button in Swagger UI at `/docs` so the
   full flow is testable interactively in the browser, not just via
@@ -188,22 +194,22 @@ WeasyPrint/pydyf compatibility break.
 
 ## Files Changed
 
-| File | Change |
-|------|--------|
-| `backend/models/orm.py` | **Modified** -- `User` model: drop `clerk_user_id`, add `password_hash`/`is_active`, `email` becomes unique |
-| `backend/migrations/versions/20260624_..._migrate_users_to_self_hosted_auth.py` | **New** -- Alembic migration for the above |
-| `backend/models/schemas.py` | **New** -- Pydantic request/response schemas |
-| `backend/services/auth.py` | **New** -- password hashing + JWT issuance/verification |
-| `backend/dependencies/auth.py` | **New** -- `get_current_user` dependency |
-| `backend/routers/auth.py` | **New** -- `/auth/register`, `/auth/login`, `/auth/me` |
-| `backend/main.py` | **Modified** -- register `auth.router`; docstring update |
-| `backend/routers/__init__.py` | **Modified** -- `auth.py` moved from "planned" to "current" |
-| `backend/dependencies/__init__.py` | **Modified** -- `auth.py` moved from "planned" to "current" |
-| `backend/requirements.txt` | **Modified** -- added `passlib[bcrypt]==1.7.4`, `bcrypt==4.0.1` |
-| `backend/tests/unit/test_orm_models.py` | **Modified** -- `TestUserColumns` rewritten for the new schema |
-| `backend/tests/unit/test_auth_service.py` | **New** -- password hashing + JWT unit tests |
-| `backend/tests/unit/test_dependencies_auth.py` | **New** -- `get_current_user` unit tests, mocked session |
-| `backend/tests/unit/test_auth_router.py` | **New** -- end-to-end HTTP tests, fake in-memory session |
+| File                                                                            | Change                                                                                                      |
+| ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `backend/models/orm.py`                                                         | **Modified** -- `User` model: drop `clerk_user_id`, add `password_hash`/`is_active`, `email` becomes unique |
+| `backend/migrations/versions/20260624_..._migrate_users_to_self_hosted_auth.py` | **New** -- Alembic migration for the above                                                                  |
+| `backend/models/schemas.py`                                                     | **New** -- Pydantic request/response schemas                                                                |
+| `backend/services/auth.py`                                                      | **New** -- password hashing + JWT issuance/verification                                                     |
+| `backend/dependencies/auth.py`                                                  | **New** -- `get_current_user` dependency                                                                    |
+| `backend/routers/auth.py`                                                       | **New** -- `/auth/register`, `/auth/login`, `/auth/me`                                                      |
+| `backend/main.py`                                                               | **Modified** -- register `auth.router`; docstring update                                                    |
+| `backend/routers/__init__.py`                                                   | **Modified** -- `auth.py` moved from "planned" to "current"                                                 |
+| `backend/dependencies/__init__.py`                                              | **Modified** -- `auth.py` moved from "planned" to "current"                                                 |
+| `backend/requirements.txt`                                                      | **Modified** -- added `passlib[bcrypt]==1.7.4`, `bcrypt==4.0.1`                                             |
+| `backend/tests/unit/test_orm_models.py`                                         | **Modified** -- `TestUserColumns` rewritten for the new schema                                              |
+| `backend/tests/unit/test_auth_service.py`                                       | **New** -- password hashing + JWT unit tests                                                                |
+| `backend/tests/unit/test_dependencies_auth.py`                                  | **New** -- `get_current_user` unit tests, mocked session                                                    |
+| `backend/tests/unit/test_auth_router.py`                                        | **New** -- end-to-end HTTP tests, fake in-memory session                                                    |
 
 ---
 
@@ -243,18 +249,18 @@ information-disclosure issue with no benefit to a legitimate caller.
 
 ## AIRP Standards Compliance
 
-| Standard | Status |
-|----------|--------|
+| Standard                                                      | Status                                                                                                                                                                                                                                                                                                                                                                     |
+| ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | No `from __future__ import annotations` in production modules | OK -- absent from `schemas.py`, `services/auth.py`, `dependencies/auth.py`, `routers/auth.py`. Present in `orm.py` (pre-existing from T-016, predates this rule; SQLAlchemy 2.0 declarative `Mapped[...]` annotations are not affected the way Pydantic v2 unions are, so left as-is) and in the three new test files, consistent with the majority of existing test files |
-| Plain ASCII section comments | OK -- no Unicode box-drawing characters in any new file |
-| No bare `# type: ignore` | OK -- none needed in any new file this task |
-| `mypy --strict` safe | OK -- `Settings \| None` (PEP 604) used instead of `Optional[Settings]` throughout the new service/dependency modules; valid at runtime and under mypy on Python 3.11 without the future-annotations import |
-| All lines <= 88 characters | OK -- verified directly by script across all new/modified files |
-| No trailing whitespace / tabs | OK -- verified directly by script |
-| isort (`force_sort_within_sections`, black profile) | OK -- every import block manually ordered stdlib -> third-party -> first-party, alphabetised within each section |
-| Agent/node functions never raise | N/A -- no agent or LangGraph node code touched in this task |
-| `ENVIRONMENT=test` guard respected | OK -- new tests rely on the existing `conftest.py` autouse fixture |
-| Backward compatibility | **Deliberately broken for `users.clerk_user_id`** -- this is a real, intentional schema migration, not an additive change. Every other file change is additive |
+| Plain ASCII section comments                                  | OK -- no Unicode box-drawing characters in any new file                                                                                                                                                                                                                                                                                                                    |
+| No bare `# type: ignore`                                      | OK -- none needed in any new file this task                                                                                                                                                                                                                                                                                                                                |
+| `mypy --strict` safe                                          | OK -- `Settings \| None` (PEP 604) used instead of `Optional[Settings]` throughout the new service/dependency modules; valid at runtime and under mypy on Python 3.11 without the future-annotations import                                                                                                                                                                |
+| All lines <= 88 characters                                    | OK -- verified directly by script across all new/modified files                                                                                                                                                                                                                                                                                                            |
+| No trailing whitespace / tabs                                 | OK -- verified directly by script                                                                                                                                                                                                                                                                                                                                          |
+| isort (`force_sort_within_sections`, black profile)           | OK -- every import block manually ordered stdlib -> third-party -> first-party, alphabetised within each section                                                                                                                                                                                                                                                           |
+| Agent/node functions never raise                              | N/A -- no agent or LangGraph node code touched in this task                                                                                                                                                                                                                                                                                                                |
+| `ENVIRONMENT=test` guard respected                            | OK -- new tests rely on the existing `conftest.py` autouse fixture                                                                                                                                                                                                                                                                                                         |
+| Backward compatibility                                        | **Deliberately broken for `users.clerk_user_id`** -- this is a real, intentional schema migration, not an additive change. Every other file change is additive                                                                                                                                                                                                             |
 
 ---
 
@@ -482,6 +488,7 @@ git push -u origin feat/api-auth
 ## PR Details
 
 **PR title:**
+
 ```
 feat(api): implement self-hosted JWT auth with bcrypt password hashing
 ```
@@ -574,4 +581,4 @@ Branch: `feat/api-analysis-start`.
 
 ---
 
-*End of Document | T-046 Workflow | AIRP Week 13*
+_End of Document | T-046 Workflow | AIRP Week 13_

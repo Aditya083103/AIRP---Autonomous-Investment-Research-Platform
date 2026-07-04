@@ -21,13 +21,7 @@ module.exports = {
     tsconfigRootDir: __dirname,
   },
 
-  plugins: [
-    "@typescript-eslint",
-    "react",
-    "react-hooks",
-    "react-refresh",
-    "import",
-  ],
+  plugins: ["@typescript-eslint", "react", "react-hooks", "react-refresh", "import"],
 
   extends: [
     "eslint:recommended",
@@ -73,10 +67,7 @@ module.exports = {
     // ── React ───────────────────────────────────────────────────────────────
     "react/react-in-jsx-scope": "off",
     "react/prop-types": "off",
-    "react-refresh/only-export-components": [
-      "warn",
-      { allowConstantExport: true },
-    ],
+    "react-refresh/only-export-components": ["warn", { allowConstantExport: true }],
 
     // ── Imports ─────────────────────────────────────────────────────────────
     // import/no-unresolved disabled — resolver broken on Windows with
@@ -86,15 +77,7 @@ module.exports = {
     "import/order": [
       "error",
       {
-        groups: [
-          "builtin",
-          "external",
-          "internal",
-          "parent",
-          "sibling",
-          "index",
-          "type",
-        ],
+        groups: ["builtin", "external", "internal", "parent", "sibling", "index", "type"],
         "newlines-between": "always",
         alphabetize: { order: "asc", caseInsensitive: true },
       },

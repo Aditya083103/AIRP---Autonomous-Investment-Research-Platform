@@ -16,12 +16,14 @@ no ASGI application, no `routers/` contents, and no `dependencies/`
 package -- only the README placeholders left by T-002's folder scaffold.
 
 **Acceptance criteria (all must pass):**
+
 - `GET /health` returns 200
 - Swagger UI accessible at `/docs`
 - CORS allows frontend origin
 
 **Explicitly out of scope for this task** (separate Phase 5 tasks, per
 the master task list):
+
 - JWT auth, `/auth/register`, `/auth/login`, `/auth/me` -> **T-046**
 - `POST /api/v1/analysis/start` -> **T-047**
 - `GET /api/v1/analysis/{job_id}/status` -> **T-048**
@@ -117,17 +119,17 @@ that is all T-046.
 
 ## Files Changed
 
-| File | Change |
-|------|--------|
-| `backend/main.py` | **New** -- FastAPI app factory, CORS, lifespan, router registration |
-| `backend/routers/health.py` | **New** -- `GET /health` liveness endpoint |
-| `backend/routers/__init__.py` | **New** -- package docstring (was an empty file marker) |
-| `backend/dependencies/__init__.py` | **New** -- package docstring, new package |
-| `backend/dependencies/common.py` | **New** -- `get_settings_dependency()` |
-| `backend/tests/unit/test_main.py` | **New** -- app factory, `/health`, `/docs`, `/openapi.json`, CORS, lifespan tests |
-| `backend/tests/unit/test_health_router.py` | **New** -- router/schema/handler tests in isolation |
-| `backend/tests/unit/test_dependencies_common.py` | **New** -- dependency + override-pattern tests |
-| `pyproject.toml` | **Modified** -- added `"dependencies"` to isort's `known_first_party` list now that the package exists |
+| File                                             | Change                                                                                                 |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
+| `backend/main.py`                                | **New** -- FastAPI app factory, CORS, lifespan, router registration                                    |
+| `backend/routers/health.py`                      | **New** -- `GET /health` liveness endpoint                                                             |
+| `backend/routers/__init__.py`                    | **New** -- package docstring (was an empty file marker)                                                |
+| `backend/dependencies/__init__.py`               | **New** -- package docstring, new package                                                              |
+| `backend/dependencies/common.py`                 | **New** -- `get_settings_dependency()`                                                                 |
+| `backend/tests/unit/test_main.py`                | **New** -- app factory, `/health`, `/docs`, `/openapi.json`, CORS, lifespan tests                      |
+| `backend/tests/unit/test_health_router.py`       | **New** -- router/schema/handler tests in isolation                                                    |
+| `backend/tests/unit/test_dependencies_common.py` | **New** -- dependency + override-pattern tests                                                         |
+| `pyproject.toml`                                 | **Modified** -- added `"dependencies"` to isort's `known_first_party` list now that the package exists |
 
 No other files were modified. `backend/routers/README.md`,
 `backend/models/README.md`, and `backend/services/README.md` (the T-002
@@ -168,20 +170,20 @@ concerns are kept separate.
 
 ## AIRP Standards Compliance
 
-| Standard | Status |
-|----------|--------|
-| No `from __future__ import annotations` in production modules | OK -- absent from `main.py`, `routers/health.py`, `routers/__init__.py`, `dependencies/__init__.py`, `dependencies/common.py`. Present in the three new test files only, consistent with 36 of 39 existing files under `backend/tests/unit/` |
-| Plain ASCII section comments (`# ---`) | OK -- no Unicode box-drawing characters in any new file (checked directly, not assumed) |
-| No bare `# type: ignore` | OK -- every occurrence carries an explicit code (`# type: ignore[attr-defined]`, `# type: ignore[arg-type]`), matching the existing pattern in `state_persistence.py` and `test_pdf_export.py` |
-| `mypy --strict --warn-unused-ignores` safe | OK -- all new functions fully annotated; `Settings`/`HealthResponse`/`FastAPI` types used directly rather than `Any` wherever the real type is known |
-| All lines <= 88 characters | OK -- verified directly by script (no line in any new file exceeds 88 chars) |
-| No trailing whitespace / tabs | OK -- verified directly by script |
-| flake8 (bugbear, comprehensions) clean | OK -- no unnecessary comprehensions; the one route-lookup loop in `test_health_router.py` was deliberately written as a plain `for` loop instead of a comprehension specifically to avoid an awkward multi-line comprehension-with-inline-type-comments construct |
-| isort (`force_sort_within_sections`, black profile) | OK -- every import block manually ordered stdlib -> third-party -> first-party, alphabetised within each section, matching the exact pattern in `backend/db/redis_client.py` and `backend/tests/unit/test_pdf_export.py` |
-| `known_first_party` covers new package | `dependencies` added to `pyproject.toml`'s isort config now that the package exists with real contents |
-| All agents/nodes never raise | N/A -- no agent or LangGraph node code touched in this task |
-| `ENVIRONMENT=test` guard respected | OK -- new tests rely on the existing `conftest.py` autouse `require_test_environment` fixture; nothing new added or bypassed |
-| Backward compatibility | OK -- this task only adds new files (plus one additive `pyproject.toml` list entry); no existing router, service, or test file was modified |
+| Standard                                                      | Status                                                                                                                                                                                                                                                            |
+| ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| No `from __future__ import annotations` in production modules | OK -- absent from `main.py`, `routers/health.py`, `routers/__init__.py`, `dependencies/__init__.py`, `dependencies/common.py`. Present in the three new test files only, consistent with 36 of 39 existing files under `backend/tests/unit/`                      |
+| Plain ASCII section comments (`# ---`)                        | OK -- no Unicode box-drawing characters in any new file (checked directly, not assumed)                                                                                                                                                                           |
+| No bare `# type: ignore`                                      | OK -- every occurrence carries an explicit code (`# type: ignore[attr-defined]`, `# type: ignore[arg-type]`), matching the existing pattern in `state_persistence.py` and `test_pdf_export.py`                                                                    |
+| `mypy --strict --warn-unused-ignores` safe                    | OK -- all new functions fully annotated; `Settings`/`HealthResponse`/`FastAPI` types used directly rather than `Any` wherever the real type is known                                                                                                              |
+| All lines <= 88 characters                                    | OK -- verified directly by script (no line in any new file exceeds 88 chars)                                                                                                                                                                                      |
+| No trailing whitespace / tabs                                 | OK -- verified directly by script                                                                                                                                                                                                                                 |
+| flake8 (bugbear, comprehensions) clean                        | OK -- no unnecessary comprehensions; the one route-lookup loop in `test_health_router.py` was deliberately written as a plain `for` loop instead of a comprehension specifically to avoid an awkward multi-line comprehension-with-inline-type-comments construct |
+| isort (`force_sort_within_sections`, black profile)           | OK -- every import block manually ordered stdlib -> third-party -> first-party, alphabetised within each section, matching the exact pattern in `backend/db/redis_client.py` and `backend/tests/unit/test_pdf_export.py`                                          |
+| `known_first_party` covers new package                        | `dependencies` added to `pyproject.toml`'s isort config now that the package exists with real contents                                                                                                                                                            |
+| All agents/nodes never raise                                  | N/A -- no agent or LangGraph node code touched in this task                                                                                                                                                                                                       |
+| `ENVIRONMENT=test` guard respected                            | OK -- new tests rely on the existing `conftest.py` autouse `require_test_environment` fixture; nothing new added or bypassed                                                                                                                                      |
+| Backward compatibility                                        | OK -- this task only adds new files (plus one additive `pyproject.toml` list entry); no existing router, service, or test file was modified                                                                                                                       |
 
 ---
 
@@ -360,6 +362,7 @@ Open a PR on GitHub targeting `main`.
 ## PR Details
 
 **PR title:**
+
 ```
 feat(api): initialise FastAPI with router structure, CORS, and health check
 ```
@@ -441,4 +444,4 @@ Branch: `feat/api-auth`.
 
 ---
 
-*End of Document | T-045 Workflow | AIRP Week 13*
+_End of Document | T-045 Workflow | AIRP Week 13_

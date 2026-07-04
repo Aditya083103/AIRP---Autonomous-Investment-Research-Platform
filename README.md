@@ -9,20 +9,20 @@
 
 ## What it does
 
-Ask *"Should I invest in TCS or Infosys?"* and AIRP orchestrates 8 collaborating AI agents
+Ask _"Should I invest in TCS or Infosys?"_ and AIRP orchestrates 8 collaborating AI agents
 that research, debate, and challenge each other — then produces a downloadable Investment Memo
 with a BUY / HOLD / SELL verdict and conviction score. The full pipeline completes in under 90 seconds.
 
 ## Tech stack
 
-| Layer | Technologies |
-|-------|-------------|
-| Frontend | React 18 · TypeScript · Vite · Tailwind CSS · Recharts |
-| Backend | FastAPI · Python 3.11 · WebSocket · Pydantic v2 |
-| Agents | LangGraph · LangChain · Claude API (Anthropic) |
-| Storage | PostgreSQL (Neon) · ChromaDB · Redis (Upstash) |
-| Observability | LangSmith · GitHub Actions CI/CD |
-| Deployment | Vercel (frontend) · Render (backend) |
+| Layer         | Technologies                                           |
+| ------------- | ------------------------------------------------------ |
+| Frontend      | React 18 · TypeScript · Vite · Tailwind CSS · Recharts |
+| Backend       | FastAPI · Python 3.11 · WebSocket · Pydantic v2        |
+| Agents        | LangGraph · LangChain · Claude API (Anthropic)         |
+| Storage       | PostgreSQL (Neon) · ChromaDB · Redis (Upstash)         |
+| Observability | LangSmith · GitHub Actions CI/CD                       |
+| Deployment    | Vercel (frontend) · Render (backend)                   |
 
 ## Quick start (local)
 
@@ -99,29 +99,29 @@ airp/
 
 ## Documentation
 
-| Doc | Contents |
-|-----|----------|
-| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Full system architecture — layers, request flow, state design, design decisions |
-| [CONTRIBUTING.md](docs/CONTRIBUTING.md) | Local setup, branch strategy, commit format, PR process, testing guide |
-| [CODING_STANDARDS.md](docs/CODING_STANDARDS.md) | Naming conventions, linting rules, pre-commit setup, CI checks |
-| [AGENTS.md](docs/AGENTS.md) | Each agent's persona, tools, output schema, example output |
-| [APIS.md](docs/APIS.md) | External APIs, free tier limits, env variable names, rate limit strategy |
+| Doc                                             | Contents                                                                        |
+| ----------------------------------------------- | ------------------------------------------------------------------------------- |
+| [ARCHITECTURE.md](docs/ARCHITECTURE.md)         | Full system architecture — layers, request flow, state design, design decisions |
+| [CONTRIBUTING.md](docs/CONTRIBUTING.md)         | Local setup, branch strategy, commit format, PR process, testing guide          |
+| [CODING_STANDARDS.md](docs/CODING_STANDARDS.md) | Naming conventions, linting rules, pre-commit setup, CI checks                  |
+| [AGENTS.md](docs/AGENTS.md)                     | Each agent's persona, tools, output schema, example output                      |
+| [APIS.md](docs/APIS.md)                         | External APIs, free tier limits, env variable names, rate limit strategy        |
 
 ## Status
 
-| Phase | Name | Status |
-|-------|------|--------|
-| 0 | Project Setup & Standards | ✅ Complete |
-| 1 | Data Layer & APIs | ⬜ Not started |
-| 2 | Research Agents | ⬜ Not started |
-| 3 | LangGraph Orchestration | ⬜ Not started |
-| 4 | Debate Engine & Advanced Agents | ⬜ Not started |
-| 5 | FastAPI Backend | ⬜ Not started |
-| 6 | React Frontend | ⬜ Not started |
-| 7 | Evaluation Framework | ⬜ Not started |
-| 8 | Polish, Deploy & Launch | ⬜ Not started |
+| Phase | Name                            | Status         |
+| ----- | ------------------------------- | -------------- |
+| 0     | Project Setup & Standards       | ✅ Complete    |
+| 1     | Data Layer & APIs               | ⬜ Not started |
+| 2     | Research Agents                 | ⬜ Not started |
+| 3     | LangGraph Orchestration         | ⬜ Not started |
+| 4     | Debate Engine & Advanced Agents | ⬜ Not started |
+| 5     | FastAPI Backend                 | ⬜ Not started |
+| 6     | React Frontend                  | ⬜ Not started |
+| 7     | Evaluation Framework            | ⬜ Not started |
+| 8     | Polish, Deploy & Launch         | ⬜ Not started |
 
 ---
 
-*Built as a portfolio project to demonstrate production-level Agentic AI engineering.
-Total infrastructure cost: ₹0 — 100% free-tier stack.*
+_Built as a portfolio project to demonstrate production-level Agentic AI engineering.
+Total infrastructure cost: ₹0 — 100% free-tier stack._

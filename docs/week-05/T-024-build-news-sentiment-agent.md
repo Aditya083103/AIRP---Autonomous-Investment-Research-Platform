@@ -17,6 +17,7 @@ parallel research agents in the AIRP investment committee.
 Reads market news looking for the story behind the story.
 
 **Tools used:**
+
 - `fetch_news` (NewsAPI, last 30 days)
 - `semantic_search` (ChromaDB similarity search on `airp_news` collection)
 
@@ -62,11 +63,11 @@ git branch
 
 Place these files exactly at the paths shown:
 
-| File | Path |
-|------|------|
-| Agent | `backend/agents/sentiment_analyst.py` |
-| Tests | `backend/tests/unit/test_sentiment_analyst.py` |
-| Docs | `docs/week-05/T-024-build-news-sentiment-agent.md` |
+| File  | Path                                               |
+| ----- | -------------------------------------------------- |
+| Agent | `backend/agents/sentiment_analyst.py`              |
+| Tests | `backend/tests/unit/test_sentiment_analyst.py`     |
+| Docs  | `docs/week-05/T-024-build-news-sentiment-agent.md` |
 
 Create the `docs/week-05/` folder if it does not already exist:
 
@@ -85,6 +86,7 @@ All section comments in the agent file use plain ASCII `# ---` dividers.
 They caused repeated `flake8 E501` failures in T-022 and T-023.
 
 Correct:
+
 ```python
 # ---------------------------------------------------------------------------
 # Constants
@@ -92,6 +94,7 @@ Correct:
 ```
 
 Wrong:
+
 ```python
 # ─────────────────────────────────────────────────────────────────────────
 # Constants
@@ -261,7 +264,9 @@ fraud, regulatory actions), and calls the LLM only for narrative synthesis.
 All tests pass locally:
 
 ```
+
 python -m pytest backend/tests/unit/test_sentiment_analyst.py -v
+
 ```
 
 Acceptance criteria verified:
@@ -284,11 +289,13 @@ Closes #24
 After pushing, GitHub Actions CI runs automatically. Confirm both jobs pass:
 
 **Backend CI (`backend-ci`):**
+
 - `mypy backend/` — type checking
 - `flake8 backend/` — linting
 - `pytest backend/tests/unit/` — unit tests
 
 **Frontend CI (`frontend-ci`):**
+
 - Marked `continue-on-error: true` (Phase 6 task)
 - Does not block the `ci-pass` gate
 
@@ -336,30 +343,30 @@ python -m pytest backend/tests/unit/ -v --tb=short
 
 ## 13. Key Design Decisions
 
-| Decision | Rationale |
-|----------|-----------|
-| Keyword-based scoring (no NLTK/TextBlob) | Zero new CI dependencies; fully unit-testable; deterministic |
-| LLM used only for narrative, not scoring | Score reproducibility; LLM failure does not corrupt output model |
-| Red flag detection is deterministic | SEBI notices must not be missed due to LLM hallucination |
-| ChromaDB failure is non-fatal | Agent runs on NewsAPI alone if vector store is unavailable |
-| `sentiment_score` always from deterministic layer | LLM cannot override the numerical score — only the narrative |
-| Fallback summary on LLM failure | `error=None` on LLM failure; graceful degradation per AIRP convention |
+| Decision                                          | Rationale                                                             |
+| ------------------------------------------------- | --------------------------------------------------------------------- |
+| Keyword-based scoring (no NLTK/TextBlob)          | Zero new CI dependencies; fully unit-testable; deterministic          |
+| LLM used only for narrative, not scoring          | Score reproducibility; LLM failure does not corrupt output model      |
+| Red flag detection is deterministic               | SEBI notices must not be missed due to LLM hallucination              |
+| ChromaDB failure is non-fatal                     | Agent runs on NewsAPI alone if vector store is unavailable            |
+| `sentiment_score` always from deterministic layer | LLM cannot override the numerical score — only the narrative          |
+| Fallback summary on LLM failure                   | `error=None` on LLM failure; graceful degradation per AIRP convention |
 
 ---
 
 ## 14. Acceptance Criteria Mapping
 
-| Criterion | Test(s) | Status |
-|-----------|---------|--------|
-| Score directionally correct for positive news | `test_positive_news_gives_positive_score` | Verified |
-| Score directionally correct for negative news | `test_negative_news_gives_negative_score` | Verified |
-| red_flags populated for SEBI/fraud news | `test_red_flags_detected_for_sebi_news` | Verified |
-| No red_flags for clean news | `test_no_red_flags_for_clean_news` | Verified |
-| Never raises from node function | `test_never_raises_on_catastrophic_failure` | Verified |
-| ChromaDB failure non-fatal | `test_chroma_failure_is_non_fatal` | Verified |
-| LLM failure uses fallback | `test_llm_failure_uses_fallback_summary` | Verified |
-| SentimentAnalysis model validates | `test_model_serialisable` | Verified |
+| Criterion                                     | Test(s)                                     | Status   |
+| --------------------------------------------- | ------------------------------------------- | -------- |
+| Score directionally correct for positive news | `test_positive_news_gives_positive_score`   | Verified |
+| Score directionally correct for negative news | `test_negative_news_gives_negative_score`   | Verified |
+| red_flags populated for SEBI/fraud news       | `test_red_flags_detected_for_sebi_news`     | Verified |
+| No red_flags for clean news                   | `test_no_red_flags_for_clean_news`          | Verified |
+| Never raises from node function               | `test_never_raises_on_catastrophic_failure` | Verified |
+| ChromaDB failure non-fatal                    | `test_chroma_failure_is_non_fatal`          | Verified |
+| LLM failure uses fallback                     | `test_llm_failure_uses_fallback_summary`    | Verified |
+| SentimentAnalysis model validates             | `test_model_serialisable`                   | Verified |
 
 ---
 
-*T-024 complete. Next: T-025 — Build Macro Economist Agent.*
+_T-024 complete. Next: T-025 — Build Macro Economist Agent._
