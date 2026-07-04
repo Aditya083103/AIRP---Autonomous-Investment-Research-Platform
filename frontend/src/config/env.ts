@@ -18,8 +18,8 @@ export const env = {
    * (see backend/main.py's router registration) -- so this cannot
    * share apiBaseUrl's default. Falls back to the relative "/auth"
    * path, which the Vite dev proxy forwards to http://localhost:8000
-   * the same way it already does for "/api" and "/ws". Set
-   * VITE_AUTH_BASE_URL to point at a different origin.
+   * the same way it already does for "/api". Set VITE_AUTH_BASE_URL to
+   * point at a different origin.
    */
   authBaseUrl: import.meta.env.VITE_AUTH_BASE_URL ?? "/auth",
   isDevelopment: import.meta.env.DEV,

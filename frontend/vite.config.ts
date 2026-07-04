@@ -26,20 +26,27 @@ export default defineConfig({
   server: {
     port: 3000,
     proxy: {
+      // ws: true is required here -- the live analysis stream endpoint
+      // lives at /api/v1/analysis/{job_id}/stream (see
+      // backend/routers/websocket.py), which matches this /api prefix.
+      // Without ws: true, Vite's dev proxy (http-proxy under the hood)
+      // only forwards plain HTTP requests through this rule and never
+      // upgrades the connection for a WebSocket handshake -- the
+      // browser then reports "WebSocket is closed before the
+      // connection is established" immediately, even though the
+      // backend itself is completely healthy (confirmed: POST
+      // /auth/login and POST /api/v1/analysis/start both succeed
+      // through this same proxy entry, since those are plain HTTP).
       "/api": {
         target: "http://localhost:8000",
         changeOrigin: true,
+        ws: true,
       },
       // T-056: backend/routers/auth.py mounts at "/auth", not under
       // "/api/v1" (see backend/main.py's router registration), so it
       // needs its own proxy entry rather than falling under "/api" above.
       "/auth": {
         target: "http://localhost:8000",
-        changeOrigin: true,
-      },
-      "/ws": {
-        target: "ws://localhost:8000",
-        ws: true,
         changeOrigin: true,
       },
     },
