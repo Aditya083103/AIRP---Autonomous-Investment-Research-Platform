@@ -10,6 +10,7 @@ import {
   AnalysisApiError,
   fetchAnalysisCharts,
   fetchAnalysisHistory,
+  fetchAnalysisMemoPdf,
   fetchAnalysisResult,
   startAnalysis,
   uploadDocument,
@@ -452,5 +453,46 @@ describe("fetchAnalysisCharts", () => {
 
     expect(error).toBeInstanceOf(AnalysisApiError);
     expect((error as AnalysisApiError).status).toBe(404);
+  });
+});
+
+describe("fetchAnalysisMemoPdf", () => {
+  function pdfResponse(status: number, body: BodyInit | null = new Blob(["%PDF-fake"])): Response {
+    return new Response(body, { status });
+  }
+
+  it("sends a GET request with the Authorization header to the memo/pdf route", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(pdfResponse(200));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchAnalysisMemoPdf({
+      accessToken: "jwt-token",
+      jobId: "11111111-1111-1111-1111-111111111111",
+    });
+
+    const [url, options] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain("/analysis/11111111-1111-1111-1111-111111111111/memo/pdf");
+    expect(options.method).toBe("GET");
+    expect((options.headers as Record<string, string>).Authorization).toBe("Bearer jwt-token");
+  });
+
+  it("resolves with a Blob on success", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(pdfResponse(200));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchAnalysisMemoPdf({ accessToken: "jwt-token", jobId: "job-1" });
+
+    expect(result).toBeInstanceOf(Blob);
+  });
+
+  it("throws AnalysisApiError with the backend's detail when no PDF exists", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(pdfResponse(404, JSON.stringify({ detail: "No PDF has been generated" })));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      fetchAnalysisMemoPdf({ accessToken: "jwt-token", jobId: "job-1" }),
+    ).rejects.toThrow("No PDF has been generated");
   });
 });

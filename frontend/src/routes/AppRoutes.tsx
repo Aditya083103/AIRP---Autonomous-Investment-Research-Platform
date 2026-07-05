@@ -17,6 +17,7 @@ import { ComponentsPreviewPage } from "@/pages/ComponentsPreviewPage";
 import { DashboardPage } from "@/pages/DashboardPage";
 import { HomePage } from "@/pages/HomePage";
 import { LoginPage } from "@/pages/LoginPage";
+import { MemoPage } from "@/pages/MemoPage";
 import { NotFoundPage } from "@/pages/NotFoundPage";
 import { RegisterPage } from "@/pages/RegisterPage";
 
@@ -48,6 +49,14 @@ export function AppRoutes(): JSX.Element {
           element={
             <ProtectedRoute>
               <AnalysisResultPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="analysis/:jobId/memo"
+          element={
+            <ProtectedRoute>
+              <MemoPage />
             </ProtectedRoute>
           }
         />
