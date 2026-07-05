@@ -2,10 +2,10 @@
 // The route table. A layout route with a home index (the landing page,
 // T-055), a protected /analysis route (the real input form, T-058),
 // /login and /register (T-056), a protected /dashboard (real history
-// table, T-057) and a protected /analysis/:jobId/result placeholder
-// (real results page lands in T-061), the T-054 component preview
-// route, and a catch-all 404. Later Phase 6 tasks add the remaining
-// real pages (compare) as nested children of RootLayout here.
+// table, T-057), a protected /analysis/:jobId/result (T-061) and
+// /analysis/:jobId/memo (T-063), a protected /compare two-company
+// comparison page (T-064), the T-054 component preview route, and a
+// catch-all 404.
 
 import { Route, Routes } from "react-router-dom";
 
@@ -13,6 +13,7 @@ import { ProtectedRoute } from "@/components/auth/ProtectedRoute";
 import { RootLayout } from "@/components/layout/RootLayout";
 import { AnalysisPage } from "@/pages/AnalysisPage";
 import { AnalysisResultPage } from "@/pages/AnalysisResultPage";
+import { ComparePage } from "@/pages/ComparePage";
 import { ComponentsPreviewPage } from "@/pages/ComponentsPreviewPage";
 import { DashboardPage } from "@/pages/DashboardPage";
 import { HomePage } from "@/pages/HomePage";
@@ -57,6 +58,14 @@ export function AppRoutes(): JSX.Element {
           element={
             <ProtectedRoute>
               <MemoPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="compare"
+          element={
+            <ProtectedRoute>
+              <ComparePage />
             </ProtectedRoute>
           }
         />
