@@ -39,7 +39,7 @@
 // never blocks the Investment Memo from rendering, and vice versa.
 
 import { useState } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 
 import { ChartsPanel } from "@/components/charts";
 import { DebateViewer } from "@/components/debate/DebateViewer";
@@ -178,6 +178,14 @@ export function AnalysisResultPage(): JSX.Element {
               {decision ? (
                 <div className="mt-6">
                   <ResultsPanel decision={decision} />
+                  <div className="mt-4 text-right">
+                    <Link
+                      to={`/analysis/${jobId}/memo`}
+                      className="text-sm font-medium text-brand-600 hover:text-brand-700 hover:underline"
+                    >
+                      View full Investment Memo →
+                    </Link>
+                  </div>
                 </div>
               ) : null}
 

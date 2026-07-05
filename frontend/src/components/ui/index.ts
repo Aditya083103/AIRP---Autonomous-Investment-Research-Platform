@@ -18,6 +18,10 @@ export {
   type CardDescriptionProps,
   type CardFooterProps,
 } from "@/components/ui/Card";
+export {
+  CollapsibleSection,
+  type CollapsibleSectionProps,
+} from "@/components/ui/CollapsibleSection";
 export { Input, type InputProps } from "@/components/ui/Input";
 export { Modal, type ModalProps, type ModalSize } from "@/components/ui/Modal";
 export { ProgressBar, type ProgressBarProps } from "@/components/ui/ProgressBar";

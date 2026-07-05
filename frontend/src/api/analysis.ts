@@ -277,3 +277,43 @@ export async function fetchAnalysisCharts({
   }
   return (await response.json()) as AnalysisChartDataResponse;
 }
+
+// ---------------------------------------------------------------------------
+// GET /api/v1/analysis/{job_id}/memo/pdf (T-050 backend / T-063 frontend)
+// ---------------------------------------------------------------------------
+
+export interface FetchAnalysisMemoPdfParams {
+  /** Bearer token from useAuth().accessToken. Callers must not call this with a null token. */
+  accessToken: string;
+  jobId: string;
+}
+
+/**
+ * GET /api/v1/analysis/{job_id}/memo/pdf -- the branded Investment Memo
+ * PDF for a completed analysis, as a Blob.
+ *
+ * Unlike a plain `<a href>` download, this endpoint requires the same
+ * Bearer Authorization header every other analysis route needs (see
+ * backend/routers/analysis.py's download_analysis_memo_pdf), so the
+ * browser cannot fetch it via simple navigation -- the caller must
+ * `fetch` it with credentials attached and turn the resulting Blob
+ * into a short-lived object URL itself (see useDownloadMemoPdf.ts).
+ * Returns 404 both when job_id does not exist/belong to the caller and
+ * when no PDF was ever produced for a completed job (WeasyPrint
+ * unavailable, feature disabled, etc.) -- see that endpoint's
+ * docstring for why both cases share one response shape.
+ */
+export async function fetchAnalysisMemoPdf({
+  accessToken,
+  jobId,
+}: FetchAnalysisMemoPdfParams): Promise<Blob> {
+  const response = await fetch(`${env.apiBaseUrl}/analysis/${jobId}/memo/pdf`, {
+    method: "GET",
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+
+  if (!response.ok) {
+    throw new AnalysisApiError(response.status, await parseErrorDetail(response));
+  }
+  return await response.blob();
+}
