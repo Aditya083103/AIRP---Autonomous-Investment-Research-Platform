@@ -74,15 +74,34 @@ _SOCKET_CONNECT_TIMEOUT: int = 3
 _client: redis.Redis | None = None
 _client_unavailable: bool = False
 
-# When True, get_redis_client() always returns None regardless of env vars.
-# Set to False only in tests that need to exercise the connection path.
-# This is more reliable than patching os.environ across terminals/platforms.
-_FORCE_DISABLE: bool = True
-
 
 def _is_test_environment() -> bool:
     """Return True when running under pytest (ENVIRONMENT=test)."""
     return os.getenv("ENVIRONMENT", "").strip().lower() == "test"
+
+
+# When True, get_redis_client() always returns None regardless of env vars.
+#
+# Bound to _is_test_environment() rather than hardcoded True -- this used to
+# be `_FORCE_DISABLE: bool = True`, "cleared only by enable_for_tests()",
+# which meant every real uvicorn run (never calls enable_for_tests()) had
+# caching permanently disabled, not just the test suite. That went
+# unnoticed because every cache miss degrades silently to a live fetch (by
+# design -- see this module's docstring), so nothing ever *looked* broken;
+# it just meant fetch_stock_price/fetch_ratios/fetch_news/fetch_macro hit
+# their live APIs on every single call, with no caching ever kicking in
+# outside pytest. In practice this is most visible on fetch_ratios: with
+# caching dead, both the Fundamental Analyst and the Valuation Agent's
+# separate fetch_ratios calls for the same ticker each go live instead of
+# the second one being a cache hit, doubling Alpha Vantage's free-tier
+# 25-requests/day usage per analysis before even counting retries.
+#
+# Tests still get the exact same hermetic default: _is_test_environment()
+# is True whenever ENVIRONMENT=test (which every test module in this repo
+# sets before importing anything, per this project's documented "set
+# ENVIRONMENT=test before pytest" rule) -- so this change alters behaviour
+# for real (non-pytest) processes only.
+_FORCE_DISABLE: bool = _is_test_environment()
 
 
 def _resolve_redis_url() -> str:
@@ -117,7 +136,8 @@ def get_redis_client() -> redis.Redis | None:
     Return a connected Redis client, or None if caching is unavailable.
 
     Returns None (caching disabled) when:
-      * _FORCE_DISABLE is True (default — cleared only by enable_for_tests()).
+      * _FORCE_DISABLE is True (default under ENVIRONMENT=test; False in a
+        real process -- see enable_for_tests()/_is_test_environment()).
       * _client_unavailable is True (latched after first connection failure).
       * No REDIS_URL is configured.
       * The server is unreachable (connection verified with PING).
@@ -164,10 +184,12 @@ def reset_redis_client() -> None:
     Reset the memoised client, availability flag, and force-disable flag.
 
     Call this in teardown after any test that called enable_for_tests().
-    Has no effect on the actual Redis server — it only drops the in-process
-    handle and restores the safe default state (_FORCE_DISABLE=True).
+    Has no effect on the actual Redis server -- it only drops the in-process
+    handle and restores the default state (_FORCE_DISABLE=_is_test_environment(),
+    i.e. True under pytest, False in a real process -- see _FORCE_DISABLE's
+    module-level docstring for why this is no longer a hardcoded True).
     """
     global _client, _client_unavailable, _FORCE_DISABLE
     _client = None
     _client_unavailable = False
-    _FORCE_DISABLE = True
+    _FORCE_DISABLE = _is_test_environment()

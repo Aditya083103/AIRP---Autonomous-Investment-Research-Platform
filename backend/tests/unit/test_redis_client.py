@@ -332,3 +332,40 @@ class TestResetRedisClient:
         rc_mod._client_unavailable = True
         reset_redis_client()
         assert rc_mod._client_unavailable is False
+
+
+# ---------------------------------------------------------------------------
+# _is_test_environment() -- the function _FORCE_DISABLE's default is now
+# bound to (see redis_client.py's docstring on _FORCE_DISABLE for the bug
+# this fixes: it used to be a hardcoded `True`, so real uvicorn runs -- which
+# never call enable_for_tests() -- had caching permanently disabled, not
+# just the test suite). This class only exercises the pure helper directly;
+# deliberately not reloading the module mid-suite to prove the module-level
+# default, since that would leave every other test's directly-imported
+# names (get_redis_client, enable_for_tests, ...) pointing at stale
+# pre-reload function objects.
+# ---------------------------------------------------------------------------
+
+
+class TestIsTestEnvironment:
+    def test_true_when_environment_is_test(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ENVIRONMENT", "test")
+        assert rc_mod._is_test_environment() is True
+
+    def test_true_regardless_of_case(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("ENVIRONMENT", "TEST")
+        assert rc_mod._is_test_environment() is True
+
+    def test_false_when_environment_is_production(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ENVIRONMENT", "production")
+        assert rc_mod._is_test_environment() is False
+
+    def test_false_when_environment_is_unset(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("ENVIRONMENT", raising=False)
+        assert rc_mod._is_test_environment() is False

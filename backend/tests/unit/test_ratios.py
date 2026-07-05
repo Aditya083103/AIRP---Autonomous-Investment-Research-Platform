@@ -44,6 +44,7 @@ from backend.tools.ratios import (  # noqa: E402
     RatiosNotFoundError,
     _build_inputs,
     _compute_ratios,
+    _fetch_alpha_vantage_ratios,
     _fetch_ratios_from_sources,
     _handle_av_response,
     _parse_av_float,
@@ -55,6 +56,7 @@ from backend.tools.ratios import (  # noqa: E402
     _statement_get,
     fetch_ratios,
     fetch_ratios_summary,
+    reset_av_quota_breaker_for_tests,
 )
 
 # ---------------------------------------------------------------------------
@@ -517,3 +519,98 @@ class TestFetchRatiosTool:
         assert "sources" not in result
         assert result["debt_to_equity"] == pytest.approx(0.41, abs=0.01)
         assert result["roe_pct"] == pytest.approx(8.97, abs=0.01)
+
+
+# ---------------------------------------------------------------------------
+# Tests: Alpha Vantage retry policy + same-day circuit breaker
+#
+# Regression tests for a real production bug: stop_after_attempt(3) used to
+# retry on AlphaVantageRateLimitError itself, meaning a single rate-limited
+# fetch_ratios call burned 3 of the 25 daily requests instead of 1, and
+# every subsequent ticker rediscovered the same exhaustion with its own
+# live round-trip. See ratios.py's docstrings on the retry decorator and
+# on _av_quota_exhausted_date for the full rationale.
+# ---------------------------------------------------------------------------
+
+
+class TestAlphaVantageRetryPolicy:
+    def setup_method(self) -> None:
+        reset_av_quota_breaker_for_tests()
+
+    def teardown_method(self) -> None:
+        reset_av_quota_breaker_for_tests()
+
+    def test_rate_limit_note_is_not_retried(self) -> None:
+        """A 'Note' rate-limit response must fail on the first attempt --
+        no tenacity retry, no sleep, and critically no 2nd/3rd real HTTP
+        request wasted against the same daily quota."""
+        with patch(
+            "backend.tools.ratios.requests.get",
+            return_value=_make_av_response(200, {"Note": "throttled"}),
+        ) as mock_get:
+            with pytest.raises(AlphaVantageRateLimitError):
+                _request_alpha_vantage("TCS", "demo-key")
+        assert mock_get.call_count == 1
+
+    def test_information_rate_limit_is_not_retried(self) -> None:
+        with patch(
+            "backend.tools.ratios.requests.get",
+            return_value=_make_av_response(200, {"Information": "limit reached"}),
+        ) as mock_get:
+            with pytest.raises(AlphaVantageRateLimitError):
+                _request_alpha_vantage("TCS", "demo-key")
+        assert mock_get.call_count == 1
+
+
+class TestAlphaVantageQuotaBreaker:
+    def setup_method(self) -> None:
+        reset_av_quota_breaker_for_tests()
+
+    def teardown_method(self) -> None:
+        reset_av_quota_breaker_for_tests()
+
+    def test_first_rate_limited_call_hits_the_network(self) -> None:
+        with (
+            patch.dict(os.environ, {"ALPHA_VANTAGE_KEY": "demo-key"}),
+            patch(
+                "backend.tools.ratios.requests.get",
+                return_value=_make_av_response(200, {"Note": "throttled"}),
+            ) as mock_get,
+        ):
+            result = _fetch_alpha_vantage_ratios("TCS.NS")
+
+        assert result is None
+        assert mock_get.call_count == 1
+
+    def test_second_ticker_after_exhaustion_skips_the_network_entirely(self) -> None:
+        """Once one call confirms the daily quota is gone, a different
+        ticker later in the same run must not make its own live request --
+        that request is certain to fail identically until UTC midnight."""
+        with (
+            patch.dict(os.environ, {"ALPHA_VANTAGE_KEY": "demo-key"}),
+            patch(
+                "backend.tools.ratios.requests.get",
+                return_value=_make_av_response(200, {"Note": "throttled"}),
+            ) as mock_get,
+        ):
+            _fetch_alpha_vantage_ratios("TCS.NS")  # 1st call -- latches the breaker
+            result = _fetch_alpha_vantage_ratios("INFY.NS")  # 2nd call -- should skip
+
+        assert result is None
+        assert mock_get.call_count == 1
+
+    def test_breaker_reset_allows_calls_again(self) -> None:
+        """Sanity check on the test helper itself: resetting the breaker
+        (simulating a new day) lets live calls happen again."""
+        with (
+            patch.dict(os.environ, {"ALPHA_VANTAGE_KEY": "demo-key"}),
+            patch(
+                "backend.tools.ratios.requests.get",
+                return_value=_make_av_response(200, {"Note": "throttled"}),
+            ) as mock_get,
+        ):
+            _fetch_alpha_vantage_ratios("TCS.NS")
+            reset_av_quota_breaker_for_tests()
+            _fetch_alpha_vantage_ratios("INFY.NS")
+
+        assert mock_get.call_count == 2

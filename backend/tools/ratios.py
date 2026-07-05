@@ -405,9 +405,21 @@ def _handle_av_response(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 @retry(
+    # AlphaVantageRateLimitError is deliberately NOT retried here. Alpha
+    # Vantage's "Note"/"Information" rate-limit signal means the free
+    # tier's 25-requests/day quota is already exhausted for the day -- a
+    # 2s-60s exponential back-off cannot fix that, it just wastes 2 more
+    # real HTTP requests (each one still counts against the daily quota,
+    # even though it returns a "Note" instead of data) retrying a call
+    # that is certain to fail identically every time until UTC midnight.
+    # Before this fix, stop_after_attempt(3) meant every single
+    # rate-limited fetch_ratios call burned 3 of the daily 25 requests
+    # instead of 1 -- see _av_quota_exhausted_today below for the other
+    # half of this fix (skipping the call entirely once this has been
+    # seen once today). Only genuinely transient failures -- a timeout or
+    # a dropped connection -- are worth retrying.
     retry=(
-        retry_if_exception_type(AlphaVantageRateLimitError)
-        | retry_if_exception_type(requests.Timeout)
+        retry_if_exception_type(requests.Timeout)
         | retry_if_exception_type(requests.ConnectionError)
     ),
     wait=wait_exponential(multiplier=1, min=_RETRY_WAIT_MIN, max=_RETRY_WAIT_MAX),
@@ -421,7 +433,8 @@ def _request_alpha_vantage(symbol: str, api_key: str) -> dict[str, Any]:
     and transient network errors.
 
     Raises:
-        AlphaVantageRateLimitError: on throttling — tenacity will retry.
+        AlphaVantageRateLimitError: on throttling — raised immediately,
+            NOT retried (see the @retry decorator's comment above for why).
         AlphaVantageError:          on invalid symbol / request.
         requests.Timeout / ConnectionError: transient — tenacity will retry.
     """
@@ -444,11 +457,47 @@ def _request_alpha_vantage(symbol: str, api_key: str) -> dict[str, Any]:
     return _handle_av_response(payload)
 
 
+# ---------------------------------------------------------------------------
+# Same-day circuit breaker
+# ---------------------------------------------------------------------------
+
+# Once Alpha Vantage confirms the free tier's 25-requests/day quota is
+# exhausted (a "Note"/"Information" response), there is no point asking
+# again for a different ticker, or from a different agent, later the same
+# day -- the quota will not reset until UTC midnight. This module-level
+# flag (paired with the date it was set) short-circuits every subsequent
+# _fetch_alpha_vantage_ratios call for the rest of that day to a plain
+# `None` with zero network calls, instead of each one rediscovering the
+# same exhausted quota via its own live HTTP round-trip. Stored as a date
+# string (not a bare bool) so a long-lived process (`uvicorn --reload`
+# left running overnight) correctly resumes making live calls once the
+# quota has actually rolled over.
+_av_quota_exhausted_date: str | None = None
+
+
+def _is_av_quota_exhausted_today() -> bool:
+    """True if this process already saw Alpha Vantage's quota exhausted today."""
+    return _av_quota_exhausted_date == datetime.utcnow().date().isoformat()
+
+
+def _mark_av_quota_exhausted() -> None:
+    """Record that Alpha Vantage's daily quota was confirmed exhausted today."""
+    global _av_quota_exhausted_date
+    _av_quota_exhausted_date = datetime.utcnow().date().isoformat()
+
+
+def reset_av_quota_breaker_for_tests() -> None:
+    """Test-only helper: clear the circuit breaker so each test starts fresh."""
+    global _av_quota_exhausted_date
+    _av_quota_exhausted_date = None
+
+
 def _fetch_alpha_vantage_ratios(ticker: str) -> dict[str, float | None] | None:
     """
     Best-effort Alpha Vantage ratios for gap-filling. Returns None (never
-    raises) when no key is configured, the symbol has no coverage, or the
-    request fails — yFinance remains the primary source.
+    raises) when no key is configured, the symbol has no coverage, the
+    request fails, or today's quota was already confirmed exhausted by an
+    earlier call in this process -- yFinance remains the primary source.
 
     Alpha Vantage uses bare US-style symbols, so the exchange suffix is
     stripped (TCS.NS → TCS). Indian listings frequently have no OVERVIEW
@@ -460,10 +509,22 @@ def _fetch_alpha_vantage_ratios(ticker: str) -> dict[str, float | None] | None:
     if not api_key:
         return None
 
+    if _is_av_quota_exhausted_today():
+        logger.info(
+            "Alpha Vantage quota already confirmed exhausted today -- "
+            "skipping live call for %s",
+            ticker,
+        )
+        return None
+
     symbol = ticker.split(".")[0].split(":")[0]
     try:
         payload = _request_alpha_vantage(symbol=symbol, api_key=api_key)
-    except (AlphaVantageError, AlphaVantageRateLimitError, RetryError) as exc:
+    except AlphaVantageRateLimitError as exc:
+        _mark_av_quota_exhausted()
+        logger.warning("Alpha Vantage unavailable for %s: %s", symbol, exc)
+        return None
+    except (AlphaVantageError, RetryError) as exc:
         logger.warning("Alpha Vantage unavailable for %s: %s", symbol, exc)
         return None
     except Exception as exc:  # noqa: BLE001 — best-effort, never fatal
