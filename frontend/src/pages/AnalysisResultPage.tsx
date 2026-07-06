@@ -38,19 +38,20 @@
 // keeping them as separate queries means a slow/failed charts fetch
 // never blocks the Investment Memo from rendering, and vice versa.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import { ChartsPanel } from "@/components/charts";
 import { DebateViewer } from "@/components/debate/DebateViewer";
 import { AgentProgressBoard } from "@/components/progress/AgentProgressBoard";
 import { ResultsPanel } from "@/components/results";
-import { Spinner } from "@/components/ui";
+import { ChartsPanelSkeleton, ResultsPanelSkeleton } from "@/components/skeletons";
 import { useAnalysisCharts } from "@/hooks/useAnalysisCharts";
 import { useAnalysisResult } from "@/hooks/useAnalysisResult";
 import { useAnalysisStream } from "@/hooks/useAnalysisStream";
 import { useAuth } from "@/hooks/useAuth";
 import { cn } from "@/lib/cn";
+import { toast } from "@/lib/toast";
 
 type ResultView = "progress" | "debate";
 
@@ -69,6 +70,20 @@ export function AnalysisResultPage(): JSX.Element {
     token: accessToken ?? "",
     enabled: jobId !== undefined && accessToken !== null,
   });
+
+  // T-066: useAnalysisStream (T-049) already surfaces `error` inline via
+  // AgentProgressBoard's own error banner -- this toast is a secondary,
+  // ambient notification of the same event for someone who might not be
+  // looking at the progress tab (e.g. they've switched to "Debate
+  // transcript"). Runs once per distinct error string; useAnalysisStream
+  // resets `error` to null at the start of every new connection attempt
+  // (see that hook's own effect), so a fresh error after a reconnect
+  // re-triggers this rather than being swallowed as "already toasted".
+  useEffect(() => {
+    if (error !== null) {
+      toast.error(error);
+    }
+  }, [error]);
 
   const lastEvent = events.length > 0 ? events[events.length - 1] : undefined;
   const hasFailed = lastEvent?.status === "failed";
@@ -161,9 +176,8 @@ export function AnalysisResultPage(): JSX.Element {
               <h2 className="text-lg font-semibold text-ink">Analysis complete.</h2>
 
               {isResultPending ? (
-                <div className="mt-4 flex items-center gap-2 text-sm text-muted">
-                  <Spinner size="sm" aria-hidden="true" />
-                  Loading the Investment Memo…
+                <div className="mt-4">
+                  <ResultsPanelSkeleton label="Loading the Investment Memo…" />
                 </div>
               ) : null}
 
@@ -190,9 +204,8 @@ export function AnalysisResultPage(): JSX.Element {
               ) : null}
 
               {isChartsPending && !isResultPending ? (
-                <div className="mt-6 flex items-center gap-2 text-sm text-muted">
-                  <Spinner size="sm" aria-hidden="true" />
-                  Loading charts…
+                <div className="mt-6">
+                  <ChartsPanelSkeleton label="Loading charts…" />
                 </div>
               ) : null}
 

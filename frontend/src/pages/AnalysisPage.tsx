@@ -31,6 +31,7 @@ import { PdfUploadField } from "@/components/analysis/PdfUploadField";
 import { Button } from "@/components/ui";
 import { NSE_TOP_50 } from "@/data/nseTop50";
 import { useAuth } from "@/hooks/useAuth";
+import { toast } from "@/lib/toast";
 import {
   analysisInputSchema,
   isPdfFile,
@@ -109,11 +110,18 @@ export function AnalysisPage(): JSX.Element {
       });
       navigate(`/analysis/${started.job_id}/result`, { replace: true });
     } catch (error) {
-      setFormError(
+      const message =
         error instanceof AnalysisApiError
           ? error.message
-          : "Could not start the analysis. Please try again.",
-      );
+          : "Could not start the analysis. Please try again.";
+      setFormError(message);
+      // T-066: uploadDocument/startAnalysis are called directly here
+      // rather than through a React Query mutation (see this file's
+      // own module docstring on why upload has to happen before
+      // start, sequentially, in one try block) -- see LoginPage.tsx's
+      // identical catch block for why that means the global
+      // mutation-error toast doesn't cover this call.
+      toast.error(message);
     }
   };
 

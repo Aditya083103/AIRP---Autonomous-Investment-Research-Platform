@@ -132,4 +132,34 @@ describe("AuthProvider", () => {
     await user.click(screen.getByRole("button", { name: "Logout" }));
     await waitFor(() => expect(screen.getByTestId("status")).toHaveTextContent("anonymous"));
   });
+
+  it("clears local state and does not throw when the logout API call fails (T-066)", async () => {
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(200, TOKEN_RESPONSE))
+      .mockResolvedValueOnce(jsonResponse(500, { detail: "logout endpoint unreachable" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const user = userEvent.setup();
+    render(
+      <AuthProvider>
+        <AuthProbe />
+      </AuthProvider>,
+    );
+    await user.click(screen.getByRole("button", { name: "Login" }));
+    await waitFor(() => expect(screen.getByTestId("status")).toHaveTextContent("authenticated"));
+
+    // Previously this `await logoutUser()` call was unguarded inside
+    // AuthProvider.logout, so a failing request here became an
+    // unhandled promise rejection (every caller invokes logout as
+    // `() => void handleLogout()`, discarding the promise -- see
+    // AuthProvider.tsx's T-066 comment on this exact fix). If that
+    // regressed, this click would reject unhandled rather than the
+    // status flipping to "anonymous" below.
+    await user.click(screen.getByRole("button", { name: "Logout" }));
+
+    await waitFor(() => expect(screen.getByTestId("status")).toHaveTextContent("anonymous"));
+    expect(consoleSpy).toHaveBeenCalled();
+  });
 });

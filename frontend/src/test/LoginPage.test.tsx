@@ -7,10 +7,11 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AuthApiError } from "@/api/auth";
 import { AuthContext, type AuthContextValue } from "@/context/AuthContext";
+import { toastStore } from "@/lib/toastStore";
 import { LoginPage } from "@/pages/LoginPage";
 
 function renderLoginPage(login: AuthContextValue["login"]): void {
@@ -35,6 +36,10 @@ function renderLoginPage(login: AuthContextValue["login"]): void {
   );
 }
 
+afterEach(() => {
+  toastStore.clear();
+});
+
 describe("LoginPage", () => {
   it("shows validation errors when submitted empty", async () => {
     const user = userEvent.setup();
@@ -56,6 +61,12 @@ describe("LoginPage", () => {
     await user.click(screen.getByRole("button", { name: /log in/i }));
 
     expect(await screen.findByText("Incorrect email or password")).toBeInTheDocument();
+    // T-066: login() is called directly (not via a React Query
+    // mutation), so this catch block has to fire its own toast --
+    // see LoginPage.tsx's onSubmit for why.
+    expect(toastStore.getSnapshot()).toContainEqual(
+      expect.objectContaining({ tone: "error", message: "Incorrect email or password" }),
+    );
   });
 
   it("redirects to /dashboard after a successful login", async () => {

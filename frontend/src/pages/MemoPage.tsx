@@ -27,7 +27,8 @@ import { useParams } from "react-router-dom";
 
 import { MemoToolbar } from "@/components/memo";
 import { AgentWeightsPanel, BullBearPanel, KeyRisksList, VerdictPanel } from "@/components/results";
-import { CollapsibleSection, Spinner } from "@/components/ui";
+import { ResultsPanelSkeleton } from "@/components/skeletons";
+import { CollapsibleSection } from "@/components/ui";
 import { useAnalysisResult } from "@/hooks/useAnalysisResult";
 import { useAuth } from "@/hooks/useAuth";
 
@@ -83,9 +84,8 @@ export function MemoPage(): JSX.Element {
       ) : null}
 
       {isPending ? (
-        <div className="mt-10 flex items-center gap-2 text-sm text-muted">
-          <Spinner size="sm" aria-hidden="true" />
-          Loading the Investment Memo…
+        <div className="mt-10">
+          <ResultsPanelSkeleton label="Loading the Investment Memo…" />
         </div>
       ) : null}
 

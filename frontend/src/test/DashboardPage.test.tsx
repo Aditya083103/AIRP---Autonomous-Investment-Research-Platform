@@ -91,6 +91,13 @@ afterEach(() => {
 });
 
 describe("DashboardPage", () => {
+  it("shows a skeleton while the history is loading", () => {
+    vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
+    renderDashboard();
+
+    expect(screen.getByTestId("history-table-skeleton")).toBeInTheDocument();
+  });
+
   it("greets the user by display name", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(200, historyResponse())));
     renderDashboard();
@@ -118,7 +125,7 @@ describe("DashboardPage", () => {
     expect(sellBadge.className).toContain("bg-verdict-sell");
   });
 
-  it("shows an empty state when there is no history yet", async () => {
+  it("shows an empty state with a call-to-action when there is no history yet", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(jsonResponse(200, historyResponse({ items: [], total_count: 0 }))),
@@ -126,6 +133,10 @@ describe("DashboardPage", () => {
     renderDashboard();
 
     expect(await screen.findByText(/haven't run an analysis yet/i)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /run an analysis/i })).toHaveAttribute(
+      "href",
+      "/analysis",
+    );
   });
 
   it("shows an error message when the request fails", async () => {

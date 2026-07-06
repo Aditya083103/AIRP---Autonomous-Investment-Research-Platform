@@ -40,6 +40,7 @@ import { Button } from "@/components/ui";
 import { type NseCompany } from "@/data/nseTop50";
 import { useAuth } from "@/hooks/useAuth";
 import { buildComparisonRows } from "@/lib/compare/winnerLogic";
+import { toast } from "@/lib/toast";
 
 type CompareStage = "form" | "running" | "done";
 
@@ -92,11 +93,16 @@ export function ComparePage(): JSX.Element {
       setSideB({ company: companyB, jobId: startedB.job_id, result: undefined });
       setStage("running");
     } catch (error) {
-      setFormError(
+      const message =
         error instanceof AnalysisApiError
           ? error.message
-          : "Could not start the comparison. Please try again.",
-      );
+          : "Could not start the comparison. Please try again.";
+      setFormError(message);
+      // T-066: both starts are kicked off via a direct Promise.all of
+      // startAnalysis calls, not a React Query mutation -- see
+      // LoginPage.tsx's identical catch block for why that means this
+      // toast call has to be explicit.
+      toast.error(message);
     } finally {
       setIsStarting(false);
     }
