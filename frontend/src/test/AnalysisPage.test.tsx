@@ -10,6 +10,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AuthContext, type AuthContextValue } from "@/context/AuthContext";
+import { toastStore } from "@/lib/toastStore";
 import { AnalysisPage } from "@/pages/AnalysisPage";
 
 function jsonResponse(status: number, body: unknown): Response {
@@ -63,6 +64,7 @@ async function selectInfosys(user: ReturnType<typeof userEvent.setup>): Promise<
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  toastStore.clear();
 });
 
 describe("AnalysisPage", () => {
@@ -103,6 +105,9 @@ describe("AnalysisPage", () => {
     await user.click(screen.getByRole("button", { name: /start analysis/i }));
 
     expect(await screen.findByText("Pipeline is overloaded")).toBeInTheDocument();
+    expect(toastStore.getSnapshot()).toContainEqual(
+      expect.objectContaining({ tone: "error", message: "Pipeline is overloaded" }),
+    );
   });
 
   it("rejects an oversized PDF and disables the submit button", async () => {

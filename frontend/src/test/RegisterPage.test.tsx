@@ -5,10 +5,11 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AuthApiError } from "@/api/auth";
 import { AuthContext, type AuthContextValue } from "@/context/AuthContext";
+import { toastStore } from "@/lib/toastStore";
 import { RegisterPage } from "@/pages/RegisterPage";
 
 function renderRegisterPage(register: AuthContextValue["register"]): void {
@@ -32,6 +33,10 @@ function renderRegisterPage(register: AuthContextValue["register"]): void {
     </AuthContext.Provider>,
   );
 }
+
+afterEach(() => {
+  toastStore.clear();
+});
 
 describe("RegisterPage", () => {
   it("shows an error when the passwords do not match", async () => {
@@ -59,6 +64,9 @@ describe("RegisterPage", () => {
     await user.click(screen.getByRole("button", { name: /create account/i }));
 
     expect(await screen.findByText("A user with this email already exists")).toBeInTheDocument();
+    expect(toastStore.getSnapshot()).toContainEqual(
+      expect.objectContaining({ tone: "error", message: "A user with this email already exists" }),
+    );
   });
 
   it("redirects to /dashboard after a successful registration", async () => {

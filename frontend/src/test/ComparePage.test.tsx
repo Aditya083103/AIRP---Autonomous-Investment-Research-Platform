@@ -13,6 +13,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AuthContext, type AuthContextValue } from "@/context/AuthContext";
+import { toastStore } from "@/lib/toastStore";
 import { ComparePage } from "@/pages/ComparePage";
 
 class FakeWebSocket {
@@ -191,6 +192,7 @@ function completeJob(jobId: string): void {
 afterEach(() => {
   FakeWebSocket.instances = [];
   vi.unstubAllGlobals();
+  toastStore.clear();
 });
 
 describe("ComparePage", () => {
@@ -247,5 +249,32 @@ describe("ComparePage", () => {
     await user.click(screen.getByRole("button", { name: /compare again/i }));
 
     expect(screen.getByTestId("compare-input-form")).toBeInTheDocument();
+  });
+
+  it("shows an inline error and a toast when starting the comparison fails (T-066)", async () => {
+    // mockImplementation (not mockResolvedValue) so each of the two
+    // concurrent fetch calls -- ComparePage's handleSubmit fires both
+    // starts via Promise.all -- gets its own fresh Response object.
+    // mockResolvedValue resolves to a single shared Response instance;
+    // a Response body can only be read once, so the second concurrent
+    // `.json()` call would throw "body stream already read" instead of
+    // parsing the intended payload.
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockImplementation(() =>
+          Promise.resolve(jsonResponse(500, { detail: "Analysis service unavailable" })),
+        ),
+    );
+    const user = userEvent.setup();
+    renderComparePage();
+
+    await submitComparison(user);
+
+    expect(await screen.findByText("Analysis service unavailable")).toBeInTheDocument();
+    expect(toastStore.getSnapshot()).toContainEqual(
+      expect.objectContaining({ tone: "error", message: "Analysis service unavailable" }),
+    );
   });
 });

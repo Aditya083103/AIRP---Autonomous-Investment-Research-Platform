@@ -19,6 +19,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AuthContext, type AuthContextValue } from "@/context/AuthContext";
+import { toastStore } from "@/lib/toastStore";
 import { AnalysisResultPage } from "@/pages/AnalysisResultPage";
 
 class FakeWebSocket {
@@ -184,6 +185,7 @@ function emitFinalEvent(status: "completed" | "failed" = "completed"): void {
 afterEach(() => {
   FakeWebSocket.instances = [];
   vi.unstubAllGlobals();
+  toastStore.clear();
 });
 
 describe("AnalysisResultPage", () => {
@@ -204,6 +206,35 @@ describe("AnalysisResultPage", () => {
 
     expect(screen.getByText("Portfolio Manager")).toBeInTheDocument();
     expect(screen.getByText("Fundamental Analyst")).toBeInTheDocument();
+  });
+
+  it("shows the results skeleton while the memo is pending", async () => {
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    vi.stubGlobal("fetch", vi.fn().mockReturnValue(new Promise(() => {})));
+    renderResultPage();
+
+    emitFinalEvent("completed");
+
+    expect(await screen.findByTestId("results-panel-skeleton")).toBeInTheDocument();
+  });
+
+  it("shows the charts skeleton once the memo loaded but charts are still pending", async () => {
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) => {
+        if (url.includes("/result")) {
+          return Promise.resolve(jsonResponse(200, RESULT_RESPONSE));
+        }
+        return new Promise(() => {});
+      }),
+    );
+    renderResultPage();
+
+    emitFinalEvent("completed");
+
+    expect(await screen.findByTestId("results-panel")).toBeInTheDocument();
+    expect(await screen.findByTestId("charts-panel-skeleton")).toBeInTheDocument();
   });
 
   it("shows completion summary and the Investment Memo once the final event arrives", async () => {
@@ -393,5 +424,23 @@ describe("AnalysisResultPage", () => {
     await userEvent.click(screen.getByRole("tab", { name: "Debate transcript" }));
 
     expect(await screen.findByText("Revenue grew 8% YoY.")).toBeInTheDocument();
+  });
+
+  it("shows a toast when the stream closes with an unauthorized code (T-066)", async () => {
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    renderResultPage();
+
+    act(() => {
+      lastSocket().onclose?.({ code: 4401 });
+    });
+
+    await waitFor(() =>
+      expect(toastStore.getSnapshot()).toContainEqual(
+        expect.objectContaining({
+          tone: "error",
+          message: "Not authorized to view this analysis (invalid or expired token).",
+        }),
+      ),
+    );
   });
 });

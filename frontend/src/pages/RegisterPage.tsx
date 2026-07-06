@@ -17,6 +17,7 @@ import { AuthApiError } from "@/api/auth";
 import { AuthCard } from "@/components/auth/AuthCard";
 import { Button, Input } from "@/components/ui";
 import { useAuth } from "@/hooks/useAuth";
+import { toast } from "@/lib/toast";
 import { registerSchema, type RegisterFormValues } from "@/lib/validation/authSchemas";
 
 export function RegisterPage(): JSX.Element {
@@ -42,11 +43,15 @@ export function RegisterPage(): JSX.Element {
       });
       navigate("/dashboard", { replace: true });
     } catch (error) {
-      setFormError(
+      const message =
         error instanceof AuthApiError
           ? error.message
-          : "Could not create your account. Please try again.",
-      );
+          : "Could not create your account. Please try again.";
+      setFormError(message);
+      // T-066: see LoginPage.tsx's identical catch block for why this
+      // toast call has to be explicit here rather than coming from
+      // src/lib/queryClient.ts's global mutation-error handler.
+      toast.error(message);
     }
   };
 

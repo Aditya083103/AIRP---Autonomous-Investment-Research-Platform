@@ -21,6 +21,7 @@ import { AuthApiError } from "@/api/auth";
 import { AuthCard } from "@/components/auth/AuthCard";
 import { Button, Input } from "@/components/ui";
 import { useAuth } from "@/hooks/useAuth";
+import { toast } from "@/lib/toast";
 import { loginSchema, type LoginFormValues } from "@/lib/validation/authSchemas";
 
 interface LocationState {
@@ -49,9 +50,16 @@ export function LoginPage(): JSX.Element {
       const redirectTo = state?.from?.pathname ?? "/dashboard";
       navigate(redirectTo, { replace: true });
     } catch (error) {
-      setFormError(
-        error instanceof AuthApiError ? error.message : "Could not log in. Please try again.",
-      );
+      const message =
+        error instanceof AuthApiError ? error.message : "Could not log in. Please try again.";
+      setFormError(message);
+      // T-066: login/register call useAuth() directly rather than going
+      // through a React Query mutation, so src/lib/queryClient.ts's
+      // global MutationCache.onError toast (see that file's docstring)
+      // does not cover this catch block -- it has to fire explicitly
+      // here, same as RegisterPage's and AnalysisPage's identical
+      // try/catch shape.
+      toast.error(message);
     }
   };
 

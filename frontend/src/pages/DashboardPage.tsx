@@ -1,5 +1,5 @@
 // frontend/src/pages/DashboardPage.tsx
-// AIRP -- Dashboard (T-057)
+// AIRP -- Dashboard (T-057, loading/empty states refined in T-066)
 //
 // Replaces T-056's placeholder with the real page: the user's analysis
 // history loaded from GET /api/v1/analysis/history via
@@ -16,11 +16,24 @@
 // backend/routers/auth.py's T-056 docstring already applied to why
 // get_current_user was left untouched. A caption under the search box
 // says so explicitly rather than implying it searches everything.
+//
+// T-066 replaces the plain spinner+text loading row with
+// HistoryTableSkeleton (shaped like the real table, so there's no
+// layout jump once it loads) and both zero-result branches with
+// <EmptyState> -- "no history at all" now includes a CTA straight to
+// /analysis, since that is the one thing a person seeing this page for
+// the first time actually needs to do next. The failed-fetch branch is
+// unchanged (still inline red text): src/lib/queryClient.ts's global
+// onError already puts the same message in a toast automatically, so
+// this inline text is the *persistent* detail for someone who missed
+// the toast, not a duplicate of it.
 
 import { useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 
 import { HistoryTable } from "@/components/dashboard/HistoryTable";
-import { Button, Input, Spinner } from "@/components/ui";
+import { HistoryTableSkeleton } from "@/components/skeletons";
+import { Button, EmptyState, Input } from "@/components/ui";
 import { useAnalysisHistory } from "@/hooks/useAnalysisHistory";
 import { useAuth } from "@/hooks/useAuth";
 
@@ -68,20 +81,26 @@ export function DashboardPage(): JSX.Element {
 
       <div className="mt-6">
         {isLoading ? (
-          <div className="flex items-center gap-3 py-12 text-sm text-muted">
-            <Spinner size="sm" />
-            Loading your analysis history…
-          </div>
+          <HistoryTableSkeleton label="Loading your analysis history…" />
         ) : isError ? (
           <p role="alert" className="py-12 text-sm text-verdict-sell">
             {error instanceof Error ? error.message : "Could not load your analysis history."}
           </p>
         ) : data && data.items.length === 0 ? (
-          <p className="py-12 text-sm text-muted">
-            {"You haven't run an analysis yet. Start one from the analysis page to see it here."}
-          </p>
+          <EmptyState
+            title="You haven't run an analysis yet."
+            description="Start one from the analysis page to see it here."
+            action={
+              <Link
+                to="/analysis"
+                className="text-sm font-medium text-brand-600 hover:text-brand-700"
+              >
+                Run an analysis →
+              </Link>
+            }
+          />
         ) : filteredItems.length === 0 ? (
-          <p className="py-12 text-sm text-muted">{`No loaded analyses match "${search}".`}</p>
+          <EmptyState title={`No loaded analyses match "${search}".`} />
         ) : (
           <>
             <HistoryTable entries={filteredItems} />

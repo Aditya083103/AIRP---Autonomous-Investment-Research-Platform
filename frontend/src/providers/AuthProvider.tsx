@@ -75,7 +75,20 @@ export function AuthProvider({ children }: AuthProviderProps): JSX.Element {
     // this tab's session -- see the module docstring).
     setUser(null);
     setAccessToken(null);
-    await logoutUser();
+    try {
+      await logoutUser();
+    } catch (error) {
+      // T-066: previously unguarded -- a failed /auth/logout call (the
+      // backend being briefly unreachable, a network blip) surfaced as
+      // an unhandled promise rejection, since every caller of this
+      // function (e.g. RootLayout's header) invokes it as
+      // `() => void handleLogout()`, which discards the returned
+      // promise and cannot catch a rejection itself. Local state is
+      // already cleared above regardless of outcome, so there is
+      // nothing left for a caller to react to here -- just log it
+      // rather than letting it become a silent-but-crashing rejection.
+      console.error("AIRP: /auth/logout request failed (already logged out locally)", error);
+    }
   }, []);
 
   const value = useMemo<AuthContextValue>(
