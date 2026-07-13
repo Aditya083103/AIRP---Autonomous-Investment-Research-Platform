@@ -367,6 +367,57 @@ class TestComputeAgentWeights:
         assert weights["fundamental_analyst"] >= weights["news_sentiment"]
         assert weights["valuation_agent"] >= weights["news_sentiment"]
 
+    def test_insufficient_fundamental_data_quality_gets_zero_weight(self) -> None:
+        """T-082: fundamental_analyst is excluded (not just neutral-weighted)
+        when its data_quality is 'insufficient', even though it produced no
+        'error' and would otherwise pass the usability check."""
+        fundamental_insufficient = {
+            **_FUNDAMENTAL_STRONG,
+            "score": None,
+            "data_quality": "insufficient",
+        }
+        weights = _compute_agent_weights(
+            fundamental_insufficient,
+            _TECHNICAL_BUY_STRONG,
+            _SENTIMENT_POSITIVE,
+            _MACRO_FAVOURABLE,
+            _RISK_LOW,
+            _CONTRARIAN_MILD,
+            _VALUATION_UNDERVALUED,
+        )
+        assert weights["fundamental_analyst"] == 0.0
+        assert abs(sum(weights.values()) - 1.0) < 1e-3
+
+    def test_sufficient_fundamental_data_quality_keeps_normal_weight(self) -> None:
+        """Regression guard: explicit data_quality='sufficient' must not
+        disable the fundamental analyst's normal weight."""
+        fundamental_sufficient = {**_FUNDAMENTAL_STRONG, "data_quality": "sufficient"}
+        weights = _compute_agent_weights(
+            fundamental_sufficient,
+            _TECHNICAL_BUY_STRONG,
+            _SENTIMENT_POSITIVE,
+            _MACRO_FAVOURABLE,
+            _RISK_LOW,
+            _CONTRARIAN_MILD,
+            _VALUATION_UNDERVALUED,
+        )
+        assert weights["fundamental_analyst"] > 0.0
+
+    def test_missing_data_quality_key_keeps_normal_weight(self) -> None:
+        """Backward compatibility: fundamental dicts with no data_quality key
+        at all (pre-T-081 shape) behave exactly as before."""
+        assert "data_quality" not in _FUNDAMENTAL_STRONG
+        weights = _compute_agent_weights(
+            _FUNDAMENTAL_STRONG,
+            _TECHNICAL_BUY_STRONG,
+            _SENTIMENT_POSITIVE,
+            _MACRO_FAVOURABLE,
+            _RISK_LOW,
+            _CONTRARIAN_MILD,
+            _VALUATION_UNDERVALUED,
+        )
+        assert weights["fundamental_analyst"] > 0.0
+
 
 # ---------------------------------------------------------------------------
 # Tests: _determine_verdict
@@ -401,6 +452,47 @@ class TestDetermineVerdict:
     def test_overvalued_plus_weak_fundamentals_forces_sell(self) -> None:
         verdict = _determine_verdict(
             _FUNDAMENTAL_WEAK,
+            _TECHNICAL_SELL_STRONG,
+            _SENTIMENT_NEGATIVE,
+            _RISK_LOW,
+            _CONTRARIAN_MILD,
+            _VALUATION_OVERVALUED,
+            critical_flags=[],
+        )
+        assert verdict == "SELL"
+
+    def test_overvalued_plus_insufficient_fundamentals_skips_gate_2(self) -> None:
+        """
+        T-082: Gate 2 must NOT fire purely because fundamental data was
+        insufficient. Without the fix, fund_score defaults to a neutral 5
+        (via `or 5`), 5 < 6, and Gate 2 would force SELL as a hard override
+        even though the weighted tally on the remaining signals (strong
+        technical + positive sentiment offsetting the overvaluation) lands
+        at HOLD.
+        """
+        fundamental_insufficient = {
+            "score": None,
+            "data_quality": "insufficient",
+        }
+        verdict = _determine_verdict(
+            fundamental_insufficient,
+            _TECHNICAL_BUY_STRONG,
+            _SENTIMENT_POSITIVE,
+            _RISK_LOW,
+            _CONTRARIAN_MILD,
+            _VALUATION_OVERVALUED,
+            critical_flags=[],
+        )
+        assert verdict == "HOLD"
+
+    def test_overvalued_plus_sufficient_but_weak_fundamentals_still_forces_sell(
+        self,
+    ) -> None:
+        """Regression guard: an explicit data_quality='sufficient' weak score
+        must still trip Gate 2 as before."""
+        fundamental_weak_explicit = {**_FUNDAMENTAL_WEAK, "data_quality": "sufficient"}
+        verdict = _determine_verdict(
+            fundamental_weak_explicit,
             _TECHNICAL_SELL_STRONG,
             _SENTIMENT_NEGATIVE,
             _RISK_LOW,

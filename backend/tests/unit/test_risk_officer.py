@@ -471,6 +471,67 @@ class TestScoreRisk:
         )
         assert 1 <= scores["risk_score"] <= 10
 
+    def test_insufficient_data_quality_holds_financial_risk_at_neutral_base(
+        self,
+    ) -> None:
+        """
+        T-082: when fundamental.data_quality == 'insufficient', financial_risk
+        must stay at the neutral base of 3 -- fragments like a lone high D/E
+        must NOT push it up, and a missing score must NOT push it up either.
+        """
+        fundamental_insufficient: dict[str, Any] = {
+            "agent_name": "fundamental_analyst",
+            "data_quality": "insufficient",
+            "score": None,
+            # Even though a D/E fragment happens to be present and looks
+            # risky, it must be ignored entirely while data_quality is
+            # insufficient.
+            "debt_to_equity": 2.5,
+            "weaknesses": ["fcf negative and weak"],
+            "summary": "",
+        }
+        scores = _score_risk(
+            fundamental_insufficient,
+            _TECHNICAL_BULLISH,
+            _SENTIMENT_CLEAN,
+            _MACRO_NEUTRAL,
+            self._make_sentinel(),
+        )
+        assert scores["financial_risk"] == 3
+
+    def test_sufficient_data_quality_still_applies_de_adjustment(self) -> None:
+        """Sanity check: explicit data_quality='sufficient' does not disable
+        the existing D/E-driven adjustment (regression guard for T-082)."""
+        fundamental_sufficient: dict[str, Any] = dict(_FUNDAMENTAL_GOOD)
+        fundamental_sufficient["data_quality"] = "sufficient"
+        fundamental_sufficient["debt_to_equity"] = 1.8
+        scores = _score_risk(
+            fundamental_sufficient,
+            _TECHNICAL_BULLISH,
+            _SENTIMENT_CLEAN,
+            _MACRO_NEUTRAL,
+            self._make_sentinel(),
+        )
+        assert scores["financial_risk"] >= 5
+
+    def test_missing_data_quality_key_defaults_to_sufficient(self) -> None:
+        """
+        Backward compatibility: fundamental dicts produced before T-081/T-082
+        (no data_quality key at all) must behave exactly as before -- D/E
+        adjustments still apply.
+        """
+        fundamental_high_de: dict[str, Any] = dict(_FUNDAMENTAL_GOOD)
+        fundamental_high_de["debt_to_equity"] = 1.8
+        assert "data_quality" not in fundamental_high_de
+        scores = _score_risk(
+            fundamental_high_de,
+            _TECHNICAL_BULLISH,
+            _SENTIMENT_CLEAN,
+            _MACRO_NEUTRAL,
+            self._make_sentinel(),
+        )
+        assert scores["financial_risk"] >= 5
+
 
 # ---------------------------------------------------------------------------
 # Tests: _determine_concentration_flags

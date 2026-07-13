@@ -182,6 +182,14 @@ def _compute_agent_weights(
     1.0. Any agent that errored or produced no output gets zero weight,
     and its share is redistributed proportionally across the agents that
     did produce usable output.
+
+    T-082: the fundamental analyst also gets zero weight when its
+    ``data_quality`` is ``"insufficient"``. A missing score defaults to a
+    neutral 5 inside ``_determine_verdict``'s weighted tally, so leaving
+    fundamental_analyst's base weight in place would still let a
+    fabricated "neutral" opinion crowd out real signal from the other six
+    agents -- excluding it entirely and redistributing its weight is the
+    honest outcome.
     """
     base_weights = dict(_BASE_AGENT_WEIGHTS)
     outputs: dict[str, dict[str, Any]] = {
@@ -197,8 +205,11 @@ def _compute_agent_weights(
     usable: dict[str, float] = {}
     for name, weight in base_weights.items():
         out = outputs.get(name) or {}
-        if out and not out.get("error"):
-            usable[name] = weight
+        if not out or out.get("error"):
+            continue
+        if name == "fundamental_analyst" and out.get("data_quality") == "insufficient":
+            continue
+        usable[name] = weight
 
     total_usable = sum(usable.values())
     if total_usable <= 0:
@@ -239,9 +250,19 @@ def _determine_verdict(
     After the gates, a weighted point tally across the remaining signals
     decides the verdict, with a soft downgrade rule that prevents a
     marginal BUY from surviving alongside multiple critical flags.
+
+    T-082: Gate 2 is skipped when the fundamental analyst's
+    ``data_quality`` is ``"insufficient"``. Gate 2 exists to catch a
+    genuinely overvalued, genuinely weak company -- not to punish a
+    company for which fundamentals data happened to be unavailable.
+    ``fund_score`` already falls back to a neutral 5 when the score is
+    ``None``, and 5 < 6 would otherwise fire Gate 2 on every
+    insufficient-data case that is also flagged overvalued, regardless of
+    whether the fundamentals are actually weak.
     """
     risk_score = int(risk.get("risk_score") or 5)
     valuation_verdict = str(valuation.get("valuation_verdict") or "fairly_valued")
+    fund_data_quality = str(fundamental.get("data_quality") or "sufficient")
     fund_score = int(fundamental.get("score") or 5)
     bear_conviction = int(contrarian.get("bear_conviction") or 1)
 
@@ -250,7 +271,11 @@ def _determine_verdict(
         return "SELL"
 
     # -- Hard gate 2: overvalued + weak fundamentals -----------------------
-    if valuation_verdict == "overvalued" and fund_score < 6:
+    if (
+        fund_data_quality != "insufficient"
+        and valuation_verdict == "overvalued"
+        and fund_score < 6
+    ):
         return "SELL"
 
     # -- Weighted point tally -----------------------------------------------
