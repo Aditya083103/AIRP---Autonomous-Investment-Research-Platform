@@ -301,7 +301,11 @@ def _score_risk(
     financial_risk:
       Driven by fundamental agent data: D/E ratio, FCF status, margin trends.
       Base 3; +3 if D/E > 1.0; +2 if D/E 0.5-1.0; +2 if FCF negative or
-      weak; +1 if fundamental score <= 4.
+      weak; +1 if fundamental score <= 4. Skipped entirely -- stays at the
+      neutral base of 3 -- when fundamental.data_quality == "insufficient"
+      (T-082): an absent fundamental score must never be treated as a risk
+      signal, and partial fragments (e.g. a lone D/E figure) are not a
+      reliable basis for a risk adjustment either.
 
     concentration_risk:
       Qualitative -- base 3, elevated if macro headwinds >= 3 or if
@@ -330,31 +334,44 @@ def _score_risk(
     # --- Financial risk (from fundamental agent)
     financial_risk: int = 3  # default: moderate
 
-    de_raw: Any = fundamental.get("debt_to_equity")
-    de: Optional[float] = float(de_raw) if de_raw is not None else None
+    fund_data_quality: str = str(fundamental.get("data_quality") or "sufficient")
 
-    if de is not None:
-        if de > 1.0:
-            financial_risk += 3
-        elif de > 0.5:
+    if fund_data_quality == "insufficient":
+        # T-082: fewer than 2 of the fundamental analyst's 5 scoring metrics
+        # were available. An absence of data is not itself evidence of
+        # financial weakness -- stay at the neutral base rather than let
+        # whichever fragments happen to be present (e.g. a lone D/E value)
+        # silently swing the risk score.
+        logger.info(
+            "Fundamental data_quality=insufficient -- financial_risk held "
+            "at neutral base (3), skipping D/E and FCF adjustments"
+        )
+    else:
+        de_raw: Any = fundamental.get("debt_to_equity")
+        de: Optional[float] = float(de_raw) if de_raw is not None else None
+
+        if de is not None:
+            if de > 1.0:
+                financial_risk += 3
+            elif de > 0.5:
+                financial_risk += 2
+            elif de < 0:
+                # Negative D/E = net cash = lower financial risk
+                financial_risk -= 1
+
+        # FCF status from weaknesses or summary text
+        fundamental_weaknesses: list[str] = fundamental.get("weaknesses", []) or []
+        fundamental_summary: str = fundamental.get("summary", "") or ""
+        fund_text: str = " ".join(fundamental_weaknesses) + " " + fundamental_summary
+        if "fcf" in fund_text.lower() and (
+            "negative" in fund_text.lower() or "weak" in fund_text.lower()
+        ):
             financial_risk += 2
-        elif de < 0:
-            # Negative D/E = net cash = lower financial risk
-            financial_risk -= 1
 
-    # FCF status from weaknesses or summary text
-    fundamental_weaknesses: list[str] = fundamental.get("weaknesses", []) or []
-    fundamental_summary: str = fundamental.get("summary", "") or ""
-    fund_text: str = " ".join(fundamental_weaknesses) + " " + fundamental_summary
-    if "fcf" in fund_text.lower() and (
-        "negative" in fund_text.lower() or "weak" in fund_text.lower()
-    ):
-        financial_risk += 2
-
-    fund_score_raw: Any = fundamental.get("score")
-    fund_score: int = int(fund_score_raw) if fund_score_raw is not None else 5
-    if fund_score <= 4:
-        financial_risk += 1
+        fund_score_raw: Any = fundamental.get("score")
+        fund_score: int = int(fund_score_raw) if fund_score_raw is not None else 5
+        if fund_score <= 4:
+            financial_risk += 1
 
     financial_risk = max(1, min(10, financial_risk))
 
