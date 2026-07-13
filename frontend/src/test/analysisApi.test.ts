@@ -457,8 +457,20 @@ describe("fetchAnalysisCharts", () => {
 });
 
 describe("fetchAnalysisMemoPdf", () => {
+  // jsdom (the Vitest test environment configured in vitest.config.ts)
+  // installs its own `Blob` on `globalThis`, which is a different class
+  // from the Blob implementation Node's underlying fetch/undici internals
+  // construct when a real `Response`'s `.blob()` is called. A `Response`
+  // built from a Blob body and then read back via `.blob()` therefore
+  // returns an instance that fails `toBeInstanceOf(Blob)` against jsdom's
+  // `Blob` global, even though nothing is actually broken. Overriding
+  // `.blob()` to resolve with the exact Blob instance the test constructed
+  // sidesteps the cross-realm mismatch entirely.
   function pdfResponse(status: number, body: BodyInit | null = new Blob(["%PDF-fake"])): Response {
-    return new Response(body, { status });
+    const response = new Response(body, { status });
+    const blobBody = body instanceof Blob ? body : new Blob([String(body ?? "")]);
+    response.blob = vi.fn().mockResolvedValue(blobBody);
+    return response;
   }
 
   it("sends a GET request with the Authorization header to the memo/pdf route", async () => {
