@@ -30,6 +30,15 @@ flake8-docstrings==1.7.0         # Enforces docstrings on public functions
 # ── Type Checking ─────────────────────────────────────────────────────────────
 mypy==1.10.0
 pydantic[mypy]==2.7.4            # Ships pydantic.mypy plugin for strict checks
+types-passlib==1.7.7.20240819    # passlib itself ships no py.typed marker --
+                                  # without this stub, mypy sees .hash()/.verify()
+                                  # as untyped Any and flags "Returning Any from
+                                  # function declared to return str" in
+                                  # backend/services/auth.py. Pinned explicitly
+                                  # here (not just present via a local
+                                  # `mypy --install-types` run) so CI's fresh
+                                  # venv resolves passlib's types identically to
+                                  # local dev venvs.
 
 
 # ── Testing Framework ─────────────────────────────────────────────────────────
