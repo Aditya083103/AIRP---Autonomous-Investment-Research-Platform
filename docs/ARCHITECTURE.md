@@ -628,7 +628,7 @@ Claude API (Anthropic)        ChromaDB (Render volume)
 | `DATABASE_URL`         | Local Docker PostgreSQL   | Neon connection string     |
 | `REDIS_URL`            | Local Docker Redis        | Upstash Redis URL          |
 | `LANGCHAIN_PROJECT`    | `airp-dev`                | `airp-prod`                |
-| `LANGCHAIN_TRACING_V2` | `false` (off by default)  | `true`                     |
+| `LANGCHAIN_TRACING_V2` | `true` (enabled from Phase 7 onward — was `false` in Phases 1–6) | `true` |
 | `ANTHROPIC_MODEL`      | `claude-haiku-4-20250514` | `claude-sonnet-4-20250514` |
 | `ENVIRONMENT`          | `development`             | `production`               |
 

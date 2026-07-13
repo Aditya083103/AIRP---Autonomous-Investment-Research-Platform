@@ -217,18 +217,55 @@ class TestRevenueCagr:
 
 class TestScoreFinancials:
     def test_high_quality_company_scores_high(self) -> None:
-        score = _score_financials(FINANCIALS_GOOD, RATIOS_GOOD)
+        score, data_quality = _score_financials(FINANCIALS_GOOD, RATIOS_GOOD)
         # TCS-like data: CAGR 13.7%(2pts) + margin 19%(1pt) + ROE 46%(2pts)
         # + D/E 0.02(1pt, ≤0.5 band) + FCF margin 18%(1pt) = 7pts total
+        assert data_quality == "sufficient"
+        assert score is not None
         assert score >= 7
 
     def test_score_in_valid_range(self) -> None:
-        score = _score_financials(FINANCIALS_GOOD, RATIOS_GOOD)
+        score, data_quality = _score_financials(FINANCIALS_GOOD, RATIOS_GOOD)
+        assert data_quality == "sufficient"
+        assert score is not None
         assert 1 <= score <= 10
 
-    def test_empty_data_returns_minimum(self) -> None:
-        score = _score_financials({}, {})
-        assert score == 1
+    def test_empty_data_returns_insufficient_quality_and_none_score(self) -> None:
+        """
+        T-081: fewer than 2 of 5 metrics available → honest 'insufficient'
+        data_quality with score=None, not a misleading hard floor of 1.
+        """
+        score, data_quality = _score_financials({}, {})
+        assert data_quality == "insufficient"
+        assert score is None
+
+    def test_exactly_one_metric_is_still_insufficient(self) -> None:
+        """Boundary: 1 of 5 metrics present must still be 'insufficient'."""
+        financials_one_metric: dict[str, Any] = {
+            "income_statement": [],
+            "balance_sheet": [],
+            "cash_flow": [],
+        }
+        ratios_one_metric = {"roe_pct": 15.0}
+        score, data_quality = _score_financials(
+            financials_one_metric, ratios_one_metric
+        )
+        assert data_quality == "insufficient"
+        assert score is None
+
+    def test_exactly_two_metrics_is_sufficient(self) -> None:
+        """Boundary: 2 of 5 metrics present crosses into 'sufficient'."""
+        financials_two_metrics: dict[str, Any] = {
+            "income_statement": [],
+            "balance_sheet": [],
+            "cash_flow": [],
+        }
+        ratios_two_metrics = {"roe_pct": 15.0, "debt_to_equity": 0.4}
+        score, data_quality = _score_financials(
+            financials_two_metrics, ratios_two_metrics
+        )
+        assert data_quality == "sufficient"
+        assert score is not None
 
     def test_poor_fundamentals_score_low(self) -> None:
         poor_financials: dict[str, Any] = {
@@ -263,25 +300,31 @@ class TestScoreFinancials:
             "roe_pct": 3.0,
             "debt_to_equity": 3.5,
         }
-        score = _score_financials(poor_financials, poor_ratios)
+        score, data_quality = _score_financials(poor_financials, poor_ratios)
+        assert data_quality == "sufficient"
+        assert score is not None
         assert score <= 3
 
     def test_score_uses_ratios_roe_over_derived(self) -> None:
         """When ratios dict has ROE, it should be used for scoring."""
         # High ROE from ratios should push score up
-        score_with_roe = _score_financials(
+        score_with_roe, _ = _score_financials(
             FINANCIALS_GOOD, {**RATIOS_GOOD, "roe_pct": 50.0}
         )
-        score_without_roe = _score_financials(
+        score_without_roe, _ = _score_financials(
             FINANCIALS_GOOD, {**RATIOS_GOOD, "roe_pct": 5.0}
         )
+        assert score_with_roe is not None
+        assert score_without_roe is not None
         assert score_with_roe >= score_without_roe
 
     def test_net_cash_gives_max_debt_pts(self) -> None:
         """D/E < 0 (net cash) gives 2pts for debt vs 1pt for D/E 0.02."""
         ratios_net_cash = {**RATIOS_GOOD, "debt_to_equity": -0.1}
-        score = _score_financials(FINANCIALS_GOOD, ratios_net_cash)
+        score, data_quality = _score_financials(FINANCIALS_GOOD, ratios_net_cash)
         # Net cash (2pts) vs low debt (1pt) → score should be at least 8
+        assert data_quality == "sufficient"
+        assert score is not None
         assert score >= 8
 
 
@@ -397,6 +440,26 @@ class TestBuildAgentPrompt:
     def test_returns_string(self) -> None:
         assert isinstance(self._make_prompt(), str)
 
+    def test_none_score_renders_as_na(self) -> None:
+        """T-081: score=None (insufficient data) must not crash f-string
+        formatting and should read clearly as unavailable, not '0/10'."""
+        prompt = _build_agent_prompt(
+            company_name="Test Co",
+            ticker="TEST.NS",
+            financials={},
+            ratios={},
+            score=None,
+            trends={
+                "revenue_trend": "insufficient_data",
+                "profit_trend": "insufficient_data",
+                "debt_level": "unknown",
+                "fcf_status": "unknown",
+            },
+        )
+        assert isinstance(prompt, str)
+        assert "N/A" in prompt
+        assert "None/10" not in prompt
+
     def test_empty_financials_no_crash(self) -> None:
         prompt = _build_agent_prompt(
             company_name="Test Co",
@@ -480,6 +543,20 @@ class TestRunFundamentalAnalysisCore:
         result = self._run()
         # TCS-like data → should score ≥ 7
         assert result.score >= 7
+
+    def test_full_data_reports_sufficient_quality(self) -> None:
+        result = self._run()
+        assert result.data_quality == "sufficient"
+
+    def test_insufficient_data_yields_none_score_and_flag(self) -> None:
+        """
+        T-081 end-to-end: when the upstream tools return near-empty data,
+        the full pipeline must surface score=None and
+        data_quality='insufficient' rather than a hard-floored 1.
+        """
+        result = self._run(financials={}, ratios={})
+        assert result.score is None
+        assert result.data_quality == "insufficient"
 
     def test_error_is_none_on_success(self) -> None:
         result = self._run()
@@ -633,6 +710,10 @@ class TestRunFundamentalAnalysisNode:
         result = self._invoke_node(STATE_TCS)
         score = result["fundamental"]["score"]
         assert 1 <= score <= 10
+
+    def test_fundamental_dict_has_data_quality(self) -> None:
+        result = self._invoke_node(STATE_TCS)
+        assert result["fundamental"]["data_quality"] == "sufficient"
 
     def test_empty_ticker_returns_error(self) -> None:
         bad_state = {**STATE_TCS, "ticker": ""}

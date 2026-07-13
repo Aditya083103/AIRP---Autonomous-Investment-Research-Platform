@@ -22,7 +22,7 @@ Produce a validated ``FundamentalAnalysis`` Pydantic model with:
 Public interface
 ────────────────
   run_fundamental_analysis(state)  →  dict  (LangGraph node function)
-  _score_financials(...)           →  int   (pure, unit-testable scoring logic)
+  _score_financials(...)           →  tuple[int | None, str]  (score, data_quality)
   _assess_trends(...)              →  dict  (pure, unit-testable label logic)
   _build_agent_prompt(...)         →  str   (prompt builder, unit-testable)
 
@@ -36,7 +36,8 @@ Design decisions
 * Tool calls happen BEFORE the LLM call.  The LLM receives pre-processed
   structured data, never raw DataFrames or JSON blobs.
 * Error convention: always returns a dict; never raises.  On any failure
-  the returned FundamentalAnalysis has ``error`` set and ``score=1``.
+  the returned FundamentalAnalysis has ``error`` set, ``score=None``, and
+  ``data_quality="insufficient"`` — never a misleading numeric floor.
 * LangSmith tracing is automatic when LANGCHAIN_TRACING_V2=true and
   LANGSMITH_API_KEY is set — no additional code needed; every LLM call and
   tool call in this module is captured.
@@ -174,7 +175,7 @@ def _revenue_cagr(
 def _score_financials(
     financials: dict[str, Any],
     ratios: dict[str, Any],
-) -> int:
+) -> tuple[int | None, str]:
     """
     Compute a composite fundamental quality score from 1 (poor) to 10 (excellent).
 
@@ -189,8 +190,15 @@ def _score_financials(
       ─────────────────────────
       Raw total        (0–10 pts) → clipped to [1, 10]
 
-    Returns 1 (minimum) when data is severely missing to signal unreliable
-    assessment rather than a falsely neutral mid-range score.
+    Returns a ``(score, data_quality)`` tuple:
+      * ``data_quality == "insufficient"`` and ``score is None`` when fewer
+        than 2 of the 5 scoring metrics are available.  A hard floor of 1
+        used to be returned here, which silently conflated "we don't know"
+        with "this company is genuinely terrible" — misleading downstream
+        consumers (Portfolio Manager, memo narrative) into treating an
+        absence of data as a strong bearish signal.
+      * ``data_quality == "sufficient"`` and an int ``score`` in [1, 10]
+        otherwise.
     """
     income = financials.get("income_statement", [])
     cashflow = financials.get("cash_flow", [])
@@ -226,14 +234,16 @@ def _score_financials(
 
     raw = revenue_pts + margin_pts + roe_pts + de_pts + fcf_pts
 
-    # If we have almost no data, return minimum to signal unreliability
+    # If we have almost no data, the score would be a meaningless artifact
+    # of whichever thresholds happened to default to 0 — report it honestly
+    # as insufficient rather than floor it to a falsely bearish "1".
     data_available = sum(
         1 for x in [cagr, net_margin, roe, de, fcf_margin] if x is not None
     )
     if data_available < 2:
-        return 1
+        return None, "insufficient"
 
-    return max(1, min(10, raw))
+    return max(1, min(10, raw)), "sufficient"
 
 
 def _assess_trends(
@@ -331,7 +341,7 @@ def _build_agent_prompt(
     ticker: str,
     financials: dict[str, Any],
     ratios: dict[str, Any],
-    score: int,
+    score: int | None,
     trends: dict[str, str],
 ) -> str:
     """
@@ -390,9 +400,11 @@ def _build_agent_prompt(
 
     income_block = "\n".join(income_lines) or "  Data unavailable"
 
+    score_display = f"{score}/10" if score is not None else "N/A (insufficient data)"
+
     return f"""Analyse the following financial data for {company_name} ({ticker}).
 
-FUNDAMENTAL QUALITY SCORE (pre-computed): {score}/10
+FUNDAMENTAL QUALITY SCORE (pre-computed): {score_display}
 TREND LABELS (pre-computed):
   Revenue trend : {trends['revenue_trend']}
   Profit trend  : {trends['profit_trend']}
@@ -489,7 +501,7 @@ def _run_fundamental_analysis_core(
         ratios = {}
 
     # ── Step 3: Deterministic scoring and trend labels ───────────────────
-    score = _score_financials(financials, ratios)
+    score, data_quality = _score_financials(financials, ratios)
     trends = _assess_trends(financials, ratios)
 
     # ── Step 4: Build supplementary field values from tool data ──────────
@@ -547,10 +559,11 @@ def _run_fundamental_analysis_core(
         logger.exception(
             "LLM call failed in fundamental analyst for %s: %s", ticker, exc
         )
-        strengths = [f"Score {score}/10 based on deterministic financial analysis"]
+        score_text = f"{score}/10" if score is not None else "N/A (insufficient data)"
+        strengths = [f"Score {score_text} based on deterministic financial analysis"]
         risks = [f"LLM synthesis unavailable: {exc}"]
         summary = (
-            f"{company_name} receives a fundamental quality score of {score}/10. "
+            f"{company_name} receives a fundamental quality score of {score_text}. "
             f"Revenue trend: {trends['revenue_trend']}. "
             f"LLM narrative synthesis failed — review raw data."
         )
@@ -562,6 +575,7 @@ def _run_fundamental_analysis_core(
         company_name=company_name,
         ticker=ticker,
         score=score,
+        data_quality=data_quality,
         revenue_growth_pct=revenue_growth_pct,
         net_margin_pct=net_margin,
         operating_margin_pct=op_margin,
@@ -615,7 +629,8 @@ def run_fundamental_analysis(state: dict[str, Any]) -> dict[str, Any]:
             analysis_id=analysis_id,
             company_name=company_name,
             ticker="UNKNOWN",
-            score=1,
+            score=None,
+            data_quality="insufficient",
             error="ticker field is missing from InvestmentState",
         )
         return {"fundamental": result.model_dump()}
@@ -635,7 +650,8 @@ def run_fundamental_analysis(state: dict[str, Any]) -> dict[str, Any]:
             analysis_id=analysis_id,
             company_name=company_name,
             ticker=ticker,
-            score=1,
+            score=None,
+            data_quality="insufficient",
             error=f"Unhandled agent error: {exc}",
         )
 
