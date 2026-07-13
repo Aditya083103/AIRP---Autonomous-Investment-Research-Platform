@@ -123,13 +123,24 @@ class FundamentalAnalysis(AgentOutput):
     agent_name: str = Field(default="fundamental_analyst", frozen=True)
 
     # ── Scores ────────────────────────────────────────────────────────────
-    score: int = Field(
+    score: Optional[int] = Field(
+        default=None,
         ge=1,
         le=10,
         description=(
             "Overall fundamental quality score: 1 (very poor) – 10 (excellent). "
             "Weighted average of revenue growth, margin stability, FCF generation, "
-            "and debt safety."
+            "and debt safety. None when data_quality='insufficient' — an "
+            "unreliable score is worse than an honest 'unknown'."
+        ),
+    )
+    data_quality: str = Field(
+        default="sufficient",
+        description=(
+            "'sufficient' when >=2 of the 5 scoring metrics (revenue CAGR, net "
+            "margin, ROE, debt-to-equity, FCF margin) were available; "
+            "'insufficient' when fewer than 2 were available, in which case "
+            "score is None rather than a misleadingly low floor value."
         ),
     )
 
