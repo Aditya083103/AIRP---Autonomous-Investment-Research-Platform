@@ -537,11 +537,13 @@ class TestRunFundamentalAnalysisCore:
 
     def test_score_in_valid_range(self) -> None:
         result = self._run()
+        assert result.score is not None
         assert 1 <= result.score <= 10
 
     def test_high_quality_data_scores_high(self) -> None:
         result = self._run()
         # TCS-like data → should score ≥ 7
+        assert result.score is not None
         assert result.score >= 7
 
     def test_full_data_reports_sufficient_quality(self) -> None:
@@ -621,7 +623,10 @@ class TestRunFundamentalAnalysisCore:
             financials={"error": "financials_not_found", "message": "No data"},
         )
         assert isinstance(result, FundamentalAnalysis)
-        # Score should be low when no financial data
+        # Ratios still has ROE + D/E (2 metrics) -> data_quality stays
+        # "sufficient" and score is computed from those alone -- low, but
+        # not None.
+        assert result.score is not None
         assert result.score >= 1
 
     def test_ratios_error_still_returns_model(self) -> None:
@@ -658,6 +663,7 @@ class TestRunFundamentalAnalysisCore:
         """When LLM returns non-JSON, agent falls back gracefully."""
         result = self._run(llm_response="Sorry, I cannot provide that analysis.")
         assert isinstance(result, FundamentalAnalysis)
+        assert result.score is not None
         assert result.score >= 1
 
     def test_model_serialisable(self) -> None:

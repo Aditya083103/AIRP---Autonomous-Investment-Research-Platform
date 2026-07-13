@@ -263,9 +263,14 @@ class TestFundamentalAnalystSchemaValidation:
         m = FundamentalAnalysis(**_BASE_KWARGS, score=10)
         assert m.score == 10
 
-    def test_missing_score_raises(self) -> None:
-        with pytest.raises(ValidationError):
-            FundamentalAnalysis.model_validate({**_BASE_KWARGS})
+    def test_missing_score_defaults_to_none(self) -> None:
+        """
+        T-081: score became Optional[int] with default None (an absent
+        score legitimately means 'insufficient data', not a validation
+        error), so constructing without it must succeed rather than raise.
+        """
+        m = FundamentalAnalysis.model_validate({**_BASE_KWARGS})
+        assert m.score is None
 
     def test_missing_analysis_id_raises(self) -> None:
         with pytest.raises(ValidationError):
@@ -518,9 +523,13 @@ class TestFundamentalAnalystEmptyData:
         assert result.error is None
 
     def test_empty_financials_dict_score_at_minimum(self) -> None:
-        """No financial data -> score capped at minimum."""
+        """
+        T-081: no financial data -> score is None with
+        data_quality='insufficient', not a hard-floored 1.
+        """
         result = self._run(financials={}, ratios={})
-        assert result.score == 1
+        assert result.score is None
+        assert result.data_quality == "insufficient"
 
     def test_empty_ratios_dict_no_crash(self) -> None:
         result = self._run(financials=_FINANCIALS_MINIMAL, ratios={})
@@ -529,7 +538,10 @@ class TestFundamentalAnalystEmptyData:
     def test_both_tools_empty_dict_no_crash(self) -> None:
         result = self._run(financials={}, ratios={})
         assert isinstance(result, FundamentalAnalysis)
-        assert result.score >= 1
+        # T-081: both tools returning nothing -> insufficient data -> score
+        # is None (not a numeric floor), and the model must still validate.
+        assert result.score is None
+        assert result.data_quality == "insufficient"
 
     def test_income_statement_empty_list(self) -> None:
         """income_statement present but empty -> no crash."""
@@ -540,7 +552,9 @@ class TestFundamentalAnalystEmptyData:
         }
         result = self._run(financials=sparse, ratios={})
         assert isinstance(result, FundamentalAnalysis)
-        assert result.score == 1
+        # T-081: insufficient data -> score is None, not a hard-floored 1.
+        assert result.score is None
+        assert result.data_quality == "insufficient"
 
     def test_single_year_income_no_cagr(self) -> None:
         """Only 1 fiscal year -> CAGR is None -> no crash."""
@@ -597,6 +611,8 @@ class TestFundamentalAnalystEmptyData:
         high_de_ratios = {**_RATIOS_MINIMAL, "debt_to_equity": 3.5}
         result_high = self._run(financials=_FINANCIALS_MINIMAL, ratios=high_de_ratios)
         result_low = self._run(financials=_FINANCIALS_MINIMAL, ratios=_RATIOS_MINIMAL)
+        assert result_high.score is not None
+        assert result_low.score is not None
         assert result_high.score <= result_low.score
 
     def test_missing_roe_in_ratios_no_crash(self) -> None:
@@ -604,6 +620,7 @@ class TestFundamentalAnalystEmptyData:
         no_roe = {k: v for k, v in _RATIOS_MINIMAL.items() if k != "roe_pct"}
         result = self._run(financials=_FINANCIALS_MINIMAL, ratios=no_roe)
         assert isinstance(result, FundamentalAnalysis)
+        assert result.score is not None
         assert 1 <= result.score <= 10
 
     def test_data_warnings_in_financials_no_crash(self) -> None:
@@ -1004,7 +1021,10 @@ class TestFundamentalAnalystErrorPaths:
             rat_exc=RuntimeError("server error"),
         )
         assert isinstance(result, FundamentalAnalysis)
-        assert result.score == 1
+        # T-081: both tools failing -> no financial data at all -> score is
+        # None with data_quality='insufficient', not a hard-floored 1.
+        assert result.score is None
+        assert result.data_quality == "insufficient"
 
     def test_node_never_raises_on_core_exception(self) -> None:
         """The LangGraph node must never propagate an exception."""
