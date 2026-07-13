@@ -166,6 +166,7 @@ fix(agents): return insufficient data_quality instead of score floor of 1
 
 ```markdown
 ## Summary
+
 Fixes a verdict-bias bug where the Fundamental Analyst silently returned a
 hard-floored score of 1/10 whenever fewer than 2 of its 5 scoring metrics
 were available — conflating "we don't have enough data" with "this company
@@ -175,8 +176,9 @@ instead of waiting until Phase 11, so every agent built across Phases 7–10
 chatbot's tool-calling) is traced in LangSmith from day one.
 
 ## Changes
+
 - `_score_financials()` now returns `tuple[int | None, str]` — `(score,
-  data_quality)` — instead of a bare `int`. Returns `(None, "insufficient")`
+data_quality)` — instead of a bare `int`. Returns `(None, "insufficient")`
   when fewer than 2 of the 5 metrics (revenue CAGR, net margin, ROE, D/E,
   FCF margin) are present; otherwise `(clipped_score, "sufficient")`.
 - `FundamentalAnalysis.score` changed to `Optional[int]`; new
@@ -195,6 +197,7 @@ chatbot's tool-calling) is traced in LangSmith from day one.
   behavior and still pass.
 
 ## Testing
+
 - `python -m pytest backend/tests/unit/test_fundamental_analyst.py -v` — all
   passing, including new insufficient-data and boundary cases.
 - `python -m pytest backend/tests/unit -q` — full unit suite green, confirming
@@ -209,12 +212,15 @@ chatbot's tool-calling) is traced in LangSmith from day one.
   `agent:fundamental_analyst` appeared under the `airp-dev` LangSmith project.
 
 ## LangSmith Trace
+
 Trace link: <paste your airp-dev trace URL here before merging>
 
 ## Screenshots
+
 N/A — backend-only change, no UI impact.
 
 ## Related Issues
+
 Closes #081
 ```
 

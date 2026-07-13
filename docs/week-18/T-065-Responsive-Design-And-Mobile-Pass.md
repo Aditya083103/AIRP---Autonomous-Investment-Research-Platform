@@ -68,8 +68,8 @@ width; nothing here was ever multi-column.
 **`DashboardPage.tsx` / `HistoryTable.tsx`** -- **No change needed.**
 The history table is already wrapped in `overflow-x-auto` with its own
 `min-w-[640px]`, which is the correct pattern for genuinely tabular
-data on a narrow screen: the *table* scrolls horizontally inside its
-own box, the *page* does not. Verified this distinction explicitly --
+data on a narrow screen: the _table_ scrolls horizontally inside its
+own box, the _page_ does not. Verified this distinction explicitly --
 "no horizontal scroll on 375px" means the page's own scrollWidth, not
 that every internal data grid must reflow into cards.
 
@@ -113,7 +113,7 @@ route (linked from nowhere in the product), single-column component
 gallery, no fixed widths. Left as-is; not part of the product surface
 the acceptance criteria is about, but checked anyway for completeness.
 
-**`index.html`** -- Confirmed `<meta name="viewport" content="width=device-width, initial-scale=1.0">` was already present (T-053) -- the one prerequisite that would silently break *everything* on real mobile devices (as opposed to a desktop browser's responsive-mode emulation) if it were missing.
+**`index.html`** -- Confirmed `<meta name="viewport" content="width=device-width, initial-scale=1.0">` was already present (T-053) -- the one prerequisite that would silently break _everything_ on real mobile devices (as opposed to a desktop browser's responsive-mode emulation) if it were missing.
 
 ### 2.2 Design decisions for the hamburger nav
 
@@ -182,7 +182,7 @@ and 1280px:**
       links present, tapping one navigates and closes the panel
 - [ ] `/login`, `/register` -- form card centred, no overflow
 - [ ] `/dashboard` (signed in) -- search box, then the history table
-      scrolls *inside its own box* at 375px rather than the page
+      scrolls _inside its own box_ at 375px rather than the page
       scrolling
 - [ ] `/analysis` -- company autocomplete opens a full-width listbox
       that doesn't clip off-screen

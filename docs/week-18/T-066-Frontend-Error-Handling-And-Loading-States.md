@@ -55,9 +55,9 @@ tokens.
 - **This is a last-resort safety net**, not a substitute for the
   specific loading/error/empty states this task also adds to
   DashboardPage, AnalysisResultPage, MemoPage, and ComparePage -- those
-  handle the *expected* failure modes (a failed fetch, an analysis
+  handle the _expected_ failure modes (a failed fetch, an analysis
   that didn't complete) with contextual UI already in place; the
-  boundary exists for the *unexpected* case -- a genuine bug in a
+  boundary exists for the _unexpected_ case -- a genuine bug in a
   render path -- where the alternative is React unmounting the whole
   tree to a blank white page.
 
@@ -76,7 +76,7 @@ tokens.
   `<ToastViewport>`, is the standard way to bridge that gap.
 - **`lib/queryClient.ts` now wires a shared `onError`** into both
   caches -- this is what makes "every API error shows a toast" hold
-  for every current *and future* query/mutation without each one
+  for every current _and future_ query/mutation without each one
   needing its own `toast.error(...)` call. `QueryCache.onError` only
   fires once a query has exhausted its retries and settled into a
   final error state (not on every individual retry attempt), so a
@@ -132,14 +132,14 @@ tokens.
   prop is the one accessible announcement for the whole group** -- a
   screen reader hears "Loading your analysis history…" once, not once
   per shimmering bar. `MemoPage`'s and `AnalysisResultPage`'s
-  `ResultsPanelSkeleton` calls deliberately pass the *exact same*
+  `ResultsPanelSkeleton` calls deliberately pass the _exact same_
   visible label text ("Loading the Investment Memo…") the old
   spinner+text row used, so `MemoPage.test.tsx`'s pre-existing
   `getByText("Loading the Investment Memo…")` assertion keeps passing
   completely unchanged -- the text moved from a plain paragraph into a
   skeleton's `sr-only` span, but it's still there, still queryable.
 - **AgentProgressBoard is deliberately untouched** -- it is not a
-  placeholder standing in for content that isn't ready yet, it *is*
+  placeholder standing in for content that isn't ready yet, it _is_
   the real-time content (T-059's live event-by-event board). A
   skeleton is for "we know the shape, we're waiting on the data"; the
   progress board's whole job is showing exactly what's known so far,
@@ -166,7 +166,7 @@ tokens.
   if the `/auth/logout` network call failed for any reason (a brief
   backend blip), that became a genuine unhandled promise rejection
   with no caller able to catch it. Local state was already cleared
-  *before* that `await` (per the function's own existing comment on
+  _before_ that `await` (per the function's own existing comment on
   why -- "the UI reflects logged out immediately... even if the
   network request... fails outright"), so the fix is exactly what that
   comment already promised: wrap the call in `try/catch` and log
@@ -273,7 +273,7 @@ that resolves immediately races past the pending state before the
 assertion runs.
 
 If `ErrorBoundary.test.tsx`'s `RootErrorBoundary` test fails after an
-edit, check whether the nav `<Link>` accidentally ended up *inside*
+edit, check whether the nav `<Link>` accidentally ended up _inside_
 `<RootErrorBoundary>` in the test's render tree -- a caught error
 unmounts everything the boundary wraps, so the link that triggers
 recovery cannot itself be inside the crashed subtree (see that test's

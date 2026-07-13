@@ -13,8 +13,8 @@ and `score=None` instead of a misleading floor of `1` when it lacks data.
 T-082 makes the rest of the committee actually respect that signal instead
 of quietly re-introducing the same bias one layer downstream.
 
-Three call sites previously treated a *missing* fundamental score exactly
-like a *genuinely weak* one:
+Three call sites previously treated a _missing_ fundamental score exactly
+like a _genuinely weak_ one:
 
 1. **`risk_officer._score_risk()` — `financial_risk`.** Even a lone D/E
    fragment (possible even when overall `data_quality="insufficient"`) was
@@ -26,7 +26,7 @@ like a *genuinely weak* one:
    even when `data_quality="insufficient"` meant its `score` was a
    fabricated neutral value rather than a real signal.
 3. **`portfolio_manager._determine_verdict()` — Hard Gate 2.** `fund_score
-   = int(fundamental.get("score") or 5)` turns `None` into `5`, and Gate 2
+= int(fundamental.get("score") or 5)` turns `None` into `5`, and Gate 2
    (`valuation_verdict == "overvalued" and fund_score < 6`) fires on that
    fabricated `5` — forcing a hard **SELL** override on every
    overvalued-but-data-missing case, regardless of what the other six
@@ -35,7 +35,7 @@ like a *genuinely weak* one:
 ### Fixes
 
 - `risk_officer._score_risk()`: when `fundamental.get("data_quality") ==
-  "insufficient"`, `financial_risk` stays at its neutral base of `3` and
+"insufficient"`, `financial_risk` stays at its neutral base of `3` and
   skips the D/E / FCF-text / score adjustments entirely.
 - `portfolio_manager._compute_agent_weights()`: `fundamental_analyst` gets
   zero weight (redistributed proportionally to the other six agents, same
@@ -187,6 +187,7 @@ fix(portfolio-manager): do not penalise verdict on missing fundamental data
 
 ```markdown
 ## Summary
+
 T-081 taught the Fundamental Analyst to report data_quality="insufficient"
 and score=None instead of a hard-floored 1 when it lacks data. This task
 closes the loop: Risk Officer and Portfolio Manager previously still treated
@@ -196,6 +197,7 @@ removed one layer downstream -- most visibly, Hard Gate 2 forcing an
 automatic SELL on every overvalued-but-data-missing case.
 
 ## Changes
+
 - `risk_officer._score_risk()`: financial_risk now stays at its neutral
   base (3) and skips the D/E / FCF-text / score adjustments entirely when
   `fundamental.data_quality == "insufficient"`, instead of computing off of
@@ -216,6 +218,7 @@ automatic SELL on every overvalued-but-data-missing case.
   every previously-passing test is unaffected.
 
 ## Testing
+
 - `python -m pytest backend/tests/unit/test_risk_officer.py backend/tests/unit/test_portfolio_manager.py -v`
   — all passing, including new tests:
   - `test_insufficient_data_quality_holds_financial_risk_at_neutral_base`
@@ -236,12 +239,15 @@ automatic SELL on every overvalued-but-data-missing case.
   and sentiment signals.
 
 ## LangSmith Trace
+
 N/A — pure deterministic logic change, no LLM call paths touched.
 
 ## Screenshots
+
 N/A — backend-only change, no UI impact.
 
 ## Related Issues
+
 Closes #082
 ```
 

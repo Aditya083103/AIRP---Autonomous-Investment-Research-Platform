@@ -51,7 +51,7 @@ work:
   `ValuationChartResponse`, `SentimentChartResponse`,
   `RiskRadarResponse`, `AnalysisChartDataResponse`).
 - `backend/services/analysis.py` -- `get_analysis_chart_data`, reusing
-  the *exact same* `_SQL_LOAD_RESULT` query `get_analysis_result`
+  the _exact same_ `_SQL_LOAD_RESULT` query `get_analysis_result`
   already issues (both need only ownership/status/state_snapshot).
   Reads `valuation`/`sentiment`/`risk` straight out of the snapshot
   (already computed, zero extra cost) and makes two **live** calls to
@@ -125,7 +125,7 @@ docs/week-17/T-062-Build-Charts-And-Visualisations.md   (new, this file)
   though the Fundamental Analyst already fetched the same statements
   once during the original pipeline run. `fetch_ohlcv`, by contrast,
   shares its cache key with `fetch_stock_price` (`airp:stock:{ticker}:
-  {period}`, `STOCK_TTL`), so it is almost always a cache hit -- the
+{period}`, `STOCK_TTL`), so it is almost always a cache hit -- the
   Technical Analyst already warmed it. Tracked as a known gap, out of
   scope for this task.
 - **`StockPriceChart`** is a filled area chart (not candlestick) --
@@ -249,8 +249,8 @@ npm run build
 If `black`/`isort` report issues, run `black .` and `isort .` once to
 let them auto-fix, then re-run `--check`.
 
-If a chart test fails with something like *"Warning: The width(0) and
-height(0) of chart should be greater than 0"* or renders an empty
+If a chart test fails with something like _"Warning: The width(0) and
+height(0) of chart should be greater than 0"_ or renders an empty
 `<svg>`, double-check `frontend/src/test/setup.ts` actually landed --
 every chart component in this task needs its `ResizeObserver` stub and
 `getBoundingClientRect` mock to render anything at all under jsdom.
