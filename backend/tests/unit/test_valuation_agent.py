@@ -15,12 +15,19 @@ Test strategy:
  10. DCF accuracy                -- within 15% of manual for Infosys inputs
  11. Schema validation           -- ValuationOutput Pydantic constraints
  12. LangSmith tracing           -- @traced_agent applied
+ 13. _classify_sector_for_wacc   -- sector text -> canonical WACC band (T-083)
+ 14. _resolve_sector_key         -- peer scrape > state > company-name priority
+ 15. _get_sector_wacc_pct        -- sector key -> WACC (%) lookup
+ 16. _extract_sector_from_page   -- best-effort Screener.in sector scrape
 
 Acceptance criteria verified:
   * DCF output within 15% of manual calculation for Infosys
   * Peer comparison pulls from Screener.in correctly (mocked)
   * valuation_verdict in ('undervalued', 'fairly_valued', 'overvalued')
   * Agent never raises -- always returns dict with 'valuation' key
+  * (T-083) _run_dcf accepts a sector-specific WACC; at least 3 sector
+    bands are covered (it_services, fmcg, capital_intensive_cyclical,
+    plus the diversified default); existing DCF-dependent tests updated
 
 All external calls (yFinance, Alpha Vantage, Screener.in, LLM) are mocked.
 No network. No database. No LLM quota consumed.
@@ -34,20 +41,28 @@ from unittest.mock import MagicMock, patch
 
 os.environ.setdefault("ENVIRONMENT", "test")
 
+from bs4 import BeautifulSoup  # noqa: E402
 import pytest  # noqa: E402
 
 from backend.agents.output_models import ValuationOutput  # noqa: E402
 from backend.agents.valuation_agent import (  # noqa: E402
     DCF_PROJECTION_YEARS,
+    DEFAULT_SECTOR_KEY,
     DEFAULT_TERMINAL_GROWTH_PCT,
     DEFAULT_WACC_PCT,
+    NEUTRAL_RBI_REPO_RATE_PCT,
     OVERVALUED_THRESHOLD_PCT,
+    SECTOR_WACC_MAP,
     SYSTEM_PROMPT,
     UNDERVALUED_THRESHOLD_PCT,
     _build_valuation_prompt,
+    _classify_sector_for_wacc,
     _determine_margin_of_safety,
     _determine_verdict,
+    _extract_sector_from_page,
+    _get_sector_wacc_pct,
     _parse_float,
+    _resolve_sector_key,
     _run_dcf,
     _run_valuation_analysis_core,
     _ticker_to_slug,
@@ -340,6 +355,262 @@ class TestRunDcf:
         )
         assert iv is not None
         assert round(iv, 2) == iv
+
+
+# ---------------------------------------------------------------------------
+# Tests: SECTOR_WACC_MAP (T-083)
+# ---------------------------------------------------------------------------
+
+
+class TestSectorWaccMap:
+    def test_contains_expected_bands(self) -> None:
+        for key in (
+            "it_services",
+            "fmcg",
+            "capital_intensive_cyclical",
+            "diversified",
+        ):
+            assert key in SECTOR_WACC_MAP
+
+    def test_all_values_positive(self) -> None:
+        for wacc in SECTOR_WACC_MAP.values():
+            assert wacc > 0
+
+    def test_diversified_matches_default_wacc(self) -> None:
+        """The fallback band must equal DEFAULT_WACC_PCT for backward compat."""
+        assert SECTOR_WACC_MAP["diversified"] == DEFAULT_WACC_PCT
+
+    def test_it_services_and_fmcg_are_lower_than_default(self) -> None:
+        assert SECTOR_WACC_MAP["it_services"] < DEFAULT_WACC_PCT
+        assert SECTOR_WACC_MAP["fmcg"] < DEFAULT_WACC_PCT
+
+    def test_capital_intensive_cyclical_is_higher_than_default(self) -> None:
+        assert SECTOR_WACC_MAP["capital_intensive_cyclical"] > DEFAULT_WACC_PCT
+
+    def test_it_services_in_stated_range(self) -> None:
+        """Task spec: IT services / FMCG ~10-10.5%."""
+        assert 10.0 <= SECTOR_WACC_MAP["it_services"] <= 10.5
+
+    def test_fmcg_in_stated_range(self) -> None:
+        assert 10.0 <= SECTOR_WACC_MAP["fmcg"] <= 10.5
+
+    def test_capital_intensive_cyclical_in_stated_range(self) -> None:
+        """Task spec: capital-intensive/cyclical ~12-13%."""
+        assert 12.0 <= SECTOR_WACC_MAP["capital_intensive_cyclical"] <= 13.0
+
+
+# ---------------------------------------------------------------------------
+# Tests: _classify_sector_for_wacc (T-083)
+# ---------------------------------------------------------------------------
+
+
+class TestClassifySectorForWacc:
+    # -- IT services band -----------------------------------------------
+    def test_information_technology_is_it_services(self) -> None:
+        assert _classify_sector_for_wacc("Information Technology") == "it_services"
+
+    def test_it_dash_software_is_it_services(self) -> None:
+        assert _classify_sector_for_wacc("IT - Software") == "it_services"
+
+    def test_software_is_it_services(self) -> None:
+        assert _classify_sector_for_wacc("Software & Services") == "it_services"
+
+    # -- FMCG band ---------------------------------------------------------
+    def test_fmcg_label_is_fmcg(self) -> None:
+        assert _classify_sector_for_wacc("FMCG") == "fmcg"
+
+    def test_fast_moving_consumer_goods_is_fmcg(self) -> None:
+        assert _classify_sector_for_wacc("Fast Moving Consumer Goods") == "fmcg"
+
+    # -- capital-intensive / cyclical band ----------------------------------
+    def test_automobile_is_capital_intensive_cyclical(self) -> None:
+        assert _classify_sector_for_wacc("Automobile") == "capital_intensive_cyclical"
+
+    def test_oil_and_gas_is_capital_intensive_cyclical(self) -> None:
+        assert _classify_sector_for_wacc("Oil & Gas") == "capital_intensive_cyclical"
+
+    def test_cement_is_capital_intensive_cyclical(self) -> None:
+        assert (
+            _classify_sector_for_wacc("Cement & Construction")
+            == "capital_intensive_cyclical"
+        )
+
+    def test_metals_and_mining_is_capital_intensive_cyclical(self) -> None:
+        assert (
+            _classify_sector_for_wacc("Metals & Mining") == "capital_intensive_cyclical"
+        )
+
+    # -- diversified / fallback ----------------------------------------------
+    def test_none_returns_diversified(self) -> None:
+        assert _classify_sector_for_wacc(None) == DEFAULT_SECTOR_KEY
+
+    def test_empty_string_returns_diversified(self) -> None:
+        assert _classify_sector_for_wacc("") == DEFAULT_SECTOR_KEY
+
+    def test_whitespace_only_returns_diversified(self) -> None:
+        assert _classify_sector_for_wacc("   ") == DEFAULT_SECTOR_KEY
+
+    def test_unrelated_text_returns_diversified(self) -> None:
+        assert _classify_sector_for_wacc("Diversified Holdings Ltd") == (
+            DEFAULT_SECTOR_KEY
+        )
+
+    def test_banking_is_unclassified_for_now(self) -> None:
+        """Banking/NBFC are intentionally out of scope for T-083."""
+        assert _classify_sector_for_wacc("Banking") == DEFAULT_SECTOR_KEY
+
+    # -- word-boundary correctness -------------------------------------------
+    def test_case_insensitive(self) -> None:
+        assert _classify_sector_for_wacc("information technology") == ("it_services")
+        assert _classify_sector_for_wacc("INFORMATION TECHNOLOGY") == ("it_services")
+
+    def test_automobile_does_not_require_bare_auto_substring_luck(self) -> None:
+        """
+        'auto' does not match inside 'automobile' as a substring (no word
+        boundary between them) -- 'automobile' must be listed explicitly
+        as its own keyword, which this test guards against regressing.
+        """
+        assert (
+            _classify_sector_for_wacc("Automobile & Ancillaries")
+            == "capital_intensive_cyclical"
+        )
+
+    def test_short_keyword_does_not_match_inside_unrelated_word(self) -> None:
+        """
+        'auto' must not match inside unrelated words such as 'automatic'
+        that are not one of the explicitly listed keywords.
+        """
+        assert _classify_sector_for_wacc("Automatic Component Testing") == (
+            DEFAULT_SECTOR_KEY
+        )
+
+    def test_compound_word_without_boundary_does_not_false_match(self) -> None:
+        """
+        'technology' is not a standalone keyword (only phrases like
+        'information technology' / 'it services' are), so a fused compound
+        word like 'biotechnology' must not falsely classify as IT.
+        """
+        assert _classify_sector_for_wacc("Biotechnology") == DEFAULT_SECTOR_KEY
+
+
+# ---------------------------------------------------------------------------
+# Tests: _resolve_sector_key (T-083)
+# ---------------------------------------------------------------------------
+
+
+class TestResolveSectorKey:
+    def test_peer_sector_takes_priority(self) -> None:
+        result = _resolve_sector_key(
+            peer_sector="FMCG",
+            state_sector="Information Technology",
+            company_name="Reliance Industries",
+        )
+        assert result == "fmcg"
+
+    def test_falls_back_to_state_sector_when_peer_unclassifiable(self) -> None:
+        result = _resolve_sector_key(
+            peer_sector="Diversified Holdings",
+            state_sector="Automobile",
+            company_name="Infosys",
+        )
+        assert result == "capital_intensive_cyclical"
+
+    def test_falls_back_to_company_name_when_others_unclassifiable(self) -> None:
+        result = _resolve_sector_key(
+            peer_sector=None,
+            state_sector=None,
+            company_name="XYZ Software Ltd",
+        )
+        assert result == "it_services"
+
+    def test_falls_back_to_diversified_when_nothing_matches(self) -> None:
+        result = _resolve_sector_key(
+            peer_sector=None,
+            state_sector=None,
+            company_name="Infosys",
+        )
+        assert result == DEFAULT_SECTOR_KEY
+
+    def test_all_none_or_empty_returns_diversified(self) -> None:
+        result = _resolve_sector_key(
+            peer_sector=None,
+            state_sector=None,
+            company_name="",
+        )
+        assert result == DEFAULT_SECTOR_KEY
+
+
+# ---------------------------------------------------------------------------
+# Tests: _get_sector_wacc_pct (T-083)
+# ---------------------------------------------------------------------------
+
+
+class TestGetSectorWaccPct:
+    def test_it_services_wacc(self) -> None:
+        assert _get_sector_wacc_pct("it_services") == SECTOR_WACC_MAP["it_services"]
+
+    def test_fmcg_wacc(self) -> None:
+        assert _get_sector_wacc_pct("fmcg") == SECTOR_WACC_MAP["fmcg"]
+
+    def test_capital_intensive_cyclical_wacc(self) -> None:
+        assert _get_sector_wacc_pct("capital_intensive_cyclical") == (
+            SECTOR_WACC_MAP["capital_intensive_cyclical"]
+        )
+
+    def test_diversified_wacc_equals_default(self) -> None:
+        assert _get_sector_wacc_pct("diversified") == DEFAULT_WACC_PCT
+
+    def test_unknown_key_falls_back_to_default(self) -> None:
+        assert _get_sector_wacc_pct("not_a_real_sector") == DEFAULT_WACC_PCT
+
+
+# ---------------------------------------------------------------------------
+# Tests: _extract_sector_from_page (T-083)
+# ---------------------------------------------------------------------------
+
+
+class TestExtractSectorFromPage:
+    def test_extracts_from_peers_heading(self) -> None:
+        html = """
+        <div id="peers">
+          <h2>Peer comparison Sector: IT - Software</h2>
+          <table><tr><td>Header</td></tr></table>
+        </div>
+        """
+        soup = BeautifulSoup(html, "html.parser")
+        assert _extract_sector_from_page(soup) == "IT - Software"
+
+    def test_extracts_from_sub_breadcrumb(self) -> None:
+        html = """
+        <div class="company-info">
+          <h1>Infosys Ltd</h1>
+          <div class="sub">
+            <a href="#">NSE: INFY</a>
+            <a href="#">BSE: 500209</a>
+            <a href="#">IT - Software Products</a>
+          </div>
+        </div>
+        """
+        soup = BeautifulSoup(html, "html.parser")
+        assert _extract_sector_from_page(soup) == "IT - Software Products"
+
+    def test_extracts_from_meta_industry_tag(self) -> None:
+        html = '<html><head><meta name="industry" content="FMCG"></head></html>'
+        soup = BeautifulSoup(html, "html.parser")
+        assert _extract_sector_from_page(soup) == "FMCG"
+
+    def test_returns_none_when_nothing_found(self) -> None:
+        html = "<html><body><p>No sector info here</p></body></html>"
+        soup = BeautifulSoup(html, "html.parser")
+        assert _extract_sector_from_page(soup) is None
+
+    def test_peers_heading_without_sector_label_falls_through(self) -> None:
+        html = """
+        <div id="peers"><h2>Peer comparison</h2></div>
+        <div class="sub"><a href="#">NSE: TCS</a></div>
+        """
+        soup = BeautifulSoup(html, "html.parser")
+        assert _extract_sector_from_page(soup) is None
 
 
 # ---------------------------------------------------------------------------
@@ -645,6 +916,17 @@ class TestRunValuationAnalysisCore:
         assert result.dcf_wacc_pct is not None
         assert result.dcf_wacc_pct > 0
 
+    def test_dcf_wacc_pct_reflects_it_services_sector(self) -> None:
+        """
+        T-083: default fixture uses sector='Information Technology' and a
+        neutral RBI rate (6.5% == NEUTRAL_RBI_REPO_RATE_PCT), so the
+        resolved WACC should equal the it_services band exactly, with no
+        RBI-cycle adjustment applied.
+        """
+        result = self._call_with_mocks()
+        assert result.dcf_wacc_pct == SECTOR_WACC_MAP["it_services"]
+        assert result.dcf_sector_used == "it_services"
+
     def test_dcf_projection_years_set(self) -> None:
         result = self._call_with_mocks()
         assert result.dcf_projection_years == DCF_PROJECTION_YEARS
@@ -715,7 +997,16 @@ class TestRunValuationAnalysisCore:
         assert result.error is None  # LLM failure is non-fatal
 
     def test_rbi_rate_adjusts_wacc(self) -> None:
-        """WACC should be higher when RBI rate is higher."""
+        """
+        WACC should be higher when RBI rate is higher (T-083: the RBI
+        cycle now nudges the resolved sector base WACC up/down from the
+        neutral anchor, rather than being the sole WACC signal).
+
+        sector=None + company_name='Infosys' (no sector keyword match)
+        resolves to the 'diversified' band, whose base equals
+        DEFAULT_WACC_PCT (12.0) -- so the expected values here are exactly
+        12.0 + (rbi_rate - NEUTRAL_RBI_REPO_RATE_PCT).
+        """
         macro_high_rate: dict[str, Any] = {"rbi_repo_rate_pct": 8.0}
         macro_low_rate: dict[str, Any] = {"rbi_repo_rate_pct": 5.0}
         with (
@@ -751,6 +1042,83 @@ class TestRunValuationAnalysisCore:
         assert result_high.dcf_wacc_pct is not None
         assert result_low.dcf_wacc_pct is not None
         assert result_high.dcf_wacc_pct > result_low.dcf_wacc_pct
+        assert result_high.dcf_sector_used == "diversified"
+        assert result_low.dcf_sector_used == "diversified"
+        assert result_high.dcf_wacc_pct == round(
+            DEFAULT_WACC_PCT + (8.0 - NEUTRAL_RBI_REPO_RATE_PCT), 1
+        )
+        assert result_low.dcf_wacc_pct == round(
+            DEFAULT_WACC_PCT + (5.0 - NEUTRAL_RBI_REPO_RATE_PCT), 1
+        )
+
+    def test_sector_specific_wacc_across_three_bands(self) -> None:
+        """
+        T-083 acceptance criteria: unit tests cover at least 3 sector
+        bands.  This exercises _run_valuation_analysis_core end-to-end
+        for it_services, fmcg, and capital_intensive_cyclical, using the
+        InvestmentState.sector signal (no peer-scrape sector, no RBI
+        adjustment -- macro={} isolates the sector base rate alone).
+        """
+        cases = [
+            ("Information Technology", "it_services", 10.0),
+            ("FMCG", "fmcg", 10.5),
+            ("Automobile", "capital_intensive_cyclical", 13.0),
+            (None, "diversified", DEFAULT_WACC_PCT),
+        ]
+        for state_sector, expected_key, expected_wacc in cases:
+            with (
+                patch("backend.agents.valuation_agent.fetch_financials") as mf,
+                patch("backend.agents.valuation_agent.fetch_ratios") as mr,
+                patch("backend.agents.valuation_agent.fetch_stock_price") as mp,
+                patch(
+                    "backend.agents.valuation_agent._fetch_peer_multiples",
+                    return_value={},
+                ),
+                patch("backend.agents.valuation_agent.get_llm") as ml,
+            ):
+                mf.invoke.return_value = _MOCK_FINANCIALS_INFY
+                mr.invoke.return_value = _MOCK_RATIOS_INFY
+                mp.invoke.return_value = _MOCK_PRICE_INFY
+                ml.return_value = _make_llm()
+
+                result = _run_valuation_analysis_core(
+                    **_BASE_KWARGS,
+                    sector=state_sector,
+                    fundamental={},
+                    macro={},
+                    screener_base_url="https://www.screener.in",
+                )
+
+            assert result.dcf_sector_used == expected_key, state_sector
+            assert result.dcf_wacc_pct == expected_wacc, state_sector
+
+    def test_peer_scrape_sector_takes_priority_over_state_sector(self) -> None:
+        """T-083: peer_data['sector'] (Screener.in scrape) outranks state."""
+        with (
+            patch("backend.agents.valuation_agent.fetch_financials") as mf,
+            patch("backend.agents.valuation_agent.fetch_ratios") as mr,
+            patch("backend.agents.valuation_agent.fetch_stock_price") as mp,
+            patch(
+                "backend.agents.valuation_agent._fetch_peer_multiples",
+                return_value={"sector": "FMCG"},
+            ),
+            patch("backend.agents.valuation_agent.get_llm") as ml,
+        ):
+            mf.invoke.return_value = _MOCK_FINANCIALS_INFY
+            mr.invoke.return_value = _MOCK_RATIOS_INFY
+            mp.invoke.return_value = _MOCK_PRICE_INFY
+            ml.return_value = _make_llm()
+
+            result = _run_valuation_analysis_core(
+                **_BASE_KWARGS,
+                sector="Automobile",
+                fundamental={},
+                macro={},
+                screener_base_url="https://www.screener.in",
+            )
+
+        assert result.dcf_sector_used == "fmcg"
+        assert result.dcf_wacc_pct == SECTOR_WACC_MAP["fmcg"]
 
     def test_empty_research_dicts_do_not_raise(self) -> None:
         with (
@@ -998,6 +1366,42 @@ class TestAcceptanceCriteria:
             f"1% WACC change caused {pct_change:.1f}% change in DCF value "
             f"(exceeds 15% tolerance)"
         )
+
+    def test_run_dcf_accepts_sector_specific_wacc(self) -> None:
+        """
+        T-083 acceptance criteria: _run_dcf accepts a sector-specific WACC.
+
+        _run_dcf's signature is unchanged (wacc_pct: float) -- what's new
+        is that callers now resolve a sector-specific value via
+        _get_sector_wacc_pct() instead of always passing the flat
+        DEFAULT_WACC_PCT.  This verifies each of the three explicit T-083
+        sector bands produces a valid, correctly-ordered DCF value for the
+        same Infosys inputs (lower WACC -> higher intrinsic value).
+        """
+        results: dict[str, float] = {}
+        for sector_key in (
+            "it_services",
+            "fmcg",
+            "capital_intensive_cyclical",
+            "diversified",
+        ):
+            wacc_pct = _get_sector_wacc_pct(sector_key)
+            iv, _ = _run_dcf(
+                fcf_crores_list=_INFY_FCF_CRORES,
+                revenue_crores_list=_INFY_REVENUE_CRORES,
+                shares_outstanding=_INFY_SHARES,
+                wacc_pct=wacc_pct,
+                terminal_growth_pct=DEFAULT_TERMINAL_GROWTH_PCT,
+                projection_years=DCF_PROJECTION_YEARS,
+            )
+            assert iv is not None, f"DCF should produce a value for {sector_key}"
+            assert iv > 0
+            results[sector_key] = iv
+
+        # Lower WACC -> higher intrinsic value, for the same cash flows.
+        assert results["it_services"] > results["diversified"]
+        assert results["fmcg"] > results["diversified"]
+        assert results["diversified"] > results["capital_intensive_cyclical"]
 
     @patch("backend.agents.valuation_agent.fetch_financials")
     @patch("backend.agents.valuation_agent.fetch_ratios")
