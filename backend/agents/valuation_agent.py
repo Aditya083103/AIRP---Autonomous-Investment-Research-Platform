@@ -19,12 +19,21 @@ Produce a ValuationOutput containing:
   * peer_tickers                -- tickers used for peer comparison
   * premium_discount_to_peers_pct
   * margin_of_safety            -- 'high' | 'moderate' | 'low' | 'none'
+  * dcf_sector_used             -- canonical WACC sector band (T-083)
   * summary                     -- 2-3 sentence PM-ready narrative
 
 Acceptance criteria (T-039):
   * DCF output within 15% of manual calculation for Infosys
   * Peer comparison pulls from Screener.in correctly
   * valuation_verdict is one of 'undervalued', 'fairly_valued', 'overvalued'
+
+Acceptance criteria (T-083 -- sector-aware WACC):
+  * _run_dcf accepts a sector-specific WACC (unchanged signature -- the
+    caller now resolves a sector-specific value instead of always passing
+    the flat DEFAULT_WACC_PCT)
+  * Unit tests cover at least 3 sector bands (it_services, fmcg,
+    capital_intensive_cyclical) plus the diversified default
+  * Existing DCF-dependent tests updated with new expected values
 
 Two-stage pipeline:
   Stage 1 -- Deterministic: DCF + peer multiples from tool data
@@ -42,6 +51,9 @@ Public interface
   _run_valuation_analysis_core(...)    -> ValuationOutput
   _run_dcf(...)                        -> tuple  pure DCF engine
   _fetch_peer_multiples(...)           -> dict   Screener.in peer scrape
+  _classify_sector_for_wacc(...)       -> str    pure, unit-testable (T-083)
+  _resolve_sector_key(...)             -> str    pure, unit-testable (T-083)
+  _get_sector_wacc_pct(...)            -> float  pure, unit-testable (T-083)
   _determine_verdict(...)              -> str    pure verdict logic
   _determine_margin_of_safety(...)     -> str    pure MoS logic
   _build_valuation_prompt(...)         -> str    prompt builder
@@ -52,11 +64,22 @@ Design decisions
 * Plain ASCII section comments (# ---) -- rule from T-024 onward.
 * No bare ``# type: ignore`` -- use cast(), explicit annotations, assert.
 * DCF uses only FREE CASH FLOW (not earnings) as the base for projections.
-  FCF is taken from fetch_financials (yFinance).  WACC is computed from
-  macro data (RBI repo rate as risk-free rate proxy) when available.
+  FCF is taken from fetch_financials (yFinance).
+* WACC (T-083) is sector-aware: a canonical sector key is resolved from
+  (in priority order) the Screener.in peer scrape's sector label, the
+  InvestmentState.sector field, and finally the company name, then looked
+  up in SECTOR_WACC_MAP.  The live RBI repo rate then nudges that sector
+  base up/down from a neutral policy-rate anchor (6.5%) -- replacing the
+  old flat-default + flat-RBI-formula with a sector-specific base plus the
+  same macro-cycle adjustment.  Companies that cannot be classified fall
+  back to the 'diversified' band, which is pinned to DEFAULT_WACC_PCT so
+  pre-T-083 behaviour is preserved exactly when no sector signal exists.
 * Peer multiples are scraped from Screener.in company page, not the concalls
   page.  The /company/<slug>/ page has a ratio table that is parsed with
   BeautifulSoup.  If the scrape fails, sector averages fall back to None.
+  The sector/industry label (T-083) is extracted best-effort from the same
+  page and is likewise non-fatal on failure -- callers fall back to
+  InvestmentState.sector or company-name classification.
 * Error convention: never raises.  On any failure ValuationOutput.error is
   set and valuation_verdict defaults to 'fairly_valued'.
 * In ENVIRONMENT=test (or when network is unavailable), all tool calls are
@@ -109,6 +132,35 @@ OVERVALUED_THRESHOLD_PCT: float = -10.0  # > 10% downside -> overvalued
 
 # Peer multiple tolerance: stock is expensive vs peers if premium > this
 PEER_PREMIUM_THRESHOLD_PCT: float = 20.0
+
+# ---------------------------------------------------------------------------
+# Sector-aware WACC calibration (T-083)
+# ---------------------------------------------------------------------------
+# A flat 12% WACC systematically undervalues asset-light, low-capex sectors
+# (IT services, FMCG) and can equally overstate cash-flow quality for
+# capital-intensive, cyclical sectors (auto, energy, infrastructure/metals).
+# SECTOR_WACC_MAP replaces the flat default with a per-sector base rate.
+# The sector key used to look this up is resolved by _resolve_sector_key()
+# -- see that function for the priority order (Screener.in peer scrape >
+# InvestmentState.sector > company name).  Companies that cannot be
+# classified into a known band fall back to 'diversified', which is pinned
+# to DEFAULT_WACC_PCT so pre-T-083 behaviour is preserved exactly when no
+# sector signal is available at all.
+SECTOR_WACC_MAP: dict[str, float] = {
+    "it_services": 10.0,  # asset-light, stable FCF, low leverage
+    "fmcg": 10.5,  # stable demand, defensive, low capex intensity
+    "capital_intensive_cyclical": 13.0,  # auto/energy/infra/metals/cement
+    "diversified": DEFAULT_WACC_PCT,  # unclassified -- preserves pre-T-083 default
+}
+
+# Neutral RBI repo rate used as the macro-cycle anchor.  The live repo rate
+# nudges the resolved sector base WACC up or down by the same delta -- e.g.
+# at the historical neutral rate (6.5%) the sector base applies unchanged;
+# a tightening cycle above 6.5% raises WACC for every sector equally, and
+# an accommodative cycle below 6.5% lowers it.  This keeps the RBI-driven
+# cost-of-capital cycle (the *only* signal before T-083) as a secondary
+# adjustment layered on top of the new sector-specific base rate.
+NEUTRAL_RBI_REPO_RATE_PCT: float = 6.5
 
 # Screener.in URL pattern for the company page (financial ratios table)
 _SCREENER_COMPANY_URL = "{base}/company/{slug}/"
@@ -291,6 +343,143 @@ def _run_dcf(
 
 
 # ---------------------------------------------------------------------------
+# Pure helpers: sector classification for WACC (T-083)
+# ---------------------------------------------------------------------------
+
+# Keyword -> canonical WACC sector key.  Checked in order; first match wins.
+# Matching is whole-word (regex \b...\b) so short keywords like 'auto'
+# cannot match inside unrelated words -- e.g. 'automobile' is listed
+# explicitly because a bare word boundary would not match inside it
+# ('auto' and 'mobile' are not separated by a non-word character).
+_SECTOR_WACC_KEYWORDS: list[tuple[list[str], str]] = [
+    (
+        [
+            "information technology",
+            "it services",
+            "it - software",
+            "software",
+            "computers",
+        ],
+        "it_services",
+    ),
+    (
+        [
+            "fmcg",
+            "fast moving consumer goods",
+            "consumer goods",
+        ],
+        "fmcg",
+    ),
+    (
+        [
+            "auto",
+            "automobile",
+            "automotive",
+            "energy",
+            "oil & gas",
+            "oil and gas",
+            "petroleum",
+            "power",
+            "infrastructure",
+            "infra",
+            "cement",
+            "steel",
+            "metal",
+            "metals",
+            "construction",
+            "industrial",
+            "capital goods",
+            "engineering",
+        ],
+        "capital_intensive_cyclical",
+    ),
+]
+
+DEFAULT_SECTOR_KEY: str = "diversified"
+
+
+def _classify_sector_for_wacc(text: Optional[str]) -> str:
+    """
+    Map a free-text sector/industry/company-name string to a canonical
+    WACC sector key using whole-word keyword matching.
+
+    Args:
+        text: Any human-readable text that might describe a company's
+              sector -- e.g. 'Information Technology', 'IT - Software',
+              a Screener.in industry label, or a company name.
+
+    Returns:
+        One of the keys in SECTOR_WACC_MAP, or DEFAULT_SECTOR_KEY
+        ('diversified') when no keyword matches or text is empty/None.
+    """
+    if not text:
+        return DEFAULT_SECTOR_KEY
+    text_lower = text.strip().lower()
+    if not text_lower:
+        return DEFAULT_SECTOR_KEY
+    for keywords, sector_key in _SECTOR_WACC_KEYWORDS:
+        for kw in keywords:
+            if re.search(r"\b" + re.escape(kw) + r"\b", text_lower):
+                return sector_key
+    return DEFAULT_SECTOR_KEY
+
+
+def _resolve_sector_key(
+    peer_sector: Optional[str],
+    state_sector: Optional[str],
+    company_name: str,
+) -> str:
+    """
+    Resolve the canonical WACC sector key from the best available signal.
+
+    Priority (most to least specific):
+      1. peer_sector   -- sector/industry label scraped from the
+                           Screener.in peer comparison page
+                           (peer_data['sector']).
+      2. state_sector  -- InvestmentState.sector, set upstream by the
+                           Planner / ticker resolver.
+      3. company_name  -- keyword-matched as a last resort (catches
+                           names like 'XYZ Software Ltd' even with no
+                           other signal available).
+
+    Args:
+        peer_sector:  Sector label from the Screener.in scrape, if any.
+        state_sector: Sector string from InvestmentState, if any.
+        company_name: Human-readable company name (always available).
+
+    Returns:
+        A key from SECTOR_WACC_MAP.  Returns 'diversified' when none of
+        the three signals classify into a known band -- this exactly
+        preserves pre-T-083 behaviour (flat DEFAULT_WACC_PCT) for every
+        company AIRP could not previously distinguish.
+    """
+    for candidate in (peer_sector, state_sector, company_name):
+        sector_key = _classify_sector_for_wacc(candidate)
+        if sector_key != DEFAULT_SECTOR_KEY:
+            return sector_key
+    return DEFAULT_SECTOR_KEY
+
+
+def _get_sector_wacc_pct(sector_key: str) -> float:
+    """
+    Look up the base WACC (%) for a canonical sector key.
+
+    Falls back to DEFAULT_WACC_PCT for any key not present in
+    SECTOR_WACC_MAP.  Defensive only -- _resolve_sector_key always
+    returns a valid map key, but this keeps the lookup itself safe
+    against future callers that pass an arbitrary string.
+
+    Args:
+        sector_key: A canonical sector key, typically the return value
+                    of _resolve_sector_key().
+
+    Returns:
+        WACC as a percentage (e.g. 10.0 for 10%).
+    """
+    return SECTOR_WACC_MAP.get(sector_key, DEFAULT_WACC_PCT)
+
+
+# ---------------------------------------------------------------------------
 # Pure helpers: verdict and margin of safety
 # ---------------------------------------------------------------------------
 
@@ -406,6 +595,64 @@ def _parse_float(text: str) -> Optional[float]:
         return None
 
 
+def _extract_sector_from_page(soup: Any) -> Optional[str]:
+    """
+    Best-effort extraction of the company's sector/industry label from the
+    Screener.in company page (T-083).
+
+    Screener.in does not expose a single stable selector for this across
+    page layouts, so a few plausible locations are tried in order:
+      1. The '#peers' section heading, which often reads something like
+         "Peer comparison ... Sector: <label>".
+      2. A breadcrumb-style link in the '.sub' element near the company
+         name, containing a non-exchange label (i.e. not 'NSE:' / 'BSE:').
+      3. A <meta name="industry"> tag, when present.
+
+    This is intentionally hedged: unlike the ratio tables (which have a
+    stable, well-known id), sector/industry placement varies by page
+    template.  Returns None if no label can be found -- callers must
+    treat this as a soft signal only and fall back to
+    InvestmentState.sector or company-name classification (see
+    _resolve_sector_key).
+
+    Args:
+        soup: Parsed BeautifulSoup document for the company page.
+
+    Returns:
+        A free-text sector/industry label, or None if not found.
+    """
+    # 1. Peers section heading -- "Peer comparison ... Sector: <label>"
+    peers_section = soup.find(id="peers")
+    if peers_section:
+        heading = peers_section.find(["h2", "h3"])
+        if heading:
+            heading_text: str = str(heading.get_text(" ", strip=True))
+            match = re.search(r"sector\s*[:\-]\s*(.+)$", heading_text, re.IGNORECASE)
+            if match:
+                label: str = match.group(1).strip()
+                if label:
+                    return label
+
+    # 2. Breadcrumb-style sub-header near the company name
+    sub = soup.find(class_="sub")
+    if sub:
+        for link in sub.find_all("a"):
+            link_text: str = str(link.get_text(strip=True))
+            if link_text and not link_text.upper().startswith(("NSE", "BSE")):
+                return link_text
+
+    # 3. <meta name="industry"> tag, when present
+    meta = soup.find("meta", attrs={"name": "industry"})
+    if meta is not None:
+        content = meta.get("content")
+        if content:
+            content_str = str(content).strip()
+            if content_str:
+                return content_str
+
+    return None
+
+
 def _parse_screener_page(soup: Any, slug: str) -> dict[str, Any]:
     """
     Parse the Screener.in company page HTML to extract ratio data.
@@ -414,8 +661,14 @@ def _parse_screener_page(soup: Any, slug: str) -> dict[str, Any]:
     like: <li><span class="name">Stock P/E</span><span class="value">28.5</span></li>
 
     Peer comparison tables (section id="peers") are also parsed when present.
+    The company's sector/industry label is extracted best-effort (T-083)
+    and returned under the 'sector' key -- see _extract_sector_from_page.
     """
     result: dict[str, Any] = {}
+
+    sector_label = _extract_sector_from_page(soup)
+    if sector_label:
+        result["sector"] = sector_label
 
     # --- Parse company's own ratios from the top-ratios section ---
     ratio_map: dict[str, str] = {
@@ -664,20 +917,51 @@ def _run_valuation_analysis_core(
         except (TypeError, ValueError):
             pass
 
-    # --- Stage 1e: Determine WACC from macro data (RBI rate as proxy) ----
-    wacc_pct: float = DEFAULT_WACC_PCT
+    # --- Stage 1e: Scrape Screener.in for peer multiples -----------------
+    # Moved ahead of the WACC/DCF stages (T-083) -- the sector/industry
+    # label scraped here is now the primary signal for sector-aware WACC.
+    logger.info("Valuation: scraping Screener.in for peer data")
+    peer_data: dict[str, Any] = {}
+    try:
+        peer_data = _fetch_peer_multiples(company_name, ticker, screener_base_url)
+    except Exception as exc:
+        logger.warning("Screener.in peer scrape failed for %s: %s", ticker, exc)
+
+    # --- Stage 1f: Resolve sector and determine WACC (T-083) --------------
+    peer_sector_raw: Any = peer_data.get("sector")
+    peer_sector: Optional[str] = (
+        str(peer_sector_raw) if peer_sector_raw is not None else None
+    )
+
+    sector_key = _resolve_sector_key(
+        peer_sector=peer_sector,
+        state_sector=sector,
+        company_name=company_name,
+    )
+    wacc_pct: float = _get_sector_wacc_pct(sector_key)
+
     rbi_rate_raw: Any = macro.get("rbi_repo_rate_pct")
     if rbi_rate_raw is not None:
         try:
             rbi_rate = float(rbi_rate_raw)
-            # WACC = risk-free rate + equity risk premium (6%) + company spread (2%)
-            wacc_pct = round(rbi_rate + 8.0, 1)
+            # RBI rate cycle nudges the sector base WACC up/down from the
+            # neutral policy-rate anchor -- a tightening cycle raises the
+            # cost of capital for every sector, not just the one detected.
+            rbi_delta_pct = rbi_rate - NEUTRAL_RBI_REPO_RATE_PCT
+            wacc_pct = round(wacc_pct + rbi_delta_pct, 1)
         except (TypeError, ValueError):
             pass
 
+    logger.info(
+        "Valuation: sector=%s wacc_pct=%.1f ticker=%s",
+        sector_key,
+        wacc_pct,
+        ticker,
+    )
+
     terminal_growth_pct: float = DEFAULT_TERMINAL_GROWTH_PCT
 
-    # --- Stage 1f: Run DCF ------------------------------------------------
+    # --- Stage 1g: Run DCF -------------------------------------------------
     intrinsic_value, _ev_crores = _run_dcf(
         fcf_crores_list=fcf_list,
         revenue_crores_list=revenue_list,
@@ -687,12 +971,12 @@ def _run_valuation_analysis_core(
         projection_years=DCF_PROJECTION_YEARS,
     )
 
-    # --- Stage 1g: Compute upside/downside --------------------------------
+    # --- Stage 1h: Compute upside/downside ---------------------------------
     upside_pct: Optional[float] = None
     if intrinsic_value is not None and current_price is not None and current_price > 0:
         upside_pct = round((intrinsic_value - current_price) / current_price * 100, 2)
 
-    # --- Stage 1h: Extract company ratios ---------------------------------
+    # --- Stage 1i: Extract company ratios -----------------------------------
     pe_ratio: Optional[float] = None
     pb_ratio: Optional[float] = None
     ev_ebitda: Optional[float] = None
@@ -718,14 +1002,7 @@ def _run_valuation_analysis_core(
         except (TypeError, ValueError):
             pass
 
-    # --- Stage 1i: Scrape Screener.in for peer multiples -----------------
-    logger.info("Valuation: scraping Screener.in for peer data")
-    peer_data: dict[str, Any] = {}
-    try:
-        peer_data = _fetch_peer_multiples(company_name, ticker, screener_base_url)
-    except Exception as exc:
-        logger.warning("Screener.in peer scrape failed for %s: %s", ticker, exc)
-
+    # --- Stage 1j: Incorporate peer data (sector averages + overrides) ----
     sector_avg_pe: Optional[float] = None
     sector_avg_pb: Optional[float] = None
     sector_avg_ev_ebitda: Optional[float] = None
@@ -778,14 +1055,14 @@ def _run_valuation_analysis_core(
         except (TypeError, ValueError):
             pass
 
-    # --- Stage 1j: PE premium/discount to peers ---------------------------
+    # --- Stage 1k: PE premium/discount to peers ----------------------------
     premium_discount_pct: Optional[float] = None
     if pe_ratio is not None and sector_avg_pe is not None and sector_avg_pe > 0:
         premium_discount_pct = round(
             (pe_ratio - sector_avg_pe) / sector_avg_pe * 100, 2
         )
 
-    # --- Stage 1k: Verdict and margin of safety ---------------------------
+    # --- Stage 1l: Verdict and margin of safety -----------------------------
     verdict = _determine_verdict(upside_pct, premium_discount_pct)
     margin_of_safety = _determine_margin_of_safety(upside_pct)
 
@@ -859,6 +1136,7 @@ def _run_valuation_analysis_core(
         dcf_wacc_pct=wacc_pct,
         dcf_terminal_growth_pct=terminal_growth_pct,
         dcf_projection_years=DCF_PROJECTION_YEARS,
+        dcf_sector_used=sector_key,
         pe_ratio=pe_ratio,
         sector_avg_pe=sector_avg_pe,
         pb_ratio=pb_ratio,

@@ -776,6 +776,14 @@ class ValuationOutput(AgentOutput):
         default=None,
         description="Number of years projected in the DCF model (typically 5 or 10)",
     )
+    dcf_sector_used: Optional[str] = Field(
+        default=None,
+        description=(
+            "Canonical sector band used to select the DCF WACC (T-083), e.g. "
+            "'it_services', 'fmcg', 'capital_intensive_cyclical', or "
+            "'diversified' when no sector signal could be resolved"
+        ),
+    )
 
     # ── Relative valuation (multiples vs peers) ───────────────────────────
     pe_ratio: Optional[float] = Field(
