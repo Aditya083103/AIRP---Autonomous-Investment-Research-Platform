@@ -381,6 +381,14 @@ class InvestmentDecisionResponse(BaseModel):
     persisted into ``analyses.state_snapshot`` (T-033) by
     ``portfolio_manager_node`` -- every field below round-trips through
     that JSONB column with no further computation in this router.
+
+    ``fundamental_years_available`` (T-084) is the one deliberate
+    exception to that "field-for-field identical to InvestmentDecision"
+    rule: it is sourced from the same ``state_snapshot``'s
+    ``fundamental`` entry (the Fundamental Analyst's own output)
+    instead, via ``AnalysisResultData.fundamental_years_available``.
+    It exists purely to power MemoPage's "based on N of 4 years"
+    data-completeness note without a second API round trip.
     """
 
     agent_name: str = Field(
@@ -448,6 +456,18 @@ class InvestmentDecisionResponse(BaseModel):
     )
     summary: str = Field(
         description="One-sentence summary suitable for dashboard display"
+    )
+    fundamental_years_available: Optional[int] = Field(
+        default=None,
+        description=(
+            "Number of fiscal years (out of 4) the Fundamental Analyst had "
+            "available data for (T-084). Sourced from "
+            "state_snapshot['fundamental'] rather than ['decision'] -- see "
+            "this schema's own docstring. Null when unknown or when the "
+            "Fundamental Analyst's fetch failed entirely. Used by MemoPage "
+            "to render the 'based on N of 4 years' note, omitted entirely "
+            "when this is null or equal to 4."
+        ),
     )
 
 

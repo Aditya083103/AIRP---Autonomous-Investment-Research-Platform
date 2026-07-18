@@ -112,6 +112,15 @@ export interface InvestmentDecisionResponse {
   agent_weights: Record<string, number>;
   /** One-sentence summary suitable for dashboard display. */
   summary: string;
+  /**
+   * Number of fiscal years (out of 4) the Fundamental Analyst had
+   * available data for (T-084). Sourced from state_snapshot['fundamental']
+   * rather than ['decision'] -- the one field on this type that is not a
+   * 1:1 mirror of InvestmentDecision, added specifically to power the
+   * memo's "based on N of 4 years" data-completeness note. Null when
+   * unknown or when the Fundamental Analyst's fetch failed entirely.
+   */
+  fundamental_years_available: number | null;
 }
 
 /**

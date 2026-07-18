@@ -36,6 +36,7 @@ function makeDecision(
     debate_rounds_used: 2,
     agent_weights: { fundamental_analyst: 0.3, valuation_agent: 0.25 },
     summary: "TCS: BUY with conviction 8/10 -- strong fundamentals, reasonable valuation.",
+    fundamental_years_available: null,
     ...overrides,
   };
 }

@@ -194,6 +194,34 @@ class TestFundamentalAnalysis:
         assert m.debt_to_equity is None
         assert m.roe_pct is None
 
+    def test_years_available_defaults_none(self) -> None:
+        m = _make_fundamental()
+        assert m.years_available is None
+
+    def test_years_available_settable(self) -> None:
+        m = _make_fundamental(years_available=4)
+        assert m.years_available == 4
+
+    def test_years_available_partial_value(self) -> None:
+        m = _make_fundamental(years_available=2)
+        assert m.years_available == 2
+
+    def test_years_available_lower_bound(self) -> None:
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            _make_fundamental(years_available=-1)
+
+    def test_years_available_upper_bound(self) -> None:
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            _make_fundamental(years_available=5)
+
+    def test_years_available_boundary_values(self) -> None:
+        assert _make_fundamental(years_available=0).years_available == 0
+        assert _make_fundamental(years_available=4).years_available == 4
+
     def test_list_fields_default_empty(self) -> None:
         m = _make_fundamental()
         assert m.strengths == []

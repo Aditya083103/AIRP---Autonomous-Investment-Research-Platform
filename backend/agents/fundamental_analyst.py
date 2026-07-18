@@ -18,6 +18,9 @@ Produce a validated ``FundamentalAnalysis`` Pydantic model with:
   * revenue_trend / profit_trend / debt_level / fcf_status (qualitative labels)
   * strengths[], risks[] (concrete observations, not generic statements)
   * summary (2–3 sentences, portfolio-manager-ready)
+  * years_available (T-084) — pass-through of how many of the 4 fiscal
+    years fetch_financials actually returned, so downstream consumers
+    (Investment Memo, MemoPage) can flag a partial-data analysis
 
 Public interface
 ────────────────
@@ -52,7 +55,7 @@ Usage (inside LangGraph node, Phase 3)
 """
 
 import logging
-from typing import Any
+from typing import Any, Optional
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -509,6 +512,14 @@ def _run_fundamental_analysis_core(
     cashflow = financials.get("cash_flow", [])
     balance = financials.get("balance_sheet", [])
 
+    years_available_raw: Any = financials.get("years_available")
+    years_available: Optional[int] = None
+    if years_available_raw is not None:
+        try:
+            years_available = int(years_available_raw)
+        except (TypeError, ValueError):
+            years_available = None
+
     revenue_growth_pct = _revenue_cagr(income)
     net_margin = income[0].get("net_margin_pct") if income else None
     op_margin = income[0].get("operating_margin_pct") if income else None
@@ -576,6 +587,7 @@ def _run_fundamental_analysis_core(
         ticker=ticker,
         score=score,
         data_quality=data_quality,
+        years_available=years_available,
         revenue_growth_pct=revenue_growth_pct,
         net_margin_pct=net_margin,
         operating_margin_pct=op_margin,

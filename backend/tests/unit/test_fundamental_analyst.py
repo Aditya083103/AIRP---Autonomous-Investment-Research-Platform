@@ -43,6 +43,7 @@ from backend.agents.output_models import FundamentalAnalysis  # noqa: E402
 
 # Minimal realistic financials dict — mirrors what fetch_financials returns
 FINANCIALS_GOOD: dict[str, Any] = {
+    "years_available": 4,
     "income_statement": [
         {
             "fiscal_year": "FY 2024",
@@ -109,6 +110,18 @@ RATIOS_GOOD: dict[str, Any] = {
     "debt_to_equity": 0.02,
     "ev_to_ebitda": 19.5,
     "data_warnings": [],
+}
+
+# Same shape as FINANCIALS_GOOD but with only 2 of 4 fiscal years of
+# income-statement history -- used for the T-084 years_available
+# pass-through tests. Only the top-level years_available count and the
+# income_statement length are varied; balance_sheet/cash_flow are left
+# as single-year entries identical to FINANCIALS_GOOD's, since
+# years_available reflects the raw fetch, not the scoring inputs.
+FINANCIALS_PARTIAL_2YR: dict[str, Any] = {
+    **FINANCIALS_GOOD,
+    "years_available": 2,
+    "income_statement": FINANCIALS_GOOD["income_statement"][:2],
 }
 
 # Minimal state for LangGraph node tests
@@ -672,6 +685,30 @@ class TestRunFundamentalAnalysisCore:
         assert isinstance(d, dict)
         assert d["agent_name"] == "fundamental_analyst"
         assert 1 <= d["score"] <= 10
+
+    def test_years_available_passed_through_for_full_data(self) -> None:
+        """T-084: FINANCIALS_GOOD has years_available=4 at the top level."""
+        result = self._run()
+        assert result.years_available == 4
+
+    def test_years_available_reflects_partial_data(self) -> None:
+        result = self._run(financials=FINANCIALS_PARTIAL_2YR)
+        assert result.years_available == 2
+
+    def test_years_available_none_when_financials_error(self) -> None:
+        """
+        The financials-fetch error fallback (Step 1) rebuilds a stub
+        dict with no 'years_available' key at all -- there is no year
+        count to report when the fetch failed entirely.
+        """
+        result = self._run(
+            financials={"error": "financials_not_found", "message": "No data"},
+        )
+        assert result.years_available is None
+
+    def test_years_available_none_when_financials_empty(self) -> None:
+        result = self._run(financials={})
+        assert result.years_available is None
 
 
 # ---------------------------------------------------------------------------

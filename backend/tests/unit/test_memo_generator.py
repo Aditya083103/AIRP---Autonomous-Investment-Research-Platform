@@ -20,6 +20,7 @@ Test strategy:
  15. Acceptance criteria               -- TCS end-to-end, all sections
                                           populated, readable by a
                                           non-technical person
+ 16. _build_data_completeness_note     -- "based on N of 4 years" note (T-084)
 
 Acceptance criteria verified (from task spec):
   * Memo generated for TCS
@@ -27,6 +28,8 @@ Acceptance criteria verified (from task spec):
   * Readable by a non-technical person (plain-English verdict framing
     present, no raw field names or jargon-only output, disclaimer
     included)
+  * (T-084) years_available surfaced as a data-completeness note;
+    falls back gracefully (no note) when 4/4 years are available
 
 No LLM calls, no network, no database. This module is pure formatting
 logic over an already-computed InvestmentDecision dict.
@@ -41,6 +44,7 @@ os.environ.setdefault("ENVIRONMENT", "test")
 from backend.services.memo_generator import (  # noqa: E402
     _build_bear_case_section,
     _build_bull_case_section,
+    _build_data_completeness_note,
     _build_executive_summary_section,
     _build_header_section,
     _build_memo_markdown,
@@ -235,6 +239,49 @@ class TestFormatAgentWeightsTable:
 
 
 # ---------------------------------------------------------------------------
+# Tests: _build_data_completeness_note (T-084)
+# ---------------------------------------------------------------------------
+
+
+class TestBuildDataCompletenessNote:
+    def test_none_years_available_returns_none(self) -> None:
+        assert _build_data_completeness_note(None) is None
+
+    def test_full_four_years_returns_none(self) -> None:
+        """Acceptance criterion: falls back gracefully when 4/4 available."""
+        assert _build_data_completeness_note(4) is None
+
+    def test_partial_two_years_returns_note(self) -> None:
+        note = _build_data_completeness_note(2)
+        assert note is not None
+        assert "2 of 4" in note
+
+    def test_zero_years_returns_note(self) -> None:
+        note = _build_data_completeness_note(0)
+        assert note is not None
+        assert "0 of 4" in note
+
+    def test_negative_years_returns_none(self) -> None:
+        """Defensive -- an out-of-range value is treated as unknown."""
+        assert _build_data_completeness_note(-1) is None
+
+    def test_more_than_four_years_returns_none(self) -> None:
+        """Defensive -- treated the same as a full/unknown data set."""
+        assert _build_data_completeness_note(5) is None
+
+    def test_note_is_italic_markdown(self) -> None:
+        note = _build_data_completeness_note(1)
+        assert note is not None
+        assert note.startswith("*")
+        assert note.endswith("*")
+
+    def test_note_mentions_fiscal_years(self) -> None:
+        note = _build_data_completeness_note(3)
+        assert note is not None
+        assert "fiscal years" in note.lower()
+
+
+# ---------------------------------------------------------------------------
 # Tests: _build_header_section
 # ---------------------------------------------------------------------------
 
@@ -277,6 +324,23 @@ class TestBuildHeaderSection:
     def test_is_markdown_h1(self) -> None:
         header = self._build()
         assert header.startswith("# Investment Memo:")
+
+    def test_no_data_completeness_note_by_default(self) -> None:
+        header = self._build()
+        assert "fiscal years" not in header.lower()
+
+    def test_data_completeness_note_included_when_provided(self) -> None:
+        header = self._build(
+            data_completeness_note=(
+                "*Fundamental analysis based on 2 of 4 fiscal years of "
+                "available financial data.*"
+            )
+        )
+        assert "based on 2 of 4 fiscal years" in header
+
+    def test_data_completeness_note_omitted_when_none(self) -> None:
+        header = self._build(data_completeness_note=None)
+        assert "fiscal years" not in header.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -527,6 +591,34 @@ class TestBuildMemoMarkdown:
         memo = _build_memo_markdown("TCS", "TCS.NS", _TCS_DECISION, "17 Jun 2026")
         assert "- INR depreciation benefits IT exporters" in memo
 
+    def test_no_data_completeness_note_when_years_available_omitted(self) -> None:
+        """Default (no fundamental_years_available passed) shows no note."""
+        memo = _build_memo_markdown(
+            "Tata Consultancy Services", "TCS.NS", _TCS_DECISION, "17 Jun 2026"
+        )
+        assert "fiscal years of available" not in memo.lower()
+
+    def test_data_completeness_note_shown_for_partial_years(self) -> None:
+        memo = _build_memo_markdown(
+            "Tata Consultancy Services",
+            "TCS.NS",
+            _TCS_DECISION,
+            "17 Jun 2026",
+            fundamental_years_available=2,
+        )
+        assert "based on 2 of 4 fiscal years" in memo
+
+    def test_data_completeness_note_hidden_for_full_four_years(self) -> None:
+        """Acceptance criterion: falls back gracefully when 4/4 available."""
+        memo = _build_memo_markdown(
+            "Tata Consultancy Services",
+            "TCS.NS",
+            _TCS_DECISION,
+            "17 Jun 2026",
+            fundamental_years_available=4,
+        )
+        assert "fiscal years of available" not in memo.lower()
+
 
 # ---------------------------------------------------------------------------
 # Tests: _build_no_decision_memo
@@ -654,3 +746,62 @@ class TestGenerateInvestmentMemoNode:
         }
         result = generate_investment_memo(state)
         assert list(result.keys()) == ["memo_markdown"]
+
+    def test_years_available_from_fundamental_state_shows_note(self) -> None:
+        """T-084: state['fundamental']['years_available'] reaches the memo."""
+        state = {
+            "job_id": "test-job",
+            "company_name": "Tata Consultancy Services",
+            "ticker": "TCS.NS",
+            "decision": _TCS_DECISION,
+            "fundamental": {"years_available": 2},
+        }
+        result = generate_investment_memo(state)
+        assert "based on 2 of 4 fiscal years" in result["memo_markdown"]
+
+    def test_years_available_four_shows_no_note(self) -> None:
+        """Acceptance criterion: falls back gracefully when 4/4 available."""
+        state = {
+            "job_id": "test-job",
+            "company_name": "Tata Consultancy Services",
+            "ticker": "TCS.NS",
+            "decision": _TCS_DECISION,
+            "fundamental": {"years_available": 4},
+        }
+        result = generate_investment_memo(state)
+        assert "fiscal years of available" not in result["memo_markdown"].lower()
+
+    def test_missing_fundamental_key_shows_no_note(self) -> None:
+        """No state['fundamental'] at all -- treated as unknown, no note."""
+        state = {
+            "job_id": "test-job",
+            "company_name": "Tata Consultancy Services",
+            "ticker": "TCS.NS",
+            "decision": _TCS_DECISION,
+        }
+        result = generate_investment_memo(state)
+        assert "fiscal years of available" not in result["memo_markdown"].lower()
+
+    def test_fundamental_present_but_no_years_available_key_shows_no_note(self) -> None:
+        state = {
+            "job_id": "test-job",
+            "company_name": "Tata Consultancy Services",
+            "ticker": "TCS.NS",
+            "decision": _TCS_DECISION,
+            "fundamental": {"score": 8},
+        }
+        result = generate_investment_memo(state)
+        assert "fiscal years of available" not in result["memo_markdown"].lower()
+
+    def test_non_dict_fundamental_does_not_raise(self) -> None:
+        """Defensive: a malformed (non-dict) fundamental entry never raises."""
+        state: dict[str, Any] = {
+            "job_id": "test-job",
+            "company_name": "Tata Consultancy Services",
+            "ticker": "TCS.NS",
+            "decision": _TCS_DECISION,
+            "fundamental": "not-a-dict",
+        }
+        result = generate_investment_memo(state)
+        assert isinstance(result["memo_markdown"], str)
+        assert len(result["memo_markdown"]) > 0

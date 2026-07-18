@@ -42,6 +42,7 @@ const RESULT_RESPONSE = {
   debate_rounds_used: 2,
   agent_weights: { fundamental_analyst: 0.3 },
   summary: "Infosys: BUY with conviction 8/10.",
+  fundamental_years_available: null,
 };
 
 const AUTH_VALUE: AuthContextValue = {
@@ -127,5 +128,69 @@ describe("MemoPage", () => {
     await screen.findByTestId("memo-page");
     const toggle = await screen.findByRole("button", { name: /Agent weighting/ });
     expect(toggle).toHaveAttribute("aria-expanded", "false");
+  });
+
+  describe("data-completeness note (T-084)", () => {
+    it("shows the note when fewer than 4 years of data were available", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi
+          .fn()
+          .mockResolvedValue(
+            jsonResponse(200, { ...RESULT_RESPONSE, fundamental_years_available: 2 }),
+          ),
+      );
+      renderMemoPage();
+
+      expect(await screen.findByTestId("data-completeness-note")).toHaveTextContent(
+        "Fundamental analysis based on 2 of 4 years of available financial data.",
+      );
+    });
+
+    it("does not show the note when all 4 years of data were available", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi
+          .fn()
+          .mockResolvedValue(
+            jsonResponse(200, { ...RESULT_RESPONSE, fundamental_years_available: 4 }),
+          ),
+      );
+      renderMemoPage();
+
+      await screen.findByTestId("verdict-panel");
+      expect(screen.queryByTestId("data-completeness-note")).not.toBeInTheDocument();
+    });
+
+    it("does not show the note when years_available is unknown (null)", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi
+          .fn()
+          .mockResolvedValue(
+            jsonResponse(200, { ...RESULT_RESPONSE, fundamental_years_available: null }),
+          ),
+      );
+      renderMemoPage();
+
+      await screen.findByTestId("verdict-panel");
+      expect(screen.queryByTestId("data-completeness-note")).not.toBeInTheDocument();
+    });
+
+    it("shows the note for a single year of available data with correct singular-safe wording", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi
+          .fn()
+          .mockResolvedValue(
+            jsonResponse(200, { ...RESULT_RESPONSE, fundamental_years_available: 1 }),
+          ),
+      );
+      renderMemoPage();
+
+      expect(await screen.findByTestId("data-completeness-note")).toHaveTextContent(
+        "based on 1 of 4 years",
+      );
+    });
   });
 });
