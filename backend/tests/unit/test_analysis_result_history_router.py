@@ -224,13 +224,22 @@ def _seed_result_row(
     user_id: uuid.UUID,
     status: str = "completed",
     decision: dict[str, Any] | None = None,
+    fundamental: dict[str, Any] | None = None,
 ) -> None:
     """Populate result_overrides with the exact 3-tuple shape
     get_analysis_result reads via row[0]..row[2]. ``decision=None`` with
     status='completed' simulates a state_snapshot with no decision key
     (the defensive/should-never-happen branch); pass an explicit dict
-    (or _VALID_DECISION) to simulate a real, populated snapshot."""
-    snapshot = {"decision": decision} if decision is not None else None
+    (or _VALID_DECISION) to simulate a real, populated snapshot.
+    ``fundamental`` (T-084) optionally adds a state_snapshot['fundamental']
+    entry -- e.g. {"years_available": 2} -- to exercise the
+    fundamental_years_available pass-through; omitted entirely by
+    default, matching a snapshot with no fundamental data at all."""
+    snapshot: dict[str, Any] | None = None
+    if decision is not None:
+        snapshot = {"decision": decision}
+        if fundamental is not None:
+            snapshot["fundamental"] = fundamental
     fake_session.result_overrides[job_id] = (user_id, status, snapshot)
 
 
@@ -510,6 +519,7 @@ class TestGetResultSuccess:
             "debate_rounds_used",
             "agent_weights",
             "summary",
+            "fundamental_years_available",
         }
         assert expected_fields.issubset(body.keys())
 
@@ -620,6 +630,75 @@ class TestGetResultSuccess:
         response = await client.get(f"/api/v1/analysis/{job_id}/result")
 
         assert response.status_code == 500
+
+    @pytest.mark.asyncio
+    async def test_fundamental_years_available_present_in_response(
+        self,
+        client: httpx.AsyncClient,
+        fake_session: _FakeResultHistorySession,
+        current_user: User,
+    ) -> None:
+        """T-084: years_available surfaces via the /result endpoint."""
+        job_id = uuid.uuid4()
+        _seed_result_row(
+            fake_session,
+            job_id,
+            user_id=current_user.id,
+            decision=_VALID_DECISION,
+            fundamental={"years_available": 2},
+        )
+
+        response = await client.get(f"/api/v1/analysis/{job_id}/result")
+        body = response.json()
+
+        assert response.status_code == 200
+        assert body["fundamental_years_available"] == 2
+
+    @pytest.mark.asyncio
+    async def test_fundamental_years_available_null_when_no_fundamental_data(
+        self,
+        client: httpx.AsyncClient,
+        fake_session: _FakeResultHistorySession,
+        current_user: User,
+    ) -> None:
+        """No state_snapshot['fundamental'] at all -- null, not an error."""
+        job_id = uuid.uuid4()
+        _seed_result_row(
+            fake_session, job_id, user_id=current_user.id, decision=_VALID_DECISION
+        )
+
+        response = await client.get(f"/api/v1/analysis/{job_id}/result")
+        body = response.json()
+
+        assert response.status_code == 200
+        assert body["fundamental_years_available"] is None
+
+    @pytest.mark.asyncio
+    async def test_fundamental_years_available_four_passes_through(
+        self,
+        client: httpx.AsyncClient,
+        fake_session: _FakeResultHistorySession,
+        current_user: User,
+    ) -> None:
+        """
+        The endpoint always surfaces the raw count -- the "no note when
+        4/4" behaviour lives in the memo/MemoPage presentation layer,
+        not the API contract, so a full 4 must still round-trip.
+        """
+        job_id = uuid.uuid4()
+        _seed_result_row(
+            fake_session,
+            job_id,
+            user_id=current_user.id,
+            decision=_VALID_DECISION,
+            fundamental={"years_available": 4},
+        )
+
+        response = await client.get(f"/api/v1/analysis/{job_id}/result")
+        body = response.json()
+
+        assert response.status_code == 200
+        assert body["fundamental_years_available"] == 4
 
 
 # ---------------------------------------------------------------------------

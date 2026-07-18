@@ -429,6 +429,7 @@ async def get_analysis_result_endpoint(
             debate_rounds_used=decision.get("debate_rounds_used", 1),
             agent_weights=decision.get("agent_weights", {}),
             summary=decision.get("summary", ""),
+            fundamental_years_available=result.fundamental_years_available,
         )
     except KeyError as exc:
         # decision is missing one of the three fields with no sensible

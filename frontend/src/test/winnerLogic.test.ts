@@ -43,6 +43,7 @@ function makeDecision(
     debate_rounds_used: 2,
     agent_weights: {},
     summary: "",
+    fundamental_years_available: null,
     ...overrides,
   };
 }

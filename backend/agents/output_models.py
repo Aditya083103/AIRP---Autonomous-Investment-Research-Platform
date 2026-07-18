@@ -143,6 +143,19 @@ class FundamentalAnalysis(AgentOutput):
             "score is None rather than a misleadingly low floor value."
         ),
     )
+    years_available: Optional[int] = Field(
+        default=None,
+        ge=0,
+        le=4,
+        description=(
+            "Number of fiscal years (out of a maximum of 4) fetch_financials "
+            "actually returned data for (T-084). Pass-through from "
+            "FinancialStatements.years_available -- distinct from "
+            "data_quality, which measures how many of the 5 SCORING metrics "
+            "could be computed from whatever years were available. None when "
+            "the financials fetch failed entirely (no year count to report)."
+        ),
+    )
 
     # ── Revenue ───────────────────────────────────────────────────────────
     revenue_growth_pct: Optional[float] = Field(

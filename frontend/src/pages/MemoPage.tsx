@@ -32,12 +32,36 @@ import { CollapsibleSection } from "@/components/ui";
 import { useAnalysisResult } from "@/hooks/useAnalysisResult";
 import { useAuth } from "@/hooks/useAuth";
 
+// Maximum fiscal years the Fundamental Analyst ever fetches (T-084) --
+// mirrors backend.services.memo_generator's own _TOTAL_FUNDAMENTAL_YEARS,
+// which mirrors backend.tools.financials.FinancialStatements
+// .years_available's "max 4" contract.
+const TOTAL_FUNDAMENTAL_YEARS = 4;
+
 function formatGeneratedAt(isoTimestamp: string): string {
   const parsed = new Date(isoTimestamp);
   if (Number.isNaN(parsed.getTime())) {
     return isoTimestamp;
   }
   return parsed.toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" });
+}
+
+/**
+ * Build the "based on N of 4 years" data-completeness note (T-084).
+ *
+ * Returns null -- and therefore renders nothing -- when yearsAvailable
+ * is unknown (null) or equals the full 4-year window, mirroring
+ * backend.services.memo_generator._build_data_completeness_note exactly
+ * so the PDF memo and this page never disagree on when to show it.
+ */
+function formatDataCompletenessNote(yearsAvailable: number | null): string | null {
+  if (yearsAvailable === null) {
+    return null;
+  }
+  if (yearsAvailable < 0 || yearsAvailable >= TOTAL_FUNDAMENTAL_YEARS) {
+    return null;
+  }
+  return `Fundamental analysis based on ${yearsAvailable} of ${TOTAL_FUNDAMENTAL_YEARS} years of available financial data.`;
 }
 
 export function MemoPage(): JSX.Element {
@@ -63,6 +87,10 @@ export function MemoPage(): JSX.Element {
     );
   }
 
+  const dataCompletenessNote = decision
+    ? formatDataCompletenessNote(decision.fundamental_years_available)
+    : null;
+
   return (
     <div className="mx-auto max-w-4xl py-12" data-testid="memo-page">
       <p className="font-mono text-xs uppercase tracking-[0.2em] text-brand-600">Investment memo</p>
@@ -76,6 +104,12 @@ export function MemoPage(): JSX.Element {
       ) : (
         <p className="mt-2 font-mono text-xs text-muted">Job ID: {jobId}</p>
       )}
+
+      {dataCompletenessNote ? (
+        <p className="mt-1 text-xs italic text-muted" data-testid="data-completeness-note">
+          {dataCompletenessNote}
+        </p>
+      ) : null}
 
       {accessToken !== null ? (
         <div className="mt-6">

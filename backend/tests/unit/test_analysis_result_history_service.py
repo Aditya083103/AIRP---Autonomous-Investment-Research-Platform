@@ -25,6 +25,10 @@ Test strategy
        with the decision dict passed through unchanged
      malformed (non-JSON-parsable string) snapshot -- treated as "no
        decision", not propagated as a raw JSONDecodeError
+     fundamental_years_available (T-084) -- extracted from the same
+       snapshot's 'fundamental' entry; None when absent, non-dict, or
+       missing years_available; never blocks a successful result even
+       when unavailable
 2. get_analysis_history()
      no rows for user_id                 -- empty page, total_count=0,
                                              has_more=False
@@ -267,6 +271,170 @@ class TestGetAnalysisResultSuccess:
         session.execute.assert_awaited_once()
         bound_params = session.execute.call_args.args[1]
         assert bound_params == {"job_id": str(job_id)}
+
+
+class TestGetAnalysisResultFundamentalYearsAvailable:
+    """T-084: fundamental_years_available is a soft signal extracted
+    from the same state_snapshot's 'fundamental' entry -- it never
+    blocks a successful result, unlike a missing 'decision'."""
+
+    @pytest.mark.asyncio
+    async def test_extracted_when_present(self) -> None:
+        user_id = uuid.uuid4()
+        row = _make_result_row(
+            user_id=user_id,
+            status="completed",
+            state_snapshot={
+                "decision": _VALID_DECISION,
+                "fundamental": {"years_available": 2},
+            },
+        )
+        session = _make_session_returning_row(row)
+
+        result = await get_analysis_result(
+            session, job_id=uuid.uuid4(), user_id=user_id
+        )
+
+        assert result is not None
+        assert result.fundamental_years_available == 2
+
+    @pytest.mark.asyncio
+    async def test_none_when_fundamental_key_missing(self) -> None:
+        user_id = uuid.uuid4()
+        row = _make_result_row(
+            user_id=user_id,
+            status="completed",
+            state_snapshot={"decision": _VALID_DECISION},
+        )
+        session = _make_session_returning_row(row)
+
+        result = await get_analysis_result(
+            session, job_id=uuid.uuid4(), user_id=user_id
+        )
+
+        assert result is not None
+        assert result.fundamental_years_available is None
+
+    @pytest.mark.asyncio
+    async def test_none_when_fundamental_is_not_a_dict(self) -> None:
+        user_id = uuid.uuid4()
+        row = _make_result_row(
+            user_id=user_id,
+            status="completed",
+            state_snapshot={
+                "decision": _VALID_DECISION,
+                "fundamental": "not-a-dict",
+            },
+        )
+        session = _make_session_returning_row(row)
+
+        result = await get_analysis_result(
+            session, job_id=uuid.uuid4(), user_id=user_id
+        )
+
+        assert result is not None
+        assert result.fundamental_years_available is None
+
+    @pytest.mark.asyncio
+    async def test_none_when_years_available_key_missing(self) -> None:
+        user_id = uuid.uuid4()
+        row = _make_result_row(
+            user_id=user_id,
+            status="completed",
+            state_snapshot={
+                "decision": _VALID_DECISION,
+                "fundamental": {"score": 8},
+            },
+        )
+        session = _make_session_returning_row(row)
+
+        result = await get_analysis_result(
+            session, job_id=uuid.uuid4(), user_id=user_id
+        )
+
+        assert result is not None
+        assert result.fundamental_years_available is None
+
+    @pytest.mark.asyncio
+    async def test_full_four_years_extracted_correctly(self) -> None:
+        user_id = uuid.uuid4()
+        row = _make_result_row(
+            user_id=user_id,
+            status="completed",
+            state_snapshot={
+                "decision": _VALID_DECISION,
+                "fundamental": {"years_available": 4},
+            },
+        )
+        session = _make_session_returning_row(row)
+
+        result = await get_analysis_result(
+            session, job_id=uuid.uuid4(), user_id=user_id
+        )
+
+        assert result is not None
+        assert result.fundamental_years_available == 4
+
+    @pytest.mark.asyncio
+    async def test_string_years_available_is_cast_to_int(self) -> None:
+        """JSONB ->> style string values (e.g. from a raw SQL path) are
+        coerced to int rather than left as a string or dropped."""
+        user_id = uuid.uuid4()
+        row = _make_result_row(
+            user_id=user_id,
+            status="completed",
+            state_snapshot={
+                "decision": _VALID_DECISION,
+                "fundamental": {"years_available": "3"},
+            },
+        )
+        session = _make_session_returning_row(row)
+
+        result = await get_analysis_result(
+            session, job_id=uuid.uuid4(), user_id=user_id
+        )
+
+        assert result is not None
+        assert result.fundamental_years_available == 3
+
+    @pytest.mark.asyncio
+    async def test_malformed_years_available_returns_none(self) -> None:
+        user_id = uuid.uuid4()
+        row = _make_result_row(
+            user_id=user_id,
+            status="completed",
+            state_snapshot={
+                "decision": _VALID_DECISION,
+                "fundamental": {"years_available": "not-a-number"},
+            },
+        )
+        session = _make_session_returning_row(row)
+
+        result = await get_analysis_result(
+            session, job_id=uuid.uuid4(), user_id=user_id
+        )
+
+        assert result is not None
+        assert result.fundamental_years_available is None
+
+    @pytest.mark.asyncio
+    async def test_missing_fundamental_never_blocks_a_successful_result(self) -> None:
+        """Unlike a missing 'decision', a missing/malformed 'fundamental'
+        entry must never raise AnalysisNotReadyError."""
+        user_id = uuid.uuid4()
+        row = _make_result_row(
+            user_id=user_id,
+            status="completed",
+            state_snapshot={"decision": _VALID_DECISION},
+        )
+        session = _make_session_returning_row(row)
+
+        result = await get_analysis_result(
+            session, job_id=uuid.uuid4(), user_id=user_id
+        )
+
+        assert result is not None
+        assert result.decision == _VALID_DECISION
 
 
 # ---------------------------------------------------------------------------

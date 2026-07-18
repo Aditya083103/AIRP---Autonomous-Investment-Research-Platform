@@ -820,11 +820,21 @@ class AnalysisResultData:
     backend.graph.state.InvestmentState's ``decision`` field) and uses
     ``company_name``/``ticker`` only as a cross-check that the snapshot
     actually contains a populated decision.
+
+    ``fundamental_years_available`` (T-084) is the one field here that
+    is NOT sourced from ``decision`` -- it comes from the same
+    ``state_snapshot``'s ``fundamental`` entry instead (the Fundamental
+    Analyst's own output), added specifically to power the Investment
+    Memo / MemoPage "based on N of 4 years" data-completeness note
+    without a second round trip to the database. None when the snapshot
+    has no ``fundamental`` entry, or that entry has no usable
+    ``years_available`` value.
     """
 
     job_id: uuid.UUID
     status: str
     decision: dict[str, Any]
+    fundamental_years_available: Optional[int] = None
 
 
 #: Reads the three columns get_analysis_result needs in one round trip:
@@ -919,7 +929,16 @@ async def get_analysis_result(
         )
         raise AnalysisNotReadyError(status=status)
 
-    return AnalysisResultData(job_id=job_id, status=status, decision=decision)
+    fundamental_years_available = _extract_fundamental_years_available_from_snapshot(
+        snapshot_val, job_id=job_id
+    )
+
+    return AnalysisResultData(
+        job_id=job_id,
+        status=status,
+        decision=decision,
+        fundamental_years_available=fundamental_years_available,
+    )
 
 
 def _parse_state_snapshot(
@@ -995,6 +1014,47 @@ def _extract_decision_from_snapshot(
     if not isinstance(decision, dict):
         return None
     return decision
+
+
+def _extract_fundamental_years_available_from_snapshot(
+    snapshot_val: Any,
+    job_id: uuid.UUID,
+) -> Optional[int]:
+    """
+    Parse ``analyses.state_snapshot`` (JSONB) and return the Fundamental
+    Analyst's ``years_available`` count (T-084), or None if the
+    snapshot is missing, malformed, has no ``fundamental`` entry, or
+    that entry has no usable ``years_available`` value.
+
+    Soft signal only -- unlike ``_extract_decision_from_snapshot``, a
+    None here never raises ``AnalysisNotReadyError``. The memo/MemoPage
+    "based on N of 4 years" note simply omits itself when this returns
+    None, exactly as it already does when years_available == 4.
+
+    Args:
+        snapshot_val: The raw value read from row[2] -- a dict
+                      (asyncpg) or str (psycopg2), or None.
+        job_id:       Only used for logging context.
+
+    Returns:
+        years_available as an int (0-4 in practice), or None if
+        unavailable or malformed.
+    """
+    snapshot = _parse_state_snapshot(snapshot_val, job_id=job_id)
+    if snapshot is None:
+        return None
+
+    fundamental = snapshot.get("fundamental")
+    if not isinstance(fundamental, dict):
+        return None
+
+    years_raw = fundamental.get("years_available")
+    if years_raw is None:
+        return None
+    try:
+        return int(years_raw)
+    except (TypeError, ValueError):
+        return None
 
 
 # ---------------------------------------------------------------------------

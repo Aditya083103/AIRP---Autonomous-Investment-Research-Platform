@@ -22,6 +22,11 @@ Acceptance criteria (T-042):
   * All sections populated
   * Readable by a non-technical person
 
+Acceptance criteria (T-084 -- data completeness note):
+  * years_available surfaced as a "based on N of 4 years" note in the
+    header section
+  * Falls back gracefully when 4/4 years are available -- no note shown
+
 Design decisions
 -----------------
 Why Markdown and not HTML/PDF directly?
@@ -65,6 +70,7 @@ Public interface
   _build_risk_section(...)                   -> str
   _build_valuation_section(...)              -> str
   _build_recommendation_section(...)         -> str
+  _build_data_completeness_note(...)         -> str | None  (T-084)
   _format_agent_weights_table(...)           -> str
   _non_empty(...)                            -> str    fallback helper
 """
@@ -108,6 +114,12 @@ _VERDICT_PLAIN_ENGLISH: dict[str, str] = {
     ),
 }
 
+#: Maximum fiscal years the Fundamental Analyst ever fetches (T-084) --
+#: mirrors backend.tools.financials.FinancialStatements.years_available's
+#: own "max 4" contract and backend.agents.fundamental_analyst's mandate
+#: of analysing "the last 4 fiscal years".
+_TOTAL_FUNDAMENTAL_YEARS = 4
+
 
 # ---------------------------------------------------------------------------
 # Small helpers
@@ -119,6 +131,35 @@ def _non_empty(text: Optional[str], fallback: str = _FALLBACK_TEXT) -> str:
     if text and text.strip():
         return text.strip()
     return fallback
+
+
+def _build_data_completeness_note(years_available: Optional[int]) -> Optional[str]:
+    """
+    Build the 'based on N of 4 years' data-completeness note (T-084).
+
+    Returns None -- and therefore renders nothing -- when
+    ``years_available`` is unknown (None) or equals the full 4-year
+    window, so a complete analysis shows no caveat at all. Only
+    genuinely partial fundamental data produces a visible note. A
+    negative or otherwise out-of-range value is also treated as unknown
+    rather than rendering a nonsensical note.
+
+    Args:
+        years_available: Number of fiscal years of financial data the
+            Fundamental Analyst had (0-4), or None if unavailable.
+
+    Returns:
+        An italic Markdown note string, or None when no note is needed.
+    """
+    if years_available is None:
+        return None
+    if years_available < 0 or years_available >= _TOTAL_FUNDAMENTAL_YEARS:
+        return None
+    return (
+        f"*Fundamental analysis based on {years_available} of "
+        f"{_TOTAL_FUNDAMENTAL_YEARS} fiscal years of available financial "
+        f"data.*"
+    )
 
 
 def _format_conviction_label(conviction_score: int) -> str:
@@ -168,6 +209,7 @@ def _build_header_section(
     price_target: Optional[str],
     time_horizon: str,
     generated_at: str,
+    data_completeness_note: Optional[str] = None,
 ) -> str:
     verdict_label = _VERDICT_LABELS.get(verdict, verdict)
     lines = [
@@ -183,8 +225,11 @@ def _build_header_section(
         f"| **Price Target** | {price_target or 'Not available'} |",
         f"| **Time Horizon** | {time_horizon} |",
         "",
-        "---",
     ]
+    if data_completeness_note:
+        lines.append(data_completeness_note)
+        lines.append("")
+    lines.append("---")
     return "\n".join(lines)
 
 
@@ -323,6 +368,7 @@ def _build_memo_markdown(
     ticker: str,
     decision: dict[str, Any],
     generated_at: str,
+    fundamental_years_available: Optional[int] = None,
 ) -> str:
     """
     Assemble the full Markdown memo from an InvestmentDecision dict
@@ -330,6 +376,12 @@ def _build_memo_markdown(
     raises -- every field access goes through a fallback so a partially
     populated or error-flagged decision still produces a complete,
     readable document.
+
+    ``fundamental_years_available`` (T-084) is optional and orthogonal
+    to ``decision`` -- it comes from the Fundamental Analyst's own
+    output (``state["fundamental"]["years_available"]``), not the
+    Portfolio Manager's decision, and only ever adds a small caveat note
+    to the header; every other section is unaffected by it.
     """
     verdict = str(decision.get("verdict") or "HOLD")
     conviction_score = int(decision.get("conviction_score") or 1)
@@ -340,6 +392,8 @@ def _build_memo_markdown(
     key_risks = decision.get("key_risks") or []
     key_catalysts = decision.get("key_catalysts") or []
 
+    data_completeness_note = _build_data_completeness_note(fundamental_years_available)
+
     sections = [
         _build_header_section(
             company_name=company_name,
@@ -349,6 +403,7 @@ def _build_memo_markdown(
             price_target=price_target,
             time_horizon=time_horizon,
             generated_at=generated_at,
+            data_completeness_note=data_completeness_note,
         ),
         _build_executive_summary_section(decision.get("executive_summary", "")),
         _build_thesis_section(verdict, decision.get("investment_thesis", "")),
@@ -422,6 +477,18 @@ def generate_investment_memo(state: dict[str, Any]) -> dict[str, Any]:
 
     decision = state.get("decision")
 
+    fundamental_raw: Any = state.get("fundamental")
+    fundamental: dict[str, Any] = (
+        fundamental_raw if isinstance(fundamental_raw, dict) else {}
+    )
+    years_raw: Any = fundamental.get("years_available")
+    fundamental_years_available: Optional[int] = None
+    if years_raw is not None:
+        try:
+            fundamental_years_available = int(years_raw)
+        except (TypeError, ValueError):
+            fundamental_years_available = None
+
     try:
         if decision:
             memo_markdown = _build_memo_markdown(
@@ -429,6 +496,7 @@ def generate_investment_memo(state: dict[str, Any]) -> dict[str, Any]:
                 ticker=ticker,
                 decision=decision,
                 generated_at=generated_at,
+                fundamental_years_available=fundamental_years_available,
             )
         else:
             logger.warning(
@@ -464,6 +532,7 @@ __all__ = [
     "_build_risk_section",
     "_build_valuation_section",
     "_build_recommendation_section",
+    "_build_data_completeness_note",
     "_format_agent_weights_table",
     "_format_conviction_label",
     "_non_empty",
