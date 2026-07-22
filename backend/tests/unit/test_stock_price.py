@@ -249,7 +249,10 @@ class TestFetchFromYfinance:
             "backend.tools.market_data.yf.Ticker", return_value=mock_yf_ticker_valid
         ):
             with pytest.raises(ValueError, match="Invalid period"):
-                _fetch_from_yfinance("TCS.NS", "10y")
+                # "15y" is not in VALID_PERIODS -- "10y" was extended to
+                # a valid horizon by T-085 and is covered separately by
+                # test_all_periods_accepted below.
+                _fetch_from_yfinance("TCS.NS", "15y")
 
     def test_exchange_and_currency_from_info(
         self, mock_yf_ticker_valid: MagicMock
@@ -284,7 +287,9 @@ class TestFetchFromYfinance:
         assert result.company_name == "RELIANCE.NS"
 
     def test_all_periods_accepted(self, mock_yf_ticker_valid: MagicMock) -> None:
-        for period in ("1y", "3y", "5y"):
+        # T-085: extended from ("1y", "3y", "5y") to the full analysis
+        # horizon set now exposed on the AnalysisPage horizon selector.
+        for period in ("1mo", "3mo", "6mo", "1y", "3y", "5y", "10y"):
             with patch(
                 "backend.tools.market_data.yf.Ticker", return_value=mock_yf_ticker_valid
             ):
@@ -352,7 +357,10 @@ class TestFetchStockPriceTool:
         with patch(
             "backend.tools.market_data.yf.Ticker", return_value=mock_yf_ticker_valid
         ):
-            result = fetch_stock_price.invoke({"ticker": "TCS.NS", "period": "10y"})
+            # "15y" is not in VALID_PERIODS -- "10y" was extended to a
+            # valid horizon by T-085 (see TestFetchFromYfinance's
+            # test_all_periods_accepted).
+            result = fetch_stock_price.invoke({"ticker": "TCS.NS", "period": "15y"})
 
         assert result["error"] == "invalid_parameter"
 
@@ -452,7 +460,9 @@ class TestStockPriceModelValidation:
                 company_name="TCS",
                 exchange="NSE",
                 currency="INR",
-                period="10y",
+                # "15y" is not in VALID_PERIODS -- "10y" was extended to
+                # a valid horizon by T-085.
+                period="15y",
                 data_points=1,
                 first_date=Date.today(),
                 last_date=Date.today(),
@@ -460,3 +470,20 @@ class TestStockPriceModelValidation:
                 ohlcv=[],
                 fetched_at=datetime.utcnow(),
             )
+
+    def test_10y_period_now_valid(self) -> None:
+        """T-085: '10y' is a newly-supported analysis horizon."""
+        model = StockPrice(
+            ticker="TCS.NS",
+            company_name="TCS",
+            exchange="NSE",
+            currency="INR",
+            period="10y",
+            data_points=1,
+            first_date=Date.today(),
+            last_date=Date.today(),
+            stats=MagicMock(),
+            ohlcv=[],
+            fetched_at=datetime.utcnow(),
+        )
+        assert model.period == "10y"

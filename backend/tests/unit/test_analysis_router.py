@@ -342,6 +342,66 @@ class TestStartAnalysisValidation:
         )
         assert response.status_code == 422
 
+    @pytest.mark.asyncio
+    async def test_invalid_period_override_returns_422(
+        self, client: httpx.AsyncClient
+    ) -> None:
+        """T-085: an out-of-range analysis horizon is rejected at the
+        HTTP boundary, matching the existing invalid-exchange behaviour."""
+        response = await client.post(
+            "/api/v1/analysis/start",
+            json={"company_name": "TCS", "period": "15y"},
+        )
+        assert response.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Analysis horizon selector -- T-085
+# ---------------------------------------------------------------------------
+
+
+class TestAnalysisPeriod:
+    @pytest.mark.asyncio
+    async def test_period_defaults_to_1y_when_omitted(
+        self,
+        client: httpx.AsyncClient,
+        patched_pipeline: AsyncMock,
+    ) -> None:
+        await client.post(
+            "/api/v1/analysis/start",
+            json={"company_name": "TCS"},
+        )
+        _, kwargs = patched_pipeline.call_args
+        assert kwargs["period"] == "1y"
+
+    @pytest.mark.asyncio
+    async def test_explicit_period_is_forwarded_to_pipeline(
+        self,
+        client: httpx.AsyncClient,
+        patched_pipeline: AsyncMock,
+    ) -> None:
+        await client.post(
+            "/api/v1/analysis/start",
+            json={"company_name": "TCS", "period": "5y"},
+        )
+        _, kwargs = patched_pipeline.call_args
+        assert kwargs["period"] == "5y"
+
+    @pytest.mark.asyncio
+    async def test_every_supported_period_is_accepted(
+        self,
+        client: httpx.AsyncClient,
+        patched_pipeline: AsyncMock,
+    ) -> None:
+        for period in ("1mo", "3mo", "6mo", "1y", "3y", "5y", "10y"):
+            response = await client.post(
+                "/api/v1/analysis/start",
+                json={"company_name": "TCS", "period": period},
+            )
+            assert response.status_code == 202
+            _, kwargs = patched_pipeline.call_args
+            assert kwargs["period"] == period
+
 
 # ---------------------------------------------------------------------------
 # Job record persisted in DB -- "job record in DB"

@@ -37,13 +37,26 @@ logger = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-VALID_PERIODS: frozenset[str] = frozenset({"1y", "3y", "5y"})
+VALID_PERIODS: frozenset[str] = frozenset(
+    {"1mo", "3mo", "6mo", "1y", "3y", "5y", "10y"}
+)
 
-# Map human-readable periods to yFinance period strings
+# Map human-readable periods to yFinance period strings.
+# AIRP's period vocabulary matches yFinance's own period strings 1:1
+# (yFinance already accepts "1mo"/"3mo"/"6mo"/"1y"/"3y"/"5y"/"10y"
+# directly), so this map is currently the identity function. It is kept
+# as an explicit dict -- rather than passing the period straight through
+# -- so a future period label that AIRP wants to expose can be
+# translated to whatever yFinance calls it without touching every call
+# site that already validates against VALID_PERIODS (T-085).
 PERIOD_MAP: dict[str, str] = {
+    "1mo": "1mo",
+    "3mo": "3mo",
+    "6mo": "6mo",
     "1y": "1y",
     "3y": "3y",
     "5y": "5y",
+    "10y": "10y",
 }
 
 
@@ -108,7 +121,9 @@ class StockPrice(BaseModel):
     company_name: str = Field(description="Company display name from Yahoo Finance")
     exchange: str = Field(description="Exchange code (e.g. NSE, BSE, NASDAQ)")
     currency: str = Field(description="Trading currency (e.g. INR, USD)")
-    period: str = Field(description="Requested data period (1y / 3y / 5y)")
+    period: str = Field(
+        description="Requested data period (1mo / 3mo / 6mo / 1y / 3y / 5y / 10y)"
+    )
     data_points: int = Field(description="Number of daily candles returned")
     first_date: Date = Field(description="Date of the oldest candle in this response")
     last_date: Date = Field(description="Date of the most recent candle")
@@ -327,8 +342,9 @@ def fetch_stock_price(ticker: str, period: str = "1y") -> dict[str, Any]:
         ticker: Stock ticker symbol. Indian NSE stocks must use the '.NS'
                 suffix (e.g. 'TCS.NS', 'INFY.NS', 'RELIANCE.NS').
                 BSE stocks use '.BO'. US stocks use plain symbols ('AAPL').
-        period: Data period to fetch. One of: '1y' (1 year, default),
-                '3y' (3 years), '5y' (5 years).
+        period: Data period to fetch. One of: '1mo' (1 month), '3mo'
+                (3 months), '6mo' (6 months), '1y' (1 year, default),
+                '3y' (3 years), '5y' (5 years), '10y' (10 years).
 
     Returns:
         Dict representation of StockPrice model containing:
@@ -378,7 +394,7 @@ def fetch_ohlcv(ticker: str, period: str = "1y") -> dict[str, Any]:
 
     Args:
         ticker: Stock ticker symbol with exchange suffix (e.g. 'INFY.NS').
-        period: One of '1y', '3y', '5y'.
+        period: One of '1mo', '3mo', '6mo', '1y', '3y', '5y', '10y'.
 
     Returns:
         Dict with keys:

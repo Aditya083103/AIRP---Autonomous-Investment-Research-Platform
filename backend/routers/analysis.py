@@ -230,6 +230,7 @@ async def start_analysis(
         ticker=resolution.ticker,
         exchange=resolution.exchange,
         requested_by=str(current_user.id),
+        period=body.period,
     )
 
     return AnalysisStartResponse(

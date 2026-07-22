@@ -108,7 +108,7 @@ const START_RESPONSE = {
 };
 
 describe("startAnalysis", () => {
-  it("posts company_name/ticker/exchange with the Authorization header", async () => {
+  it("posts company_name/ticker/exchange/period with the Authorization header", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(202, START_RESPONSE));
     vi.stubGlobal("fetch", fetchMock);
 
@@ -125,7 +125,30 @@ describe("startAnalysis", () => {
     const headers = options.headers as Record<string, string>;
     expect(headers.Authorization).toBe("Bearer jwt-token");
     const body = JSON.parse(options.body as string) as Record<string, unknown>;
-    expect(body).toEqual({ company_name: "Infosys", ticker: "INFY.NS", exchange: "NSE" });
+    // T-085: period defaults to "1y" when the caller omits it.
+    expect(body).toEqual({
+      company_name: "Infosys",
+      ticker: "INFY.NS",
+      exchange: "NSE",
+      period: "1y",
+    });
+  });
+
+  it("posts an explicit period when provided (T-085)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(202, START_RESPONSE));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await startAnalysis({
+      accessToken: "jwt-token",
+      companyName: "Infosys",
+      ticker: "INFY.NS",
+      exchange: "NSE",
+      period: "5y",
+    });
+
+    const [, options] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(options.body as string) as Record<string, unknown>;
+    expect(body.period).toBe("5y");
   });
 
   it("resolves with the parsed AnalysisStartResponse", async () => {

@@ -90,7 +90,30 @@ describe("AnalysisPage", () => {
     const [url, options] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toContain("/analysis/start");
     const body = JSON.parse(options.body as string) as Record<string, unknown>;
-    expect(body).toEqual({ company_name: "Infosys", ticker: "INFY.NS", exchange: "NSE" });
+    // T-085: period is always sent, defaulting to "1y" when the
+    // horizon selector is left untouched.
+    expect(body).toEqual({
+      company_name: "Infosys",
+      ticker: "INFY.NS",
+      exchange: "NSE",
+      period: "1y",
+    });
+  });
+
+  it("sends the selected analysis horizon (T-085)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(202, START_RESPONSE));
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderAnalysisPage();
+
+    await selectInfosys(user);
+    await user.selectOptions(screen.getByRole("combobox", { name: "Analysis horizon" }), "5y");
+    await user.click(screen.getByRole("button", { name: /start analysis/i }));
+
+    await waitFor(() => expect(screen.getByText("Result page")).toBeInTheDocument());
+    const [, options] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(options.body as string) as Record<string, unknown>;
+    expect(body.period).toBe("5y");
   });
 
   it("shows the backend's error message when starting the analysis fails", async () => {

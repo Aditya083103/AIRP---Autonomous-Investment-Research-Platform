@@ -446,6 +446,7 @@ async def run_analysis_pipeline(
     ticker: str,
     exchange: str,
     requested_by: str,
+    period: str = "1y",
 ) -> None:
     """
     Background-task entry point: build initial state and run the graph.
@@ -478,6 +479,11 @@ async def run_analysis_pipeline(
         exchange:      Resolved exchange ('NSE' or 'BSE').
         requested_by:  String identifier of the requesting user
                         (str(user.id)).
+        period:        Analysis horizon for the Technical Analyst agent's
+                        OHLCV fetch -- one of "1mo"/"3mo"/"6mo"/"1y"/"3y"/
+                        "5y"/"10y" (T-085). Defaults to "1y", so callers
+                        that predate T-085 keep the exact behaviour they
+                        already had.
     """
     from backend.services.state_persistence import StatePersistenceService
 
@@ -488,6 +494,7 @@ async def run_analysis_pipeline(
         exchange=exchange,
         raw_query=company_name,
         requested_by=requested_by,
+        period=period,
     )
 
     logger.info(

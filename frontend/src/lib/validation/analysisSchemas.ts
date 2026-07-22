@@ -24,8 +24,35 @@
 
 import { z } from "zod";
 
+// T-085 -- Analysis Horizon selector. Mirrors
+// backend.tools.stock_price.VALID_PERIODS / backend.models.schemas.
+// _VALID_ANALYSIS_PERIODS exactly -- keep these two lists in sync if
+// either side changes.
+export const ANALYSIS_HORIZONS = ["1mo", "3mo", "6mo", "1y", "3y", "5y", "10y"] as const;
+
+export type AnalysisHorizon = (typeof ANALYSIS_HORIZONS)[number];
+
+/** Human-readable labels for the horizon selector, keyed by AnalysisHorizon. */
+export const ANALYSIS_HORIZON_LABELS: Record<AnalysisHorizon, string> = {
+  "1mo": "1 month",
+  "3mo": "3 months",
+  "6mo": "6 months",
+  "1y": "1 year",
+  "3y": "3 years",
+  "5y": "5 years",
+  "10y": "10 years",
+};
+
+/** Default analysis horizon -- matches backend.models.schemas.DEFAULT_ANALYSIS_PERIOD. */
+export const DEFAULT_ANALYSIS_HORIZON: AnalysisHorizon = "1y";
+
 export const analysisInputSchema = z.object({
   companyTicker: z.string().min(1, "Select a company from the list."),
+  // `.default(...)` means an omitted `horizon` field still parses
+  // successfully as DEFAULT_ANALYSIS_HORIZON -- existing callers of
+  // this schema that predate T-085 (and the tests written against
+  // them) keep working unchanged.
+  horizon: z.enum(ANALYSIS_HORIZONS).default(DEFAULT_ANALYSIS_HORIZON),
 });
 
 export type AnalysisInputFormValues = z.infer<typeof analysisInputSchema>;

@@ -9,8 +9,11 @@ trend identification, momentum analysis, and key-level extraction.
 Mandate
 -------
 Analyse a company's price history using the ``fetch_stock_price`` tool
-(1-year OHLCV data) and compute all technical indicators deterministically
-before passing pre-processed context to the LLM for narrative synthesis.
+(OHLCV data for the requested analysis horizon -- one of "1mo"/"3mo"/
+"6mo"/"1y"/"3y"/"5y"/"10y", read from ``state["period"]`` and defaulting
+to "1y" when unset; T-085) and compute all technical indicators
+deterministically before passing pre-processed context to the LLM for
+narrative synthesis.
 
 Indicators computed (pure Python, no external TA library required):
   * SMA-50 and SMA-200  -- simple moving averages
@@ -506,20 +509,33 @@ def _run_technical_analysis_core(
     analysis_id: str,
     company_name: str,
     ticker: str,
+    period: str = "1y",
 ) -> TechnicalAnalysis:
     """
     Core agent logic -- fetch OHLCV data, compute all indicators, call LLM.
 
     Never raises -- on any failure returns TechnicalAnalysis with error set.
+
+    Args:
+        analysis_id:   job_id of the analysis this agent run belongs to.
+        company_name:  Human-readable company name.
+        ticker:        Yahoo Finance ticker with exchange suffix.
+        period:        Analysis horizon to fetch OHLCV data for -- one of
+                        "1mo"/"3mo"/"6mo"/"1y"/"3y"/"5y"/"10y" (T-085),
+                        matching backend.tools.stock_price.VALID_PERIODS.
+                        Defaults to "1y" so existing callers keep the
+                        exact 1-year window they already had.
     """
-    # --- Step 1: Fetch 1-year OHLCV data
+    # --- Step 1: Fetch OHLCV data for the requested horizon (T-085;
+    # previously hardcoded to "1y")
     logger.info(
-        "Technical analyst: fetching price data ticker=%s analysis=%s",
+        "Technical analyst: fetching price data ticker=%s analysis=%s period=%s",
         ticker,
         analysis_id,
+        period,
     )
     try:
-        price_data = fetch_stock_price.invoke({"ticker": ticker, "period": "1y"})
+        price_data = fetch_stock_price.invoke({"ticker": ticker, "period": period})
     except Exception as exc:
         logger.exception("fetch_stock_price failed for %s", ticker)
         return TechnicalAnalysis(
@@ -711,6 +727,10 @@ def run_technical_analysis(state: dict[str, Any]) -> dict[str, Any]:
       - job_id       -> analysis_id for the output model
       - company_name -> human-readable company name
       - ticker       -> Yahoo Finance ticker (e.g. 'TCS.NS')
+      - period       -> analysis horizon (T-085); defaults to "1y" when
+                        absent, so state built before T-085 (or any test
+                        fixture that predates this field) behaves exactly
+                        as it did previously.
 
     Writes to InvestmentState:
       - technical    -> dict representation of TechnicalAnalysis
@@ -720,6 +740,7 @@ def run_technical_analysis(state: dict[str, Any]) -> dict[str, Any]:
     analysis_id: str = state.get("job_id", "unknown")
     company_name: str = state.get("company_name", "Unknown Company")
     ticker: str = state.get("ticker", "")
+    period: str = state.get("period") or "1y"
 
     if not ticker:
         logger.error("run_technical_analysis called with empty ticker")
@@ -739,6 +760,7 @@ def run_technical_analysis(state: dict[str, Any]) -> dict[str, Any]:
             analysis_id=analysis_id,
             company_name=company_name,
             ticker=ticker,
+            period=period,
         )
     except Exception as exc:
         logger.exception("Unhandled error in technical analyst node: ticker=%s", ticker)

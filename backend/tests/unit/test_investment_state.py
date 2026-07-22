@@ -178,6 +178,23 @@ class TestMakeInitialState:
         state = _make_state()
         assert isinstance(state, dict)
 
+    def test_period_defaults_to_1y(self) -> None:
+        """T-085: analysis horizon defaults to '1y' when unset."""
+        state = _make_state()
+        assert state["period"] == "1y"
+
+    def test_period_custom(self) -> None:
+        """T-085: an explicit period overrides the '1y' default."""
+        state = make_initial_state(
+            job_id=_JOB_ID,
+            company_name=_COMPANY,
+            ticker=_TICKER,
+            exchange=_EXCHANGE,
+            raw_query=_RAW_QUERY,
+            period="3y",
+        )
+        assert state["period"] == "3y"
+
 
 # ---------------------------------------------------------------------------
 # 2. Optional fields -- absent by default, settable when provided
@@ -328,6 +345,12 @@ class TestJsonRoundTrip:
         state["langsmith_run_ids"] = {"fundamental_analyst": "ls-run-abc123"}
         recovered = _round_trip(state)
         assert recovered["langsmith_run_ids"]["fundamental_analyst"] == "ls-run-abc123"
+
+    def test_round_trip_preserves_period(self) -> None:
+        """T-085: analysis horizon survives the JSON round-trip."""
+        state = _make_state(period="10y")
+        recovered = _round_trip(state)
+        assert recovered["period"] == "10y"
 
     def test_round_trip_with_none_optional(self) -> None:
         state = _make_state()

@@ -22,6 +22,7 @@
 // docstring makes for its duplicated ticker-override table.
 
 import { env } from "@/config/env";
+import { DEFAULT_ANALYSIS_HORIZON, type AnalysisHorizon } from "@/lib/validation/analysisSchemas";
 import {
   type AnalysisChartDataResponse,
   type AnalysisStartResponse,
@@ -124,6 +125,15 @@ export interface StartAnalysisParams {
   /** Yahoo Finance ticker override, e.g. 'TCS.NS'. See AnalysisStartRequest's docstring. */
   ticker: string;
   exchange: string;
+  /**
+   * Analysis horizon for the Technical Analyst agent's OHLCV fetch
+   * (T-085) -- one of src/lib/validation/analysisSchemas.ts's
+   * ANALYSIS_HORIZONS. Defaults to "1y" (backend.models.schemas.
+   * DEFAULT_ANALYSIS_PERIOD) when omitted, matching the backend's own
+   * default so a caller that doesn't pass this gets the exact
+   * behaviour it had before T-085.
+   */
+  period?: AnalysisHorizon;
 }
 
 /**
@@ -140,6 +150,7 @@ export async function startAnalysis({
   companyName,
   ticker,
   exchange,
+  period = DEFAULT_ANALYSIS_HORIZON,
 }: StartAnalysisParams): Promise<AnalysisStartResponse> {
   const response = await fetch(`${env.apiBaseUrl}/analysis/start`, {
     method: "POST",
@@ -147,7 +158,7 @@ export async function startAnalysis({
       "Content-Type": "application/json",
       Authorization: `Bearer ${accessToken}`,
     },
-    body: JSON.stringify({ company_name: companyName, ticker, exchange }),
+    body: JSON.stringify({ company_name: companyName, ticker, exchange, period }),
   });
 
   if (!response.ok) {

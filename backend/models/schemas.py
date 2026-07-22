@@ -146,6 +146,21 @@ class TokenPayload(BaseModel):
 #: Exchanges AIRP currently supports -- mirrors backend.models.orm.ExchangeEnum.
 _VALID_EXCHANGES = frozenset({"NSE", "BSE"})
 
+#: Analysis horizons AIRP currently supports -- mirrors
+#: backend.tools.stock_price.VALID_PERIODS (T-085). Duplicated here
+#: rather than imported: this schemas module is the API-contract layer
+#: (validated at the HTTP boundary) and backend.tools.stock_price is a
+#: LangChain tool module several layers deeper in the agent stack --
+#: the same "small lookup table duplicated across layers so each stays
+#: independently readable" tradeoff backend.services.analysis's
+#: docstring already makes for its own ticker-override table.
+_VALID_ANALYSIS_PERIODS = frozenset({"1mo", "3mo", "6mo", "1y", "3y", "5y", "10y"})
+
+#: Default analysis horizon when the caller omits ``period`` entirely --
+#: keeps existing callers (and every AnalysisStartRequest built before
+#: T-085) working unchanged.
+DEFAULT_ANALYSIS_PERIOD = "1y"
+
 
 class AnalysisStartRequest(BaseModel):
     """
@@ -158,7 +173,10 @@ class AnalysisStartRequest(BaseModel):
     backend.agents.valuation_agent._ticker_to_slug. ``ticker`` and
     ``exchange`` are optional overrides for callers (e.g. a future
     autocomplete-driven frontend) that already know the exact Yahoo
-    Finance symbol and want to skip resolution entirely.
+    Finance symbol and want to skip resolution entirely. ``period``
+    (T-085) selects the analysis horizon the Technical Analyst agent
+    fetches OHLCV data for; it defaults to '1y' when omitted so existing
+    callers built before T-085 are unaffected.
     """
 
     company_name: str = Field(
@@ -178,6 +196,14 @@ class AnalysisStartRequest(BaseModel):
     exchange: Optional[str] = Field(
         default=None,
         description="Optional exchange override: 'NSE' or 'BSE'.",
+    )
+    period: str = Field(
+        default=DEFAULT_ANALYSIS_PERIOD,
+        description=(
+            "Analysis horizon for the Technical Analyst agent's OHLCV "
+            "fetch. One of '1mo', '3mo', '6mo', '1y' (default), '3y', "
+            "'5y', '10y'."
+        ),
     )
 
     @field_validator("company_name")
@@ -208,6 +234,18 @@ class AnalysisStartRequest(BaseModel):
         if normalized not in _VALID_EXCHANGES:
             raise ValueError(
                 f"exchange must be one of {sorted(_VALID_EXCHANGES)}, " f"got '{value}'"
+            )
+        return normalized
+
+    @field_validator("period")
+    @classmethod
+    def _validate_period(cls, value: str) -> str:
+        """Reject an analysis horizon outside the supported set (T-085)."""
+        normalized = value.strip().lower()
+        if normalized not in _VALID_ANALYSIS_PERIODS:
+            raise ValueError(
+                f"period must be one of {sorted(_VALID_ANALYSIS_PERIODS)}, "
+                f"got '{value}'"
             )
         return normalized
 
