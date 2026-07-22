@@ -27,6 +27,7 @@ import { useNavigate } from "react-router-dom";
 
 import { AnalysisApiError, startAnalysis, uploadDocument } from "@/api/analysis";
 import { CompanyAutocomplete } from "@/components/analysis/CompanyAutocomplete";
+import { HorizonSelect } from "@/components/analysis/HorizonSelect";
 import { PdfUploadField } from "@/components/analysis/PdfUploadField";
 import { Button } from "@/components/ui";
 import { NSE_TOP_50 } from "@/data/nseTop50";
@@ -34,6 +35,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { toast } from "@/lib/toast";
 import {
   analysisInputSchema,
+  DEFAULT_ANALYSIS_HORIZON,
   isPdfFile,
   isPdfWithinSizeLimit,
   type AnalysisInputFormValues,
@@ -48,11 +50,12 @@ export function AnalysisPage(): JSX.Element {
 
   const {
     control,
+    register,
     handleSubmit,
     formState: { errors, isSubmitting },
   } = useForm<AnalysisInputFormValues>({
     resolver: zodResolver(analysisInputSchema),
-    defaultValues: { companyTicker: "" },
+    defaultValues: { companyTicker: "", horizon: DEFAULT_ANALYSIS_HORIZON },
   });
 
   function handlePdfChange(selected: File | null): void {
@@ -107,6 +110,7 @@ export function AnalysisPage(): JSX.Element {
         companyName: company.name,
         ticker: company.ticker,
         exchange: company.exchange,
+        period: values.horizon,
       });
       navigate(`/analysis/${started.job_id}/result`, { replace: true });
     } catch (error) {
@@ -153,6 +157,12 @@ export function AnalysisPage(): JSX.Element {
               />
             );
           }}
+        />
+
+        <HorizonSelect
+          label="Analysis horizon"
+          hint="How far back the Technical Analyst looks at price history."
+          {...register("horizon")}
         />
 
         <PdfUploadField

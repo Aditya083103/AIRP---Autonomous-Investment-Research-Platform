@@ -321,6 +321,33 @@ class TestRunAnalysisPipelineSuccess:
             assert called_state["job_id"] == str(job_id)
             assert called_state["ticker"] == "TCS.NS"
             assert called_state["company_name"] == "Tata Consultancy Services"
+            # T-085: period defaults to "1y" when the caller omits it.
+            assert called_state["period"] == "1y"
+            mock_svc_cls.return_value.mark_failed.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_explicit_period_threads_into_initial_state(self) -> None:
+        """T-085: an explicit period is forwarded into InvestmentState."""
+        job_id = uuid.uuid4()
+        with (
+            patch("backend.services.analysis._invoke_graph_sync") as mock_invoke,
+            patch(
+                "backend.services.state_persistence.StatePersistenceService"
+            ) as mock_svc_cls,
+        ):
+            mock_invoke.return_value = {"status": "completed"}
+
+            await run_analysis_pipeline(
+                job_id=job_id,
+                company_name="Tata Consultancy Services",
+                ticker="TCS.NS",
+                exchange="NSE",
+                requested_by="user-123",
+                period="6mo",
+            )
+
+            called_state = mock_invoke.call_args.args[0]
+            assert called_state["period"] == "6mo"
             mock_svc_cls.return_value.mark_failed.assert_not_called()
 
 

@@ -5,7 +5,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  ANALYSIS_HORIZONS,
   analysisInputSchema,
+  DEFAULT_ANALYSIS_HORIZON,
   isPdfFile,
   isPdfWithinSizeLimit,
   MAX_PDF_UPLOAD_BYTES,
@@ -27,6 +29,35 @@ describe("analysisInputSchema", () => {
 
   it("rejects a missing companyTicker field", () => {
     const result = analysisInputSchema.safeParse({});
+    expect(result.success).toBe(false);
+  });
+});
+
+// T-085 -- Analysis Horizon selector
+describe("analysisInputSchema horizon field", () => {
+  it("defaults horizon to '1y' when omitted", () => {
+    const result = analysisInputSchema.safeParse({ companyTicker: "INFY.NS" });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.horizon).toBe(DEFAULT_ANALYSIS_HORIZON);
+    }
+  });
+
+  it("accepts every supported horizon", () => {
+    for (const horizon of ANALYSIS_HORIZONS) {
+      const result = analysisInputSchema.safeParse({ companyTicker: "INFY.NS", horizon });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.horizon).toBe(horizon);
+      }
+    }
+  });
+
+  it("rejects an unsupported horizon", () => {
+    const result = analysisInputSchema.safeParse({
+      companyTicker: "INFY.NS",
+      horizon: "15y",
+    });
     expect(result.success).toBe(false);
   });
 });

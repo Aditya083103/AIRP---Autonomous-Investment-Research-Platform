@@ -680,7 +680,40 @@ class TestRunTechnicalAnalysisCore:
         ):
             mock_sp.invoke.return_value = _PRICE_DATA_GOOD
             _run_technical_analysis_core("x", "TCS", "TCS.NS")
+            # Default period remains "1y" when not passed explicitly
+            # (T-085 acceptance criterion).
             mock_sp.invoke.assert_called_once_with({"ticker": "TCS.NS", "period": "1y"})
+
+    def test_tool_called_with_explicit_period(self) -> None:
+        """T-085: an explicit period overrides the "1y" default."""
+        mock_llm = _mock_llm()
+        with (
+            patch("backend.agents.technical_analyst.fetch_stock_price") as mock_sp,
+            patch(
+                "backend.agents.technical_analyst.get_llm",
+                return_value=mock_llm,
+            ),
+        ):
+            mock_sp.invoke.return_value = _PRICE_DATA_GOOD
+            _run_technical_analysis_core("x", "TCS", "TCS.NS", period="5y")
+            mock_sp.invoke.assert_called_once_with({"ticker": "TCS.NS", "period": "5y"})
+
+    def test_tool_called_with_each_supported_period(self) -> None:
+        """T-085: every period in the extended PERIOD_MAP threads through."""
+        for period in ("1mo", "3mo", "6mo", "1y", "3y", "5y", "10y"):
+            mock_llm = _mock_llm()
+            with (
+                patch("backend.agents.technical_analyst.fetch_stock_price") as mock_sp,
+                patch(
+                    "backend.agents.technical_analyst.get_llm",
+                    return_value=mock_llm,
+                ),
+            ):
+                mock_sp.invoke.return_value = {**_PRICE_DATA_GOOD, "period": period}
+                _run_technical_analysis_core("x", "TCS", "TCS.NS", period=period)
+                mock_sp.invoke.assert_called_once_with(
+                    {"ticker": "TCS.NS", "period": period}
+                )
 
     def test_price_data_error_returns_model_with_error(self) -> None:
         result = self._run(
@@ -807,6 +840,37 @@ class TestRunTechnicalAnalysisNode:
         result = self._invoke(_STATE_TCS)
         strength = result["technical"]["signal_strength"]
         assert 1 <= strength <= 10
+
+    def test_defaults_to_1y_when_period_absent_from_state(self) -> None:
+        """T-085: state built before the period field (or omitting it)
+        still fetches the historical "1y" default -- no crash, no
+        KeyError."""
+        mock_llm = _mock_llm()
+        with (
+            patch("backend.agents.technical_analyst.fetch_stock_price") as mock_sp,
+            patch(
+                "backend.agents.technical_analyst.get_llm",
+                return_value=mock_llm,
+            ),
+        ):
+            mock_sp.invoke.return_value = _PRICE_DATA_GOOD
+            run_technical_analysis(_STATE_TCS)
+            mock_sp.invoke.assert_called_once_with({"ticker": "TCS.NS", "period": "1y"})
+
+    def test_reads_period_from_state(self) -> None:
+        """T-085: an explicit state['period'] is forwarded to fetch_stock_price."""
+        state = {**_STATE_TCS, "period": "3y"}
+        mock_llm = _mock_llm()
+        with (
+            patch("backend.agents.technical_analyst.fetch_stock_price") as mock_sp,
+            patch(
+                "backend.agents.technical_analyst.get_llm",
+                return_value=mock_llm,
+            ),
+        ):
+            mock_sp.invoke.return_value = {**_PRICE_DATA_GOOD, "period": "3y"}
+            run_technical_analysis(state)
+            mock_sp.invoke.assert_called_once_with({"ticker": "TCS.NS", "period": "3y"})
 
 
 # ---------------------------------------------------------------------------

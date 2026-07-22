@@ -156,6 +156,14 @@ class InvestmentState(TypedDict, total=False):
     #: Raw user input before ticker resolution (e.g. "TCS" or "Tata Consultancy")
     raw_query: str
 
+    #: Analysis horizon for the Technical Analyst agent's OHLCV fetch --
+    #: one of "1mo"/"3mo"/"6mo"/"1y"/"3y"/"5y"/"10y" (T-085). Set by the
+    #: Planner from AnalysisStartRequest.period; defaults to "1y" via
+    #: make_initial_state when the caller omits it, so state built
+    #: before T-085 (or in any test fixture that predates this field)
+    #: still resolves a valid period through state.get("period", "1y").
+    period: str
+
     #: UTC ISO timestamp when the analysis was triggered
     requested_at: str
 
@@ -301,6 +309,7 @@ def make_initial_state(
     isin: Optional[str] = None,
     sector: Optional[str] = None,
     industry: Optional[str] = None,
+    period: str = "1y",
 ) -> InvestmentState:
     """
     Create a minimal valid InvestmentState for a new analysis job.
@@ -319,6 +328,12 @@ def make_initial_state(
         isin:          Optional ISIN code.
         sector:        Optional sector string.
         industry:      Optional industry string.
+        period:        Analysis horizon for the Technical Analyst agent's
+                        OHLCV fetch -- one of "1mo"/"3mo"/"6mo"/"1y"/"3y"/
+                        "5y"/"10y" (T-085). Defaults to "1y", matching
+                        backend.models.schemas.DEFAULT_ANALYSIS_PERIOD, so
+                        every caller that predates T-085 keeps the exact
+                        1-year behaviour it already had.
 
     Returns:
         A partially-populated InvestmentState dict ready for the Planner
@@ -335,6 +350,8 @@ def make_initial_state(
         "raw_query": raw_query,
         "requested_at": now_iso,
         "requested_by": requested_by,
+        # Analysis horizon (T-085)
+        "period": period,
         # Schema version
         "version": 1,
         # Pipeline status
