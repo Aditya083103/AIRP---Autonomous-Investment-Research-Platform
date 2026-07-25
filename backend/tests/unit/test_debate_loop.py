@@ -813,7 +813,19 @@ class TestDebateLoopTiming:
     #: <3min budget is dominated by LLM latency, which is mocked out here.
     #: This test instead guards against accidental quadratic blow-ups or
     #: synchronous sleeps being introduced into the loop machinery.
-    _TIMEOUT_S: float = 10.0
+    #:
+    #: Raised from 10.0 -> 60.0 (still well under the 180s real-world
+    #: budget, and two orders of magnitude above the sub-second runtime
+    #: this fully-mocked pipeline actually needs) after this test flaked
+    #: at 11.36s on a loaded CI machine with zero code changes to the
+    #: debate loop itself -- the original 10.0s bound left effectively no
+    #: margin for legitimate system load variance (antivirus scanning,
+    #: other tests' CPU/disk contention, etc. inside a 2900+ test run),
+    #: which is exactly the kind of flake this constant should not
+    #: produce. A genuine quadratic blow-up or reintroduced synchronous
+    #: sleep in the loop machinery would still overshoot 60.0s by a wide
+    #: margin, so the regression-guard intent is unchanged.
+    _TIMEOUT_S: float = 60.0
 
     def test_two_rounds_complete_within_budget(self) -> None:
         runner = TestMultiRoundIntegration()
