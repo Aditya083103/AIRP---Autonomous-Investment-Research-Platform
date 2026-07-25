@@ -19,8 +19,10 @@ import { forwardRef, useId, type ComponentPropsWithoutRef } from "react";
 import { cn } from "@/lib/cn";
 import { ANALYSIS_HORIZONS, ANALYSIS_HORIZON_LABELS } from "@/lib/validation/analysisSchemas";
 
-export interface HorizonSelectProps
-  extends Omit<ComponentPropsWithoutRef<"select">, "size" | "children"> {
+export interface HorizonSelectProps extends Omit<
+  ComponentPropsWithoutRef<"select">,
+  "size" | "children"
+> {
   /** Visible label above the field. Required -- every field must be labelled. */
   label: string;
   /** Helper text shown below the field. */
