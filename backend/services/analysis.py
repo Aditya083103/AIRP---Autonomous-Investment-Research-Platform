@@ -48,7 +48,12 @@ What this module does
    analysis row is marked status='failed' with the error message --
    the background task itself never raises back into FastAPI's
    BackgroundTasks runner, since an unhandled exception there is only
-   logged, not surfaced to any caller.
+   logged, not surfaced to any caller. (T-088) On the success path,
+   once the final state reports status='completed', this also makes a
+   best-effort call into
+   backend.services.accuracy_tracker.record_pending_evaluations via the
+   private ``_record_pending_evaluations_safely`` helper -- a failure
+   there is logged and swallowed, never turned into a failed analysis.
 5. ``compute_progress`` -- pure function: given ``last_completed_node``
    (the column backend.services.state_persistence.StatePersistenceService
    writes after every node, T-033) and the row's ``status``, derives
@@ -440,6 +445,53 @@ def _invoke_graph_sync(state: InvestmentState) -> InvestmentState:
     return cast(InvestmentState, result)
 
 
+async def _record_pending_evaluations_safely(
+    job_id: uuid.UUID,
+    final_state: InvestmentState,
+) -> None:
+    """
+    Best-effort call into the Verdict Accuracy Tracker (T-088) after a
+    successful pipeline run.
+
+    Mirrors the "never raise" contract run_analysis_pipeline itself
+    follows: a failure to record the pending evaluation row (a bad
+    decision shape, a DB error, a duplicate insert already handled
+    inside record_pending_evaluations itself) must never turn an
+    otherwise-successful analysis into a failed one from the caller's
+    point of view -- the accuracy tracker is a downstream enrichment,
+    not a correctness requirement of the core pipeline.
+
+    Imports backend.services.accuracy_tracker and
+    backend.db.session.AsyncSessionLocal lazily, inside this function,
+    for the same reason run_analysis_pipeline already imports
+    StatePersistenceService lazily -- keeps this module's import-time
+    surface narrow for tests that never exercise the background-task
+    path.
+
+    Args:
+        job_id:      UUID of the analyses row this run belongs to.
+        final_state: The final InvestmentState returned by
+                     _invoke_graph_sync once the graph reaches END.
+    """
+    from backend.db.session import AsyncSessionLocal
+    from backend.services.accuracy_tracker import record_pending_evaluations
+
+    try:
+        async with AsyncSessionLocal() as session:
+            await record_pending_evaluations(
+                session=session,
+                job_id=str(job_id),
+                state=final_state,
+            )
+    except Exception as exc:
+        logger.error(
+            "run_analysis_pipeline: record_pending_evaluations failed for "
+            "job_id=%s: %s",
+            job_id,
+            exc,
+        )
+
+
 async def run_analysis_pipeline(
     job_id: uuid.UUID,
     company_name: str,
@@ -504,11 +556,13 @@ async def run_analysis_pipeline(
     )
 
     try:
-        await asyncio.to_thread(_invoke_graph_sync, initial_state)
+        final_state = await asyncio.to_thread(_invoke_graph_sync, initial_state)
         logger.info(
             "run_analysis_pipeline: pipeline completed job_id=%s",
             job_id,
         )
+        if str(final_state.get("status")) == "completed":
+            await _record_pending_evaluations_safely(job_id, final_state)
     except Exception as exc:
         logger.error(
             "run_analysis_pipeline: pipeline failed job_id=%s: %s",
