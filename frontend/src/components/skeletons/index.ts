@@ -1,6 +1,11 @@
 // frontend/src/components/skeletons/index.ts
-// Barrel export for the T-066 skeleton loading-state components.
+// Barrel export for the T-066 skeleton loading-state components, plus
+// the T-092 accuracy panel skeleton.
 
+export {
+  AccuracyPanelSkeleton,
+  type AccuracyPanelSkeletonProps,
+} from "@/components/skeletons/AccuracyPanelSkeleton";
 export {
   ChartsPanelSkeleton,
   type ChartsPanelSkeletonProps,
