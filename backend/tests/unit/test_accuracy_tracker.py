@@ -1,6 +1,6 @@
 # backend/tests/unit/test_accuracy_tracker.py
 """
-Unit tests for T-088: backend/services/accuracy_tracker.py
+Unit tests for T-088 / T-089: backend/services/accuracy_tracker.py
 
 Test strategy
 -------------
@@ -33,29 +33,71 @@ Test strategy
      DB error on commit (e.g. the expected duplicate-insert case via the
                    T-087 unique constraint) -- rollback is awaited, returns
                    None, does not raise
+3. score_directional_correctness() (T-089) -- the +-5% dead-zone rule
+     BUY:  a fall of exactly -5%   -- wrong
+           a fall just short of -5%, e.g. -4.99% -- correct
+           flat (0%)               -- correct
+           a large rise            -- correct
+     SELL: a rise of exactly +5%   -- wrong
+           a rise just short of +5%, e.g. +4.99% -- correct
+           flat (0%)               -- correct
+           a large fall            -- correct
+     HOLD: a rise of exactly +5%   -- wrong
+           a fall of exactly -5%   -- wrong
+           just inside the dead zone on either side -- correct
+           flat (0%)               -- correct
+     unrecognised verdict string   -- scored with the (strictest) HOLD
+                   rule rather than raising
+4. _compute_price_change_pct()
+     rise, fall, flat -- correct percentage, rounded to 4 dp
+     price_at_verdict == 0 -- returns 0.0 rather than raising
+5. run_due_evaluations()
+     no pending rows            -- due=0, evaluated=0, skipped=0
+     pending row not yet due    -- excluded from due_count entirely
+     pending row exactly at its horizon (verdict_date + horizon == now)
+                                 -- counted as due (boundary is inclusive)
+     one due row, happy path    -- price fetched, row's four evaluation
+                   columns set, committed, refreshed, evaluated_count == 1
+     several due rows           -- each is scored independently
+     fetch_stock_price returns an error dict -- row left unevaluated,
+                   counted in skipped_count, no commit for that row
+     commit() raises for one row -- rollback is awaited for that row,
+                   it is skipped, and remaining due rows are still
+                   processed (one bad row never aborts the batch)
+     a row's evaluation raises an unexpected exception -- caught,
+                   logged, skipped -- run_due_evaluations itself never
+                   raises
+     load-pending-rows query itself raises -- returns an all-zero
+                   EvaluationBatchResult rather than raising
 
 All database interactions use a mocked AsyncSession (AsyncMock) --  no
 real PostgreSQL connection, matching the existing
-test_state_persistence.py / test_analysis_service.py pattern.
+test_state_persistence.py / test_analysis_service.py pattern. All
+fetch_stock_price calls are mocked -- no real yFinance/network access.
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 import uuid
 
 import pytest
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from backend.graph.state import InvestmentState, make_initial_state
 from backend.models.orm import VerdictOutcome
 from backend.services.accuracy_tracker import (
+    DEAD_ZONE_PCT,
     DEFAULT_EVALUATION_HORIZON_DAYS,
     HIGH_CONFIDENCE_EVALUATION_HORIZON_DAYS,
+    EvaluationBatchResult,
+    _compute_price_change_pct,
     derive_evaluation_horizon_days,
     record_pending_evaluations,
+    run_due_evaluations,
+    score_directional_correctness,
 )
 
 # ---------------------------------------------------------------------------
@@ -416,3 +458,405 @@ class TestRecordPendingEvaluationsDbErrors:
         # Must complete without raising -- this call itself is the
         # assertion; pytest fails the test if an exception escapes.
         await record_pending_evaluations(session, _JOB_ID, state)
+
+
+# ---------------------------------------------------------------------------
+# score_directional_correctness() -- T-089 dead-zone rule
+# ---------------------------------------------------------------------------
+
+
+class TestScoreDirectionalCorrectnessBuy:
+    def test_fall_of_exactly_dead_zone_is_wrong(self) -> None:
+        assert score_directional_correctness("BUY", -DEAD_ZONE_PCT) is False
+
+    def test_fall_just_short_of_dead_zone_is_correct(self) -> None:
+        assert score_directional_correctness("BUY", -4.99) is True
+
+    def test_large_fall_is_wrong(self) -> None:
+        assert score_directional_correctness("BUY", -20.0) is False
+
+    def test_flat_is_correct(self) -> None:
+        assert score_directional_correctness("BUY", 0.0) is True
+
+    def test_large_rise_is_correct(self) -> None:
+        assert score_directional_correctness("BUY", 25.0) is True
+
+    def test_rise_of_exactly_dead_zone_is_correct(self) -> None:
+        # The dead zone only ever penalises a BUY for falling -- a rise,
+        # however large, is never a miss for a BUY verdict.
+        assert score_directional_correctness("BUY", DEAD_ZONE_PCT) is True
+
+
+class TestScoreDirectionalCorrectnessSell:
+    def test_rise_of_exactly_dead_zone_is_wrong(self) -> None:
+        assert score_directional_correctness("SELL", DEAD_ZONE_PCT) is False
+
+    def test_rise_just_short_of_dead_zone_is_correct(self) -> None:
+        assert score_directional_correctness("SELL", 4.99) is True
+
+    def test_large_rise_is_wrong(self) -> None:
+        assert score_directional_correctness("SELL", 20.0) is False
+
+    def test_flat_is_correct(self) -> None:
+        assert score_directional_correctness("SELL", 0.0) is True
+
+    def test_large_fall_is_correct(self) -> None:
+        assert score_directional_correctness("SELL", -25.0) is True
+
+    def test_fall_of_exactly_dead_zone_is_correct(self) -> None:
+        # The dead zone only ever penalises a SELL for rising -- a fall,
+        # however large, is never a miss for a SELL verdict.
+        assert score_directional_correctness("SELL", -DEAD_ZONE_PCT) is True
+
+
+class TestScoreDirectionalCorrectnessHold:
+    def test_rise_of_exactly_dead_zone_is_wrong(self) -> None:
+        assert score_directional_correctness("HOLD", DEAD_ZONE_PCT) is False
+
+    def test_fall_of_exactly_dead_zone_is_wrong(self) -> None:
+        assert score_directional_correctness("HOLD", -DEAD_ZONE_PCT) is False
+
+    def test_just_inside_dead_zone_on_upside_is_correct(self) -> None:
+        assert score_directional_correctness("HOLD", 4.99) is True
+
+    def test_just_inside_dead_zone_on_downside_is_correct(self) -> None:
+        assert score_directional_correctness("HOLD", -4.99) is True
+
+    def test_flat_is_correct(self) -> None:
+        assert score_directional_correctness("HOLD", 0.0) is True
+
+    def test_large_rise_is_wrong(self) -> None:
+        assert score_directional_correctness("HOLD", 30.0) is False
+
+    def test_large_fall_is_wrong(self) -> None:
+        assert score_directional_correctness("HOLD", -30.0) is False
+
+
+class TestScoreDirectionalCorrectnessUnrecognisedVerdict:
+    def test_unrecognised_verdict_uses_hold_rule_not_raise(self) -> None:
+        # Should never happen in practice (DB-enum-constrained), but the
+        # function must degrade to the strictest (HOLD) rule rather than
+        # raising on unexpected input.
+        assert score_directional_correctness("MAYBE", 0.0) is True
+        assert score_directional_correctness("MAYBE", 10.0) is False
+        assert score_directional_correctness("MAYBE", -10.0) is False
+
+
+# ---------------------------------------------------------------------------
+# _compute_price_change_pct() -- T-089
+# ---------------------------------------------------------------------------
+
+
+class TestComputePriceChangePct:
+    def test_rise(self) -> None:
+        pct = _compute_price_change_pct(100.0, 110.0)
+        assert pct == 10.0
+
+    def test_fall(self) -> None:
+        pct = _compute_price_change_pct(100.0, 90.0)
+        assert pct == -10.0
+
+    def test_flat(self) -> None:
+        pct = _compute_price_change_pct(100.0, 100.0)
+        assert pct == 0.0
+
+    def test_rounds_to_four_decimal_places(self) -> None:
+        pct = _compute_price_change_pct(3.0, 4.0)
+        # (4 - 3) / 3 * 100 = 33.333333...
+        assert pct == 33.3333
+
+    def test_zero_price_at_verdict_returns_zero_without_raising(self) -> None:
+        pct = _compute_price_change_pct(0.0, 100.0)
+        assert pct == 0.0
+
+
+# ---------------------------------------------------------------------------
+# run_due_evaluations() -- T-089
+# ---------------------------------------------------------------------------
+
+
+def _make_outcome_row(
+    *,
+    verdict_date: datetime,
+    evaluation_horizon_days: int = 90,
+    verdict: str = "BUY",
+    ticker: str = "TCS.NS",
+    price_at_verdict: float = 3000.0,
+    evaluated_at: Any = None,
+) -> VerdictOutcome:
+    return VerdictOutcome(
+        id=uuid.uuid4(),
+        analysis_id=uuid.uuid4(),
+        ticker=ticker,
+        verdict=verdict,
+        conviction_score=7,
+        price_at_verdict=price_at_verdict,
+        verdict_date=verdict_date,
+        evaluation_horizon_days=evaluation_horizon_days,
+        evaluated_at=evaluated_at,
+    )
+
+
+def _make_select_session(rows: list[VerdictOutcome]) -> AsyncMock:
+    """AsyncSession whose execute(select(...)) returns the given rows."""
+    session = AsyncMock()
+    mock_result = MagicMock()
+    mock_result.scalars.return_value.all = MagicMock(return_value=rows)
+    session.execute = AsyncMock(return_value=mock_result)
+    session.commit = AsyncMock()
+    session.rollback = AsyncMock()
+    session.refresh = AsyncMock()
+    return session
+
+
+def _mock_price_success(current_price: float) -> dict[str, Any]:
+    return {
+        "ticker": "TCS.NS",
+        "stats": {"current_price": current_price},
+    }
+
+
+def _mock_price_error(message: str = "ticker not found") -> dict[str, Any]:
+    return {"error": "ticker_not_found", "ticker": "TCS.NS", "message": message}
+
+
+_NOW = datetime(2026, 8, 1, 12, 0, 0, tzinfo=timezone.utc)
+
+
+class TestRunDueEvaluationsNoPendingRows:
+    @pytest.mark.asyncio
+    async def test_returns_all_zero_result(self) -> None:
+        session = _make_select_session([])
+
+        result = await run_due_evaluations(session, now=_NOW)
+
+        assert result == EvaluationBatchResult(
+            due_count=0, evaluated_count=0, skipped_count=0
+        )
+
+
+class TestRunDueEvaluationsDueFiltering:
+    @pytest.mark.asyncio
+    async def test_row_not_yet_due_is_excluded(self) -> None:
+        row = _make_outcome_row(
+            verdict_date=_NOW - timedelta(days=30),
+            evaluation_horizon_days=90,
+        )
+        session = _make_select_session([row])
+
+        result = await run_due_evaluations(session, now=_NOW)
+
+        assert result.due_count == 0
+        assert result.evaluated_count == 0
+        session.commit.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_row_exactly_at_horizon_is_due(self) -> None:
+        # verdict_date + 90 days == _NOW exactly -- boundary is inclusive.
+        row = _make_outcome_row(
+            verdict_date=_NOW - timedelta(days=90),
+            evaluation_horizon_days=90,
+        )
+        session = _make_select_session([row])
+
+        with patch("backend.services.accuracy_tracker.fetch_stock_price") as mock_fetch:
+            mock_fetch.invoke = MagicMock(return_value=_mock_price_success(3300.0))
+            result = await run_due_evaluations(session, now=_NOW)
+
+        assert result.due_count == 1
+        assert result.evaluated_count == 1
+
+    @pytest.mark.asyncio
+    async def test_row_past_its_horizon_is_due(self) -> None:
+        row = _make_outcome_row(
+            verdict_date=_NOW - timedelta(days=200),
+            evaluation_horizon_days=90,
+        )
+        session = _make_select_session([row])
+
+        with patch("backend.services.accuracy_tracker.fetch_stock_price") as mock_fetch:
+            mock_fetch.invoke = MagicMock(return_value=_mock_price_success(3300.0))
+            result = await run_due_evaluations(session, now=_NOW)
+
+        assert result.due_count == 1
+        assert result.evaluated_count == 1
+
+    @pytest.mark.asyncio
+    async def test_naive_verdict_date_treated_as_utc(self) -> None:
+        # A row built without tzinfo (e.g. a test fixture, or a future
+        # caller) must not crash the datetime comparison.
+        naive_date = (_NOW - timedelta(days=100)).replace(tzinfo=None)
+        row = _make_outcome_row(
+            verdict_date=naive_date,
+            evaluation_horizon_days=90,
+        )
+        session = _make_select_session([row])
+
+        with patch("backend.services.accuracy_tracker.fetch_stock_price") as mock_fetch:
+            mock_fetch.invoke = MagicMock(return_value=_mock_price_success(3300.0))
+            result = await run_due_evaluations(session, now=_NOW)
+
+        assert result.due_count == 1
+        assert result.evaluated_count == 1
+
+
+class TestRunDueEvaluationsHappyPath:
+    @pytest.mark.asyncio
+    async def test_scores_and_commits_one_due_row(self) -> None:
+        row = _make_outcome_row(
+            verdict_date=_NOW - timedelta(days=100),
+            evaluation_horizon_days=90,
+            verdict="BUY",
+            price_at_verdict=3000.0,
+        )
+        session = _make_select_session([row])
+
+        with patch("backend.services.accuracy_tracker.fetch_stock_price") as mock_fetch:
+            mock_fetch.invoke = MagicMock(return_value=_mock_price_success(3300.0))
+            result = await run_due_evaluations(session, now=_NOW)
+
+        assert result == EvaluationBatchResult(
+            due_count=1, evaluated_count=1, skipped_count=0
+        )
+        assert row.price_at_evaluation == 3300.0
+        assert row.price_change_pct == 10.0
+        assert row.directional_correct is True
+        assert row.evaluated_at == _NOW
+        session.commit.assert_awaited_once()
+        session.refresh.assert_awaited_once_with(row)
+
+    @pytest.mark.asyncio
+    async def test_scores_multiple_due_rows_independently(self) -> None:
+        buy_row = _make_outcome_row(
+            verdict_date=_NOW - timedelta(days=100),
+            verdict="BUY",
+            price_at_verdict=1000.0,
+            ticker="TCS.NS",
+        )
+        sell_row = _make_outcome_row(
+            verdict_date=_NOW - timedelta(days=100),
+            verdict="SELL",
+            price_at_verdict=2000.0,
+            ticker="INFY.NS",
+        )
+        session = _make_select_session([buy_row, sell_row])
+
+        prices = {"TCS.NS": 1200.0, "INFY.NS": 2300.0}
+
+        def _invoke(payload: dict[str, Any]) -> dict[str, Any]:
+            return _mock_price_success(prices[payload["ticker"]])
+
+        with patch("backend.services.accuracy_tracker.fetch_stock_price") as mock_fetch:
+            mock_fetch.invoke = MagicMock(side_effect=_invoke)
+            result = await run_due_evaluations(session, now=_NOW)
+
+        assert result.due_count == 2
+        assert result.evaluated_count == 2
+        # BUY rose 20% -> correct
+        assert buy_row.directional_correct is True
+        # SELL rose 15% (against the SELL thesis, beyond the dead zone)
+        # -> wrong
+        assert sell_row.directional_correct is False
+
+
+class TestRunDueEvaluationsPriceFetchFailure:
+    @pytest.mark.asyncio
+    async def test_error_dict_leaves_row_unevaluated(self) -> None:
+        row = _make_outcome_row(verdict_date=_NOW - timedelta(days=100))
+        session = _make_select_session([row])
+
+        with patch("backend.services.accuracy_tracker.fetch_stock_price") as mock_fetch:
+            mock_fetch.invoke = MagicMock(return_value=_mock_price_error())
+            result = await run_due_evaluations(session, now=_NOW)
+
+        assert result == EvaluationBatchResult(
+            due_count=1, evaluated_count=0, skipped_count=1
+        )
+        assert row.evaluated_at is None
+        session.commit.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_missing_current_price_in_stats_leaves_row_unevaluated(
+        self,
+    ) -> None:
+        row = _make_outcome_row(verdict_date=_NOW - timedelta(days=100))
+        session = _make_select_session([row])
+
+        with patch("backend.services.accuracy_tracker.fetch_stock_price") as mock_fetch:
+            mock_fetch.invoke = MagicMock(
+                return_value={"ticker": "TCS.NS", "stats": {}}
+            )
+            result = await run_due_evaluations(session, now=_NOW)
+
+        assert result.evaluated_count == 0
+        assert result.skipped_count == 1
+
+
+class TestRunDueEvaluationsDbErrors:
+    @pytest.mark.asyncio
+    async def test_commit_failure_on_one_row_is_skipped_others_continue(
+        self,
+    ) -> None:
+        bad_row = _make_outcome_row(
+            verdict_date=_NOW - timedelta(days=100), ticker="BAD.NS"
+        )
+        good_row = _make_outcome_row(
+            verdict_date=_NOW - timedelta(days=100), ticker="GOOD.NS"
+        )
+        session = _make_select_session([bad_row, good_row])
+        session.commit = AsyncMock(side_effect=[SQLAlchemyError("db exploded"), None])
+
+        with patch("backend.services.accuracy_tracker.fetch_stock_price") as mock_fetch:
+            mock_fetch.invoke = MagicMock(return_value=_mock_price_success(3300.0))
+            result = await run_due_evaluations(session, now=_NOW)
+
+        assert result.due_count == 2
+        assert result.evaluated_count == 1
+        assert result.skipped_count == 1
+        session.rollback.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_unexpected_exception_on_one_row_never_raises(self) -> None:
+        row = _make_outcome_row(verdict_date=_NOW - timedelta(days=100))
+        session = _make_select_session([row])
+
+        with patch("backend.services.accuracy_tracker.fetch_stock_price") as mock_fetch:
+            mock_fetch.invoke = MagicMock(side_effect=RuntimeError("boom"))
+            # Must complete without raising -- this call itself is the
+            # assertion; pytest fails the test if an exception escapes.
+            result = await run_due_evaluations(session, now=_NOW)
+
+        assert result.evaluated_count == 0
+        assert result.skipped_count == 1
+
+    @pytest.mark.asyncio
+    async def test_load_pending_rows_query_failure_returns_zero_result(
+        self,
+    ) -> None:
+        session = AsyncMock()
+        session.execute = AsyncMock(side_effect=SQLAlchemyError("connection lost"))
+
+        result = await run_due_evaluations(session, now=_NOW)
+
+        assert result == EvaluationBatchResult(
+            due_count=0, evaluated_count=0, skipped_count=0
+        )
+
+
+class TestRunDueEvaluationsDefaultNow:
+    @pytest.mark.asyncio
+    async def test_defaults_now_to_current_utc_time_when_omitted(self) -> None:
+        # A row due comfortably in the past should still be picked up
+        # when `now` is not passed explicitly (defaults to datetime.now).
+        row = _make_outcome_row(
+            verdict_date=datetime.now(timezone.utc) - timedelta(days=200),
+            evaluation_horizon_days=90,
+        )
+        session = _make_select_session([row])
+
+        with patch("backend.services.accuracy_tracker.fetch_stock_price") as mock_fetch:
+            mock_fetch.invoke = MagicMock(return_value=_mock_price_success(3300.0))
+            result = await run_due_evaluations(session)
+
+        assert result.due_count == 1
+        assert result.evaluated_count == 1
