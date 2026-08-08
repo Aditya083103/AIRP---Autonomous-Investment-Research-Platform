@@ -88,6 +88,10 @@ describe("AccuracyPanel", () => {
     render(<AccuracyPanel summary={makeSummary()} historyEntries={[]} />);
 
     expect(screen.getByTestId("accuracy-trend-chart")).toBeInTheDocument();
-    expect(screen.getByText(/no verdicts have been scored yet/i)).toBeInTheDocument();
+    // Both the trend chart and the scatter chart fall back to their own
+    // "no verdicts scored yet" message when historyEntries is empty --
+    // getAllByText (not getByText) is correct here since this is
+    // expected to match twice, not a duplicate-content bug.
+    expect(screen.getAllByText(/no verdicts have been scored yet/i).length).toBe(2);
   });
 });
