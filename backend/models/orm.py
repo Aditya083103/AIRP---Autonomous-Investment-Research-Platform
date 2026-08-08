@@ -1,14 +1,16 @@
 # backend/models/orm.py
 """
-AIRP — SQLAlchemy ORM Models (T-016)
+AIRP — SQLAlchemy ORM Models (T-016, T-087)
 
-Defines the five core tables that back the AIRP system:
+Defines the six core tables that back the AIRP system:
 
     users            — Self-hosted auth (T-046); local row per registered user
     companies        — Normalised company/ticker registry (avoid re-resolving)
     analyses         — One row per analysis job; tracks status & timing
     agent_outputs    — One row per agent per analysis; stores raw JSON output
     investment_memos — Final PDF memo and BUY/HOLD/SELL verdict per analysis
+    verdict_outcomes — Verdict Accuracy Tracker (T-087); scores a past verdict
+                       against the real price outcome at a later horizon
 
 Design decisions
 ────────────────
@@ -41,11 +43,13 @@ from typing import Optional
 import uuid
 
 from sqlalchemy import (
+    Boolean,
     DateTime,
     Enum,
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -367,6 +371,11 @@ class Analysis(Base):
         uselist=False,
         cascade="all, delete-orphan",
     )
+    verdict_outcomes: Mapped[list[VerdictOutcome]] = relationship(
+        "VerdictOutcome",
+        back_populates="analysis",
+        cascade="all, delete-orphan",
+    )
 
     __table_args__ = (
         Index("ix_analyses_status", "status"),
@@ -582,4 +591,141 @@ class InvestmentMemo(Base):
             f"<InvestmentMemo analysis={self.analysis_id}"
             f" verdict={self.verdict!r}"
             f" score={self.conviction_score}>"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Table: verdict_outcomes
+# ---------------------------------------------------------------------------
+
+
+class VerdictOutcome(Base):
+    """
+    Verdict Accuracy Tracker row (T-087, Phase 8).
+
+    One row per (analysis, evaluation horizon) pair. Records the verdict
+    that was made — and the price at the moment it was made — so that a
+    later background job can look up the real market price at
+    ``verdict_date + evaluation_horizon_days`` and compute whether the
+    Portfolio Manager's BUY/HOLD/SELL call was directionally correct.
+
+    Rows are written twice in their lifecycle:
+
+    1. **At verdict time** — ``analysis_id``, ``ticker``, ``verdict``,
+       ``conviction_score``, ``price_at_verdict``, ``verdict_date``, and
+       ``evaluation_horizon_days`` are populated; the four "outcome"
+       columns (``price_at_evaluation``, ``price_change_pct``,
+       ``directional_correct``, ``evaluated_at``) are ``NULL``.
+    2. **At evaluation time** — once ``evaluation_horizon_days`` has
+       elapsed, a scheduled job fetches the current price, computes
+       ``price_change_pct``, derives ``directional_correct`` (does the
+       sign of the price move agree with a BUY/SELL verdict; HOLD is
+       scored separately by the evaluation service), and stamps
+       ``evaluated_at``.
+
+    A single analysis can be evaluated at more than one horizon (e.g. 30
+    days and 90 days out) to track short- vs. medium-term accuracy
+    separately, so the natural key is ``(analysis_id,
+    evaluation_horizon_days)`` rather than ``analysis_id`` alone.
+    """
+
+    __tablename__ = "verdict_outcomes"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=func.gen_random_uuid(),
+    )
+    analysis_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("analyses.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+        comment="FK → analyses.id — the analysis this outcome tracks",
+    )
+    ticker: Mapped[str] = mapped_column(
+        String(40),
+        nullable=False,
+        comment="Yahoo Finance ticker at verdict time (e.g. 'TCS.NS')",
+    )
+    verdict: Mapped[str] = mapped_column(
+        VerdictEnum,
+        nullable=False,
+        comment="The BUY/HOLD/SELL verdict being tracked for accuracy",
+    )
+    conviction_score: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        comment="Portfolio Manager confidence 1 (low) – 10 (high) at verdict time",
+    )
+    price_at_verdict: Mapped[float] = mapped_column(
+        Numeric(12, 4, asdecimal=False),
+        nullable=False,
+        comment="Closing price of the ticker on verdict_date",
+    )
+    verdict_date: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        comment="UTC timestamp the verdict was issued (Analysis.completed_at)",
+    )
+    evaluation_horizon_days: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        comment="Days after verdict_date at which accuracy is evaluated (e.g. 30, 90)",
+    )
+    price_at_evaluation: Mapped[Optional[float]] = mapped_column(
+        Numeric(12, 4, asdecimal=False),
+        nullable=True,
+        comment="Closing price at verdict_date + horizon; NULL until evaluated",
+    )
+    price_change_pct: Mapped[Optional[float]] = mapped_column(
+        Numeric(8, 4, asdecimal=False),
+        nullable=True,
+        comment=(
+            "Percent change from price_at_verdict to price_at_evaluation; "
+            "NULL until evaluated"
+        ),
+    )
+    directional_correct: Mapped[Optional[bool]] = mapped_column(
+        Boolean,
+        nullable=True,
+        comment=(
+            "Whether the verdict's implied direction matched the actual "
+            "price move; NULL until evaluated"
+        ),
+    )
+    evaluated_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="UTC timestamp when the outcome evaluation job ran; NULL until run",
+    )
+
+    # Relationships
+    analysis: Mapped[Analysis] = relationship(
+        "Analysis",
+        back_populates="verdict_outcomes",
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "analysis_id",
+            "evaluation_horizon_days",
+            name="uq_verdict_outcomes_analysis_horizon",
+        ),
+        Index("ix_verdict_outcomes_ticker", "ticker"),
+        Index("ix_verdict_outcomes_verdict_date", "verdict_date"),
+        {
+            "comment": (
+                "Verdict Accuracy Tracker — scores past verdicts against "
+                "real price outcomes at one or more evaluation horizons"
+            )
+        },
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<VerdictOutcome analysis={self.analysis_id}"
+            f" ticker={self.ticker!r}"
+            f" verdict={self.verdict!r}"
+            f" horizon={self.evaluation_horizon_days}d>"
         )

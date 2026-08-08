@@ -116,19 +116,22 @@ class TestModelsImport:
 
 
 class TestMetadataTables:
-    def test_all_five_tables_in_metadata(self) -> None:
+    def test_all_six_tables_in_metadata(self) -> None:
+        # verdict_outcomes added in T-087 (Phase 8, Verdict Accuracy Tracker);
+        # see test_verdict_outcomes.py for dedicated coverage of that table.
         expected = {
             "users",
             "companies",
             "analyses",
             "agent_outputs",
             "investment_memos",
+            "verdict_outcomes",
         }
         actual = set(Base.metadata.tables.keys())
         assert expected == actual
 
     def test_no_extra_tables(self) -> None:
-        assert len(Base.metadata.tables) == 5
+        assert len(Base.metadata.tables) == 6
 
 
 # ---------------------------------------------------------------------------

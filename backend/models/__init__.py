@@ -13,6 +13,7 @@ from backend.models.orm import (
     Company,
     InvestmentMemo,
     User,
+    VerdictOutcome,
 )
 
 __all__ = [
@@ -22,4 +23,5 @@ __all__ = [
     "Analysis",
     "AgentOutput",
     "InvestmentMemo",
+    "VerdictOutcome",
 ]
