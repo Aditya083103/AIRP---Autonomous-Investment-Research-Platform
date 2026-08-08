@@ -1,6 +1,13 @@
 # AIRP — Autonomous Investment Research Platform
 
 [![CI](https://github.com/Aditya083103/AIRP---Autonomous-Investment-Research-Platform/actions/workflows/ci.yml/badge.svg)](https://github.com/Aditya083103/AIRP---Autonomous-Investment-Research-Platform/actions/workflows/ci.yml)
+[![Verdict Accuracy](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fairp-api.onrender.com%2Fapi%2Fv1%2Faccuracy%2Fsummary&query=%24.overall_accuracy_pct&suffix=%25&label=verdict%20accuracy&color=blue)](https://airp.vercel.app/accuracy)
+
+<!-- The accuracy badge and its link point at the eventual production URLs
+     (airp-api.onrender.com / airp.vercel.app, per .env.example). They start
+     resolving live once Phase 12 deploys the backend and frontend -- until
+     then the badge renders "invalid" (no data at that URL yet), which is
+     expected. See docs/EVALUATION.md for the full scoring methodology. -->
 
 > A production-grade multi-agent AI system that simulates an investment committee,
 > performing autonomous financial analysis and generating professional Investment Memos.
@@ -106,6 +113,7 @@ airp/
 | [CODING_STANDARDS.md](docs/CODING_STANDARDS.md) | Naming conventions, linting rules, pre-commit setup, CI checks                  |
 | [AGENTS.md](docs/AGENTS.md)                     | Each agent's persona, tools, output schema, example output                      |
 | [APIS.md](docs/APIS.md)                         | External APIs, free tier limits, env variable names, rate limit strategy        |
+| [EVALUATION.md](docs/EVALUATION.md)             | Verdict accuracy methodology — evaluation horizons, dead-zone scoring rule, worked examples |
 
 ## Status
 
