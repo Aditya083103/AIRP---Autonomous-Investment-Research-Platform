@@ -129,6 +129,16 @@ class Settings(BaseSettings):
         default="",
         description="Clerk JWT issuer URL — required in Phase 5",
     )
+    accuracy_service_token: str = Field(
+        default="",
+        description=(
+            "Shared secret required in the X-Service-Token header for "
+            "POST /api/v1/accuracy/run (T-090). Empty means the endpoint "
+            "is disabled (fails closed) -- generate a long random value "
+            "for staging/production and store it as a GitHub Actions "
+            "secret for the scheduled evaluate-verdicts.yml workflow."
+        ),
+    )
 
     # ── 8. External Data APIs ─────────────────────────────────────────────
     news_api_key: str = Field(
