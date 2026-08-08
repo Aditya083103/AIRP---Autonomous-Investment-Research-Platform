@@ -6,17 +6,21 @@
 // Compare, Dashboard) that collapses into a hamburger-triggered panel
 // below the `md` (768px) breakpoint -- the same breakpoint every other
 // Phase 6 page already treats as "mobile vs desktop" (e.g.
-// ChartsPanel.tsx's `md:grid-cols-3`, AuthCard's stacked forms).
+// ChartsPanel.tsx's `md:grid-cols-3`, AuthCard's stacked forms). T-092
+// adds a fourth link, Accuracy, pointing at the new public /accuracy
+// dashboard -- it lives in this same always-rendered PRIMARY_NAV_LINKS
+// list (not gated behind isAuthenticated) since the route itself needs
+// no signed-in user either.
 //
 // Auth actions (Log in/Get started, or the signed-in email + Log out)
 // are deliberately NOT duplicated inside the mobile panel -- they stay
 // in the header bar itself at every width, since they're already
 // compact (the email is hidden below `sm` via T-056's own
 // `hidden sm:inline`, leaving just a short "Log out" button). Only the
-// three primary nav links collapse -- keeping HeaderAuthArea to a
-// single rendered instance is also what keeps RootLayout.test.tsx's
-// existing `getByRole("link", { name: "Log in" })`-style single-match
-// queries valid unchanged after this task.
+// primary nav links collapse -- keeping HeaderAuthArea to a single
+// rendered instance is also what keeps RootLayout.test.tsx's existing
+// `getByRole("link", { name: "Log in" })`-style single-match queries
+// valid unchanged after this task.
 
 import { useEffect, useState } from "react";
 import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
@@ -34,6 +38,7 @@ const PRIMARY_NAV_LINKS: readonly PrimaryNavLink[] = [
   { to: "/analysis", label: "New analysis" },
   { to: "/compare", label: "Compare" },
   { to: "/dashboard", label: "Dashboard" },
+  { to: "/accuracy", label: "Accuracy" },
 ];
 
 function navLinkClassName({ isActive }: { isActive: boolean }): string {

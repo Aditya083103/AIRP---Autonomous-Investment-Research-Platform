@@ -4,13 +4,17 @@
 // /login and /register (T-056), a protected /dashboard (real history
 // table, T-057), a protected /analysis/:jobId/result (T-061) and
 // /analysis/:jobId/memo (T-063), a protected /compare two-company
-// comparison page (T-064), the T-054 component preview route, and a
-// catch-all 404.
+// comparison page (T-064), a PUBLIC /accuracy dashboard (T-092 -- not
+// wrapped in ProtectedRoute, since backend/routers/accuracy.py's
+// GET /summary and GET /history need no signed-in user at all, matching
+// this route's own "public accuracy dashboard" task spec), the T-054
+// component preview route, and a catch-all 404.
 
 import { Route, Routes } from "react-router-dom";
 
 import { ProtectedRoute } from "@/components/auth/ProtectedRoute";
 import { RootLayout } from "@/components/layout/RootLayout";
+import { AccuracyPage } from "@/pages/AccuracyPage";
 import { AnalysisPage } from "@/pages/AnalysisPage";
 import { AnalysisResultPage } from "@/pages/AnalysisResultPage";
 import { ComparePage } from "@/pages/ComparePage";
@@ -69,6 +73,7 @@ export function AppRoutes(): JSX.Element {
             </ProtectedRoute>
           }
         />
+        <Route path="accuracy" element={<AccuracyPage />} />
         <Route path="dev/components" element={<ComponentsPreviewPage />} />
         <Route path="*" element={<NotFoundPage />} />
       </Route>

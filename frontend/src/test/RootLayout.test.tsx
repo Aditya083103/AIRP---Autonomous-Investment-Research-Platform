@@ -5,8 +5,10 @@
 // hamburger nav tests: the mobile panel is closed by default (so it
 // never overlaps with the always-rendered desktop nav bar and produces
 // a duplicate-link false positive), opens on toggle-button click,
-// contains the three primary links, and closes again after a link
-// inside it is clicked or the toggle is clicked a second time.
+// contains the primary links, and closes again after a link inside it
+// is clicked or the toggle is clicked a second time. T-092 adds the
+// fourth "Accuracy" link to both the always-visible desktop assertion
+// and the mobile panel assertion.
 
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -59,12 +61,13 @@ describe("RootLayout header", () => {
 });
 
 describe("RootLayout primary navigation", () => {
-  it("renders the three primary links once in the always-visible desktop bar", () => {
+  it("renders the primary links once in the always-visible desktop bar", () => {
     renderLayout(false);
 
     expect(screen.getByRole("link", { name: "New analysis" })).toHaveAttribute("href", "/analysis");
     expect(screen.getByRole("link", { name: "Compare" })).toHaveAttribute("href", "/compare");
     expect(screen.getByRole("link", { name: "Dashboard" })).toHaveAttribute("href", "/dashboard");
+    expect(screen.getByRole("link", { name: "Accuracy" })).toHaveAttribute("href", "/accuracy");
   });
 });
 
@@ -90,6 +93,7 @@ describe("RootLayout mobile nav panel", () => {
     expect(scoped.getByRole("link", { name: "New analysis" })).toBeInTheDocument();
     expect(scoped.getByRole("link", { name: "Compare" })).toBeInTheDocument();
     expect(scoped.getByRole("link", { name: "Dashboard" })).toBeInTheDocument();
+    expect(scoped.getByRole("link", { name: "Accuracy" })).toBeInTheDocument();
 
     const toggle = screen.getByRole("button", { name: "Close menu" });
     expect(toggle).toHaveAttribute("aria-expanded", "true");
