@@ -133,6 +133,7 @@ def test_settings() -> Settings:
         clerk_jwt_issuer="https://test.clerk.accounts.dev",
         secret_key="a" * 32,  # minimum 32 chars required by Field validator
         access_token_expire_minutes=60,
+        accuracy_service_token="test-accuracy-service-token",
         # External data APIs — mocked in unit tests
         news_api_key="test-news-api-key",
         alpha_vantage_key="test-alpha-vantage-key",

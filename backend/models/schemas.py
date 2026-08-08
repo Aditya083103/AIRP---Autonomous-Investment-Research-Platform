@@ -41,6 +41,7 @@ __all__ = [
     "SentimentChartResponse",
     "RiskRadarResponse",
     "AnalysisChartDataResponse",
+    "AccuracyRunResponse",
 ]
 
 # ---------------------------------------------------------------------------
@@ -790,4 +791,36 @@ class AnalysisChartDataResponse(BaseModel):
     data_warnings: list[str] = Field(
         default_factory=list,
         description="Notes on any chart source that could not be populated",
+    )
+
+
+class AccuracyRunResponse(BaseModel):
+    """
+    Body returned by POST /api/v1/accuracy/run (T-090).
+
+    Field-for-field identical to
+    ``backend.services.accuracy_tracker.EvaluationBatchResult`` --
+    the router does no computation of its own, only translates that
+    dataclass into an HTTP-facing schema (the same boundary this
+    module's own docstring documents for InvestmentDecisionResponse).
+    """
+
+    due_count: int = Field(
+        description=(
+            "verdict_outcomes rows whose evaluation_horizon_days had "
+            "already elapsed as of this run"
+        )
+    )
+    evaluated_count: int = Field(
+        description="Of due_count, how many were successfully scored and committed"
+    )
+    skipped_count: int = Field(
+        description=(
+            "Of due_count, how many were left unevaluated (a price fetch "
+            "failure or a DB error on that row's commit) -- always "
+            "due_count - evaluated_count"
+        )
+    )
+    ran_at: datetime = Field(
+        description="UTC timestamp when this evaluation run completed"
     )

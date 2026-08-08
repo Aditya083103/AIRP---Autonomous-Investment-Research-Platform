@@ -1,0 +1,139 @@
+name: Evaluate Verdicts
+
+# ─────────────────────────────────────────────────────────────────────────────
+# T-090 -- Scheduled Verdict Accuracy Tracker evaluation
+#
+# Calls the deployed backend's POST /api/v1/accuracy/run once a day so
+# every verdict_outcomes row past its evaluation_horizon_days (T-087/
+# T-089) gets scored against its live current price. This workflow
+# does not touch the repository at all -- it only calls the already-
+# deployed API over HTTPS -- so there is deliberately no
+# actions/checkout step.
+#
+# schedule (cron) -- runs automatically every day
+# workflow_dispatch -- lets you trigger a run manually from the
+#   Actions tab (Actions -> Evaluate Verdicts -> Run workflow), for
+#   testing without waiting for the schedule. Both trigger the exact
+#   same job below.
+#
+# Required repository secrets (Settings -> Secrets and variables ->
+# Actions -> Repository secrets):
+#   AIRP_API_BASE_URL      e.g. https://airp-backend.onrender.com
+#                          (no trailing slash)
+#   ACCURACY_SERVICE_TOKEN Must be the EXACT same value as the
+#                          deployed backend's ACCURACY_SERVICE_TOKEN
+#                          env var (backend.config.Settings
+#                          .accuracy_service_token) -- see
+#                          backend.dependencies.auth
+#                          .verify_service_token for what checks it.
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  schedule:
+    # 18:30 UTC = 00:00 IST -- comfortably after NSE/BSE market close
+    # (15:30 IST) and same-day settlement, and before the next trading
+    # day's pre-market session begins. Cron minute is intentionally
+    # NOT :00 -- GitHub Actions documents that on-the-hour schedules
+    # see the heaviest load across all of GitHub and can be delayed;
+    # :30 avoids piling onto that spike.
+    - cron: "30 18 * * *"
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Why you're running this manually (shows in the run log)"
+        required: false
+        default: "Manual test run"
+
+# Cancel any in-progress run of this same workflow when a new one
+# starts -- a manual workflow_dispatch run should not queue behind
+# yesterday's scheduled run if both are somehow still in flight.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  # ───────────────────────────────────────────────────────────────────────────
+  # JOB 1 — Call POST /api/v1/accuracy/run on the deployed backend
+  # ───────────────────────────────────────────────────────────────────────────
+  evaluate:
+    name: "Run due verdict evaluations"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Log trigger reason (manual runs only)
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          echo "Manually triggered: ${{ github.event.inputs.reason }}"
+
+      # ── Fail fast with a clear message if secrets are missing ──────────────
+      # A blank AIRP_API_BASE_URL would otherwise produce a confusing
+      # curl error ("URL using bad/illegal format or missing URL")
+      # instead of pointing straight at the actual misconfiguration.
+      - name: Verify required secrets are configured
+        run: |
+          if [ -z "${{ secrets.AIRP_API_BASE_URL }}" ]; then
+            echo "::error::AIRP_API_BASE_URL repository secret is not set."
+            exit 1
+          fi
+          if [ -z "${{ secrets.ACCURACY_SERVICE_TOKEN }}" ]; then
+            echo "::error::ACCURACY_SERVICE_TOKEN repository secret is not set."
+            exit 1
+          fi
+
+      # ── Call the endpoint ────────────────────────────────────────────────
+      # -sS          : silent, but still show errors
+      # -o response.json : write the JSON body to a file so it can be
+      #                    parsed and echoed in a later step, since $()
+      #                    command substitution would otherwise capture
+      #                    the -w status-code output mixed with the body
+      # -w "%{http_code}" : print ONLY the numeric status code to stdout,
+      #                    captured into $http_code below
+      # --max-time 600    : hard cap slightly under the job's own 15
+      #                    minute timeout, so curl itself reports a
+      #                    clean timeout error instead of the job being
+      #                    killed mid-request with a less obvious log
+      - name: Call POST /api/v1/accuracy/run
+        id: call_endpoint
+        run: |
+          http_code=$(curl -sS -o response.json -w "%{http_code}" \
+            --max-time 600 \
+            -X POST \
+            -H "X-Service-Token: ${{ secrets.ACCURACY_SERVICE_TOKEN }}" \
+            -H "Accept: application/json" \
+            "${{ secrets.AIRP_API_BASE_URL }}/api/v1/accuracy/run")
+          echo "http_code=$http_code" >> "$GITHUB_OUTPUT"
+
+      # ── Always show the response body in the log, success or failure ───────
+      - name: Show response body
+        if: always()
+        run: cat response.json || echo "(no response body captured)"
+
+      # ── Summarise due/evaluated/skipped counts in the run summary ──────────
+      - name: Summarise result
+        if: steps.call_endpoint.outputs.http_code == '200'
+        run: |
+          due=$(jq -r '.due_count' response.json)
+          evaluated=$(jq -r '.evaluated_count' response.json)
+          skipped=$(jq -r '.skipped_count' response.json)
+          ran_at=$(jq -r '.ran_at' response.json)
+          {
+            echo "### Verdict accuracy evaluation -- $ran_at"
+            echo ""
+            echo "| due | evaluated | skipped |"
+            echo "| --- | --- | --- |"
+            echo "| $due | $evaluated | $skipped |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ── Fail the workflow run on any non-2xx response ───────────────────────
+      # A 401 here means ACCURACY_SERVICE_TOKEN no longer matches the
+      # deployed backend's configured secret (rotated on one side but
+      # not the other) -- surfacing that as a failed Actions run (with
+      # GitHub's default email/notification on workflow failure) is the
+      # whole point of this check; a silent skip would let evaluations
+      # quietly stop happening with no alert.
+      - name: Fail if the endpoint did not return 200
+        if: steps.call_endpoint.outputs.http_code != '200'
+        run: |
+          echo "::error::POST /api/v1/accuracy/run returned HTTP ${{ steps.call_endpoint.outputs.http_code }} -- see 'Show response body' step above for details."
+          exit 1

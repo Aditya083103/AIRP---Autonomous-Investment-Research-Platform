@@ -14,14 +14,16 @@ Responsibilities of this module ONLY
 * Wire CORS so the React frontend (a different origin in dev and prod)
   can call the API and open the WebSocket endpoint added in T-049.
 * Register routers (currently: health, auth, analysis, websocket,
-  documents). Each new router added from T-049 onward is included
-  here and nowhere else. T-048 and T-050 both added new routes to the
-  EXISTING analysis router (backend/routers/analysis.py) rather than a
-  new router module, so no change was needed here for either task.
-  T-049 added a new router module (backend/routers/websocket.py,
-  ``WS /api/v1/analysis/{job_id}/stream``) and T-051 adds another
-  (backend/routers/documents.py, ``POST /api/v1/documents/upload``) --
-  both registered below alongside the other routers.
+  documents, accuracy). Each new router added from T-049 onward is
+  included here and nowhere else. T-048 and T-050 both added new routes
+  to the EXISTING analysis router (backend/routers/analysis.py) rather
+  than a new router module, so no change was needed here for either
+  task. T-049 added a new router module (backend/routers/websocket.py,
+  ``WS /api/v1/analysis/{job_id}/stream``), T-051 added another
+  (backend/routers/documents.py, ``POST /api/v1/documents/upload``),
+  and T-090 added ``backend/routers/accuracy.py``
+  (``POST /api/v1/accuracy/run``) -- all three registered below
+  alongside the other routers.
 * Provide a typed lifespan context manager as the single place startup
   and shutdown behaviour is added (e.g. warming the LangGraph singleton
   in a later task) -- avoids scattering @app.on_event hooks.
@@ -47,7 +49,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.config import settings
-from backend.routers import analysis, auth, documents, health, websocket
+from backend.routers import accuracy, analysis, auth, documents, health, websocket
 
 logger = logging.getLogger(__name__)
 
@@ -134,6 +136,7 @@ def create_app() -> FastAPI:
     application.include_router(analysis.router)
     application.include_router(websocket.router)
     application.include_router(documents.router)
+    application.include_router(accuracy.router)
 
     return application
 
