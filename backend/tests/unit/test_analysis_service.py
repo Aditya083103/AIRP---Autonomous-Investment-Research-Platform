@@ -305,6 +305,10 @@ class TestRunAnalysisPipelineSuccess:
             patch(
                 "backend.services.state_persistence.StatePersistenceService"
             ) as mock_svc_cls,
+            patch(
+                "backend.services.accuracy_tracker.record_pending_evaluations",
+                new=AsyncMock(),
+            ),
         ):
             mock_invoke.return_value = {"status": "completed"}
 
@@ -334,6 +338,10 @@ class TestRunAnalysisPipelineSuccess:
             patch(
                 "backend.services.state_persistence.StatePersistenceService"
             ) as mock_svc_cls,
+            patch(
+                "backend.services.accuracy_tracker.record_pending_evaluations",
+                new=AsyncMock(),
+            ),
         ):
             mock_invoke.return_value = {"status": "completed"}
 
@@ -414,6 +422,108 @@ class TestRunAnalysisPipelineFailure:
                 exchange="NSE",
                 requested_by="user-123",
             )
+
+
+class TestRunAnalysisPipelineAccuracyTrackerWiring:
+    """T-088: run_analysis_pipeline calls record_pending_evaluations."""
+
+    @pytest.mark.asyncio
+    async def test_calls_record_pending_evaluations_on_completed_status(
+        self,
+    ) -> None:
+        job_id = uuid.uuid4()
+        final_state = {"status": "completed", "ticker": "TCS.NS"}
+        mock_record = AsyncMock()
+
+        with (
+            patch(
+                "backend.services.analysis._invoke_graph_sync",
+                return_value=final_state,
+            ),
+            patch("backend.services.state_persistence.StatePersistenceService"),
+            patch(
+                "backend.services.accuracy_tracker.record_pending_evaluations",
+                mock_record,
+            ),
+        ):
+            await run_analysis_pipeline(
+                job_id=job_id,
+                company_name="Tata Consultancy Services",
+                ticker="TCS.NS",
+                exchange="NSE",
+                requested_by="user-123",
+            )
+
+            mock_record.assert_awaited_once()
+            _, kwargs = mock_record.call_args
+            assert kwargs["job_id"] == str(job_id)
+            assert kwargs["state"] == final_state
+
+    @pytest.mark.asyncio
+    async def test_does_not_call_record_pending_evaluations_when_not_completed(
+        self,
+    ) -> None:
+        job_id = uuid.uuid4()
+        # A graph run that returns without ever setting status="completed"
+        # (should not happen in practice -- every terminal node sets it --
+        # but the gate must not fire on anything else).
+        final_state = {"status": "running", "ticker": "TCS.NS"}
+        mock_record = AsyncMock()
+
+        with (
+            patch(
+                "backend.services.analysis._invoke_graph_sync",
+                return_value=final_state,
+            ),
+            patch("backend.services.state_persistence.StatePersistenceService"),
+            patch(
+                "backend.services.accuracy_tracker.record_pending_evaluations",
+                mock_record,
+            ),
+        ):
+            await run_analysis_pipeline(
+                job_id=job_id,
+                company_name="Tata Consultancy Services",
+                ticker="TCS.NS",
+                exchange="NSE",
+                requested_by="user-123",
+            )
+
+            mock_record.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_accuracy_tracker_exception_does_not_fail_pipeline(self) -> None:
+        job_id = uuid.uuid4()
+        final_state = {"status": "completed", "ticker": "TCS.NS"}
+        mock_record = AsyncMock(side_effect=RuntimeError("accuracy tracker exploded"))
+
+        with (
+            patch(
+                "backend.services.analysis._invoke_graph_sync",
+                return_value=final_state,
+            ),
+            patch(
+                "backend.services.state_persistence.StatePersistenceService"
+            ) as mock_svc_cls,
+            patch(
+                "backend.services.accuracy_tracker.record_pending_evaluations",
+                mock_record,
+            ),
+        ):
+            # Must complete without raising -- this call itself is the
+            # assertion; pytest fails the test if an exception escapes.
+            await run_analysis_pipeline(
+                job_id=job_id,
+                company_name="Tata Consultancy Services",
+                ticker="TCS.NS",
+                exchange="NSE",
+                requested_by="user-123",
+            )
+
+            # The accuracy tracker is a downstream enrichment -- its
+            # failure must never be reported as a pipeline failure via
+            # StatePersistenceService.mark_failed.
+            mock_svc_cls.return_value.mark_failed.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
