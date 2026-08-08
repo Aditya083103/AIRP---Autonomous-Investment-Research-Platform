@@ -183,10 +183,12 @@ class TestVerifyServiceTokenSuccess:
     ) -> None:
         # Must complete without raising -- this call itself is the
         # assertion; pytest fails the test if an exception escapes.
-        result = await verify_service_token(
+        # verify_service_token is annotated `-> None`, so its result is
+        # never assigned to a variable (mypy's func-returns-value check
+        # flags `x = await f()` for any f() -> None).
+        await verify_service_token(
             token=test_settings.accuracy_service_token, settings=test_settings
         )
-        assert result is None
 
 
 class TestVerifyServiceTokenFailures:

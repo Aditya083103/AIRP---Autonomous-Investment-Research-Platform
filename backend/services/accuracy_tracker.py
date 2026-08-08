@@ -141,7 +141,7 @@ import logging
 from typing import Any, Optional
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import case, func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -160,6 +160,15 @@ __all__ = [
     "score_directional_correctness",
     "EvaluationBatchResult",
     "run_due_evaluations",
+    "DEFAULT_ACCURACY_HISTORY_PAGE_SIZE",
+    "MAX_ACCURACY_HISTORY_PAGE_SIZE",
+    "VerdictAccuracyBreakdown",
+    "ConvictionAccuracyBreakdown",
+    "AccuracySummary",
+    "get_accuracy_summary",
+    "AccuracyHistoryEntry",
+    "AccuracyHistoryPage",
+    "get_accuracy_history",
 ]
 
 # ---------------------------------------------------------------------------
@@ -660,4 +669,370 @@ async def run_due_evaluations(
         due_count=due_count,
         evaluated_count=evaluated_count,
         skipped_count=skipped_count,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Accuracy summary + history (T-091) -- read-side aggregation for the
+# public accuracy dashboard (T-092's AccuracyPage.tsx consumes both).
+# ---------------------------------------------------------------------------
+#
+# Both functions below are pure read queries against verdict_outcomes --
+# neither writes anything. They are deliberately kept in this module
+# rather than a new one: they read the exact table T-087/T-088/T-089
+# already own, and this project's established router/service split puts
+# "everything about one concern" in one service module (mirrors
+# backend.services.analysis owning both the write-side pipeline trigger
+# AND the read-side get_analysis_history/get_analysis_result in that
+# same file).
+#
+# Public, not user-scoped. Unlike GET /api/v1/analysis/history (T-050),
+# which answers "what has THIS user run", these two endpoints answer
+# "how accurate has AIRP's committee been overall" -- a platform-wide
+# statistic, not a per-user one. verdict_outcomes rows are not owned by
+# a user at all (their only FK is analysis_id, not user_id), and T-092's
+# task spec calls AccuracyPage.tsx a "public accuracy dashboard" --
+# so backend.routers.accuracy intentionally does NOT put
+# Depends(get_current_user) on either route.
+#
+# ORM queries, not raw text() SQL. backend.services.analysis's history
+# query (T-050) uses raw text() SQL because it needs Postgres's JSONB
+# ->> operator to pull two fields out of state_snapshot without loading
+# and parsing the whole blob in Python. Nothing here has that problem --
+# verdict_outcomes is a plain relational table with typed columns
+# (including price_at_verdict etc.'s Numeric(..., asdecimal=False)
+# columns, T-087) -- so plain SQLAlchemy Core `select(...)` gets the
+# same result with full ORM type coercion (Decimal -> float) applied
+# automatically, and mirrors the `select(VerdictOutcome)` style
+# run_due_evaluations (T-089) already uses in this same module.
+#
+# Rows are read by tuple index (row[0], row[1], ...), not by attribute
+# name off the Row object, even where a column is `.label()`-led for
+# SQL readability -- the same "asyncpg-style tuple" convention
+# get_analysis_history's docstring establishes, and it sidesteps a
+# `mypy --strict` complaint about accessing a dynamically-named
+# attribute on a generically-typed `Row[Any]` without a bare
+# `type: ignore` (a rule this project never breaks -- see this
+# module's own docstring).
+#
+# `FILTER (WHERE ...)` (via SQLAlchemy's `func.count(...).filter(...)`)
+# is a Postgres-only aggregate-filter clause. That is an acceptable
+# dependency here the same way get_analysis_history already depends on
+# Postgres-only JSONB `->>` -- this project's only deployed and only
+# CI-tested database is PostgreSQL (Neon in production, the
+# postgres:16-alpine service container in CI), and every test in this
+# module (like every other test in this file) mocks `AsyncSession`
+# directly rather than exercising a live database, so the SQL dialect
+# used here is never actually executed against SQLite or any other
+# backend in this project's test suite.
+
+#: Default and maximum page size for GET /api/v1/accuracy/history.
+#: Mirrors backend.services.analysis's DEFAULT_HISTORY_PAGE_SIZE /
+#: MAX_HISTORY_PAGE_SIZE (T-050) -- same page-size philosophy, a
+#: separate pair of constants because this is a different, unrelated
+#: table/endpoint and the two should be free to diverge later without
+#: one task's change silently affecting the other's default.
+DEFAULT_ACCURACY_HISTORY_PAGE_SIZE = 20
+MAX_ACCURACY_HISTORY_PAGE_SIZE = 100
+
+#: Verdict types in a fixed display order, used to guarantee
+#: AccuracySummary.by_verdict always has exactly these three entries --
+#: including a verdict with zero rows so far -- rather than silently
+#: omitting a row the underlying GROUP BY query has nothing to report
+#: for. Order matches the sequence the Portfolio Manager can emit them
+#: in (backend.agents.output_models.InvestmentDecision.verdict) and the
+#: order T-092's frontend bar chart is expected to render them in.
+_VERDICT_DISPLAY_ORDER: tuple[str, ...] = ("BUY", "HOLD", "SELL")
+
+#: (bucket key, display label, inclusive min, inclusive max) for the
+#: conviction-score breakdown. Conviction scores are always 1-10
+#: (backend.agents.output_models.InvestmentDecision.conviction_score,
+#: enforced there and by VerdictOutcome.conviction_score's NOT NULL
+#: column), so a three-way split into low/medium/high thirds -- rather
+#: than one bucket per individual score, or a configurable bucket width
+#: -- keeps GET /accuracy/summary's response a fixed, small shape a
+#: dashboard can render without knowing how many buckets to expect.
+#: T-092's conviction-vs-accuracy scatter plot (which wants one point
+#: per analysis, not a bucketed rollup) reads from GET /accuracy/history
+#: instead, where conviction_score is returned unbucketed per row.
+_CONVICTION_BUCKETS: tuple[tuple[str, str, int, int], ...] = (
+    ("low", "Low (1-3)", 1, 3),
+    ("medium", "Medium (4-6)", 4, 6),
+    ("high", "High (7-10)", 7, 10),
+)
+
+#: Reused across all three summary queries below -- a row only counts
+#: toward "evaluated" once run_due_evaluations (T-089) has stamped
+#: evaluated_at, and only counts toward "correct" if it is also
+#: evaluated (directional_correct is NULL, not False, for a still-
+#: pending row, but the explicit evaluated_at check keeps the intent
+#: readable at the call site rather than relying on NULL's SQL
+#: three-valued-logic behaviour in an AND to do it implicitly).
+_IS_EVALUATED = VerdictOutcome.evaluated_at.is_not(None)
+_IS_PENDING = VerdictOutcome.evaluated_at.is_(None)
+_IS_CORRECT = _IS_EVALUATED & VerdictOutcome.directional_correct.is_(True)
+
+#: CASE expression bucketing conviction_score into the three
+#: _CONVICTION_BUCKETS keys above. Built once at module import time and
+#: reused for both the SELECT list and the GROUP BY clause of
+#: _BY_CONVICTION_STMT -- SQLAlchemy renders the identical expression
+#: in both positions, which is what lets Postgres group by it.
+_CONVICTION_BUCKET_CASE = case(
+    (VerdictOutcome.conviction_score <= 3, "low"),
+    (VerdictOutcome.conviction_score <= 6, "medium"),
+    else_="high",
+)
+
+_OVERALL_STMT = select(
+    func.count(VerdictOutcome.id).filter(_IS_EVALUATED).label("total_evaluated"),
+    func.count(VerdictOutcome.id).filter(_IS_PENDING).label("total_pending"),
+    func.count(VerdictOutcome.id).filter(_IS_CORRECT).label("total_correct"),
+)
+
+_BY_VERDICT_STMT = select(
+    VerdictOutcome.verdict,
+    func.count(VerdictOutcome.id).filter(_IS_EVALUATED).label("evaluated_count"),
+    func.count(VerdictOutcome.id).filter(_IS_CORRECT).label("correct_count"),
+).group_by(VerdictOutcome.verdict)
+
+_BY_CONVICTION_STMT = select(
+    _CONVICTION_BUCKET_CASE.label("bucket"),
+    func.count(VerdictOutcome.id).filter(_IS_EVALUATED).label("evaluated_count"),
+    func.count(VerdictOutcome.id).filter(_IS_CORRECT).label("correct_count"),
+).group_by(_CONVICTION_BUCKET_CASE)
+
+
+def _accuracy_pct(correct_count: int, evaluated_count: int) -> Optional[float]:
+    """
+    ``correct_count / evaluated_count * 100``, rounded to 2 decimal
+    places, or ``None`` when ``evaluated_count == 0``.
+
+    ``None`` (not ``0.0``) for the zero-evaluated case matters: a
+    verdict type or conviction bucket with no evaluated rows yet has
+    an UNKNOWN accuracy, not a 0% (all-wrong) one -- collapsing the two
+    would make a brand-new bucket look like a track record of total
+    failure on a dashboard that has not actually scored a single row
+    for it yet.
+    """
+    if evaluated_count == 0:
+        return None
+    return round(correct_count / evaluated_count * 100.0, 2)
+
+
+@dataclass(frozen=True)
+class VerdictAccuracyBreakdown:
+    """One row of AccuracySummary.by_verdict -- one BUY/HOLD/SELL verdict's accuracy."""
+
+    verdict: str
+    evaluated_count: int
+    correct_count: int
+    accuracy_pct: Optional[float]
+
+
+@dataclass(frozen=True)
+class ConvictionAccuracyBreakdown:
+    """One row of AccuracySummary.by_conviction -- one conviction bucket's accuracy."""
+
+    bucket: str
+    label: str
+    min_score: int
+    max_score: int
+    evaluated_count: int
+    correct_count: int
+    accuracy_pct: Optional[float]
+
+
+@dataclass(frozen=True)
+class AccuracySummary:
+    """
+    Everything GET /api/v1/accuracy/summary needs.
+
+    ``by_verdict`` always has exactly 3 entries (BUY, HOLD, SELL) and
+    ``by_conviction`` always has exactly 3 entries (low, medium, high),
+    each present with zero counts even when the underlying GROUP BY
+    query has no rows for that key yet -- see
+    ``_VERDICT_DISPLAY_ORDER`` / ``_CONVICTION_BUCKETS``.
+    """
+
+    total_evaluated: int
+    total_pending: int
+    overall_accuracy_pct: Optional[float]
+    by_verdict: list[VerdictAccuracyBreakdown]
+    by_conviction: list[ConvictionAccuracyBreakdown]
+
+
+async def get_accuracy_summary(session: AsyncSession) -> AccuracySummary:
+    """
+    Aggregate verdict_outcomes into overall / by-verdict / by-conviction
+    accuracy breakdowns for GET /api/v1/accuracy/summary.
+
+    Three independent queries -- overall counts, GROUP BY verdict,
+    GROUP BY conviction bucket -- rather than one combined query,
+    matching this project's established preference (see
+    backend.services.analysis.get_analysis_history's docstring) for
+    several plain, independently-readable statements over one query
+    trying to do everything at once. This endpoint is read by a public
+    dashboard page at human-interaction frequency, not a hot loop, so
+    three small round trips cost nothing that matters next to the
+    clarity win.
+
+    Args:
+        session: Active AsyncSession for this request.
+
+    Returns:
+        An AccuracySummary. Every count starts at 0 and every
+        accuracy_pct starts at None on a brand-new, empty
+        verdict_outcomes table -- this is a normal, valid response,
+        not an error case the caller needs to special-case.
+    """
+    overall_result = await session.execute(_OVERALL_STMT)
+    overall_row = overall_result.one()
+    total_evaluated = int(overall_row[0])
+    total_pending = int(overall_row[1])
+    total_correct = int(overall_row[2])
+
+    verdict_result = await session.execute(_BY_VERDICT_STMT)
+    # Keyed by verdict string; value is (evaluated_count, correct_count).
+    verdict_counts: dict[str, tuple[int, int]] = {
+        str(row[0]): (int(row[1]), int(row[2])) for row in verdict_result.all()
+    }
+    by_verdict: list[VerdictAccuracyBreakdown] = []
+    for verdict in _VERDICT_DISPLAY_ORDER:
+        evaluated_count, correct_count = verdict_counts.get(verdict, (0, 0))
+        by_verdict.append(
+            VerdictAccuracyBreakdown(
+                verdict=verdict,
+                evaluated_count=evaluated_count,
+                correct_count=correct_count,
+                accuracy_pct=_accuracy_pct(correct_count, evaluated_count),
+            )
+        )
+
+    conviction_result = await session.execute(_BY_CONVICTION_STMT)
+    # Keyed by bucket key ("low"/"medium"/"high"); value is
+    # (evaluated_count, correct_count).
+    bucket_counts: dict[str, tuple[int, int]] = {
+        str(row[0]): (int(row[1]), int(row[2])) for row in conviction_result.all()
+    }
+    by_conviction: list[ConvictionAccuracyBreakdown] = []
+    for bucket_key, label, min_score, max_score in _CONVICTION_BUCKETS:
+        evaluated_count, correct_count = bucket_counts.get(bucket_key, (0, 0))
+        by_conviction.append(
+            ConvictionAccuracyBreakdown(
+                bucket=bucket_key,
+                label=label,
+                min_score=min_score,
+                max_score=max_score,
+                evaluated_count=evaluated_count,
+                correct_count=correct_count,
+                accuracy_pct=_accuracy_pct(correct_count, evaluated_count),
+            )
+        )
+
+    return AccuracySummary(
+        total_evaluated=total_evaluated,
+        total_pending=total_pending,
+        overall_accuracy_pct=_accuracy_pct(total_correct, total_evaluated),
+        by_verdict=by_verdict,
+        by_conviction=by_conviction,
+    )
+
+
+@dataclass(frozen=True)
+class AccuracyHistoryEntry:
+    """One row of GET /api/v1/accuracy/history -- one verdict_outcomes row."""
+
+    id: uuid.UUID
+    analysis_id: uuid.UUID
+    ticker: str
+    verdict: str
+    conviction_score: int
+    price_at_verdict: float
+    verdict_date: datetime
+    evaluation_horizon_days: int
+    price_at_evaluation: Optional[float]
+    price_change_pct: Optional[float]
+    directional_correct: Optional[bool]
+    evaluated_at: Optional[datetime]
+
+
+@dataclass(frozen=True)
+class AccuracyHistoryPage:
+    """
+    A single page of ``AccuracyHistoryEntry`` rows plus pagination
+    metadata -- field-for-field the same shape as
+    backend.services.analysis.HistoryPage (T-050), including the same
+    ``has_more`` arithmetic, applied to a different, unrelated table.
+    """
+
+    items: list[AccuracyHistoryEntry]
+    total_count: int
+    limit: int
+    offset: int
+
+    @property
+    def has_more(self) -> bool:
+        """True when at least one further row exists beyond this page."""
+        return self.offset + len(self.items) < self.total_count
+
+
+async def get_accuracy_history(
+    session: AsyncSession,
+    limit: int = DEFAULT_ACCURACY_HISTORY_PAGE_SIZE,
+    offset: int = 0,
+) -> AccuracyHistoryPage:
+    """
+    Read one page of verdict_outcomes rows, newest verdict first, for
+    GET /api/v1/accuracy/history.
+
+    Unlike GET /api/v1/analysis/history (T-050), this is not scoped to
+    a requesting user -- every verdict_outcomes row is returned to
+    every caller, evaluated or still pending, matching this endpoint's
+    "public accuracy dashboard" purpose (T-092).
+
+    Args:
+        session: Active AsyncSession for this request.
+        limit:   Page size, already clamped to
+                 [1, MAX_ACCURACY_HISTORY_PAGE_SIZE] by the router's
+                 Query(ge=1, le=MAX_ACCURACY_HISTORY_PAGE_SIZE)
+                 validation before this function is called.
+        offset:  Rows to skip, already clamped to >= 0 by the same
+                 validation.
+
+    Returns:
+        An AccuracyHistoryPage with up to ``limit`` entries and the
+        total row count in verdict_outcomes, regardless of how many
+        fit on this particular page.
+    """
+    count_result = await session.execute(select(func.count(VerdictOutcome.id)))
+    total_count = int(count_result.scalar_one())
+
+    page_result = await session.execute(
+        select(VerdictOutcome)
+        .order_by(VerdictOutcome.verdict_date.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    rows = list(page_result.scalars().all())
+
+    items = [
+        AccuracyHistoryEntry(
+            id=row.id,
+            analysis_id=row.analysis_id,
+            ticker=row.ticker,
+            verdict=row.verdict,
+            conviction_score=row.conviction_score,
+            price_at_verdict=row.price_at_verdict,
+            verdict_date=row.verdict_date,
+            evaluation_horizon_days=row.evaluation_horizon_days,
+            price_at_evaluation=row.price_at_evaluation,
+            price_change_pct=row.price_change_pct,
+            directional_correct=row.directional_correct,
+            evaluated_at=row.evaluated_at,
+        )
+        for row in rows
+    ]
+
+    return AccuracyHistoryPage(
+        items=items, total_count=total_count, limit=limit, offset=offset
     )

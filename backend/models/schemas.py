@@ -42,6 +42,11 @@ __all__ = [
     "RiskRadarResponse",
     "AnalysisChartDataResponse",
     "AccuracyRunResponse",
+    "VerdictAccuracyBreakdownResponse",
+    "ConvictionAccuracyBreakdownResponse",
+    "AccuracySummaryResponse",
+    "AccuracyHistoryEntryResponse",
+    "AccuracyHistoryResponse",
 ]
 
 # ---------------------------------------------------------------------------
@@ -823,4 +828,181 @@ class AccuracyRunResponse(BaseModel):
     )
     ran_at: datetime = Field(
         description="UTC timestamp when this evaluation run completed"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Response schemas -- verdict accuracy summary + history (T-091)
+# ---------------------------------------------------------------------------
+
+
+class VerdictAccuracyBreakdownResponse(BaseModel):
+    """
+    One entry of AccuracySummaryResponse.by_verdict.
+
+    Field-for-field identical to
+    ``backend.services.accuracy_tracker.VerdictAccuracyBreakdown``
+    (the router does no computation of its own -- see
+    AccuracyRunResponse's docstring for the same boundary rule applied
+    here).
+    """
+
+    verdict: str = Field(description="One of 'BUY', 'HOLD', 'SELL'")
+    evaluated_count: int = Field(
+        ge=0, description="verdict_outcomes rows of this verdict that have been scored"
+    )
+    correct_count: int = Field(
+        ge=0,
+        description="Of evaluated_count, how many were directionally correct",
+    )
+    accuracy_pct: Optional[float] = Field(
+        default=None,
+        description=(
+            "correct_count / evaluated_count * 100, rounded to 2 decimal "
+            "places; null when evaluated_count is 0 (unknown, not 0%)"
+        ),
+    )
+
+
+class ConvictionAccuracyBreakdownResponse(BaseModel):
+    """
+    One entry of AccuracySummaryResponse.by_conviction.
+
+    Field-for-field identical to
+    ``backend.services.accuracy_tracker.ConvictionAccuracyBreakdown``.
+    """
+
+    bucket: str = Field(
+        description="Machine-readable bucket key: 'low', 'medium', or 'high'"
+    )
+    label: str = Field(
+        description="Human-readable bucket label, e.g. 'Low (1-3)', for direct display"
+    )
+    min_score: int = Field(
+        ge=1, le=10, description="Inclusive lower bound of this bucket"
+    )
+    max_score: int = Field(
+        ge=1, le=10, description="Inclusive upper bound of this bucket"
+    )
+    evaluated_count: int = Field(
+        ge=0,
+        description="verdict_outcomes rows in this bucket that have been scored",
+    )
+    correct_count: int = Field(
+        ge=0,
+        description="Of evaluated_count, how many were directionally correct",
+    )
+    accuracy_pct: Optional[float] = Field(
+        default=None,
+        description=(
+            "correct_count / evaluated_count * 100, rounded to 2 decimal "
+            "places; null when evaluated_count is 0 (unknown, not 0%)"
+        ),
+    )
+
+
+class AccuracySummaryResponse(BaseModel):
+    """
+    Body returned by GET /api/v1/accuracy/summary (T-091).
+
+    A public, platform-wide statistic -- not scoped to the caller --
+    describing how accurate the Portfolio Manager's past BUY/HOLD/SELL
+    verdicts have been once their evaluation horizon has elapsed and
+    ``run_due_evaluations`` (T-089) has scored them.
+    """
+
+    total_evaluated: int = Field(
+        ge=0, description="Total verdict_outcomes rows that have been scored so far"
+    )
+    total_pending: int = Field(
+        ge=0,
+        description=(
+            "Total verdict_outcomes rows still awaiting their evaluation "
+            "horizon (evaluated_at is still null)"
+        ),
+    )
+    overall_accuracy_pct: Optional[float] = Field(
+        default=None,
+        description=(
+            "Accuracy across every scored verdict, rounded to 2 decimal "
+            "places; null when total_evaluated is 0"
+        ),
+    )
+    by_verdict: list[VerdictAccuracyBreakdownResponse] = Field(
+        description="Always exactly 3 entries -- BUY, HOLD, SELL, in that order"
+    )
+    by_conviction: list[ConvictionAccuracyBreakdownResponse] = Field(
+        description="Always exactly 3 entries -- low (1-3), medium (4-6), high (7-10)"
+    )
+
+
+class AccuracyHistoryEntryResponse(BaseModel):
+    """
+    One row of GET /api/v1/accuracy/history's paginated result -- one
+    ``verdict_outcomes`` row (T-087), evaluated or still pending.
+    """
+
+    id: uuid.UUID = Field(description="UUID of the verdict_outcomes row")
+    analysis_id: uuid.UUID = Field(
+        description="UUID of the analysis this outcome tracks"
+    )
+    ticker: str = Field(
+        description="Yahoo Finance ticker at verdict time, e.g. 'TCS.NS'"
+    )
+    verdict: str = Field(description="The BUY/HOLD/SELL verdict being tracked")
+    conviction_score: int = Field(
+        ge=1, le=10, description="Portfolio Manager confidence at verdict time"
+    )
+    price_at_verdict: float = Field(
+        description="Closing price of the ticker on verdict_date"
+    )
+    verdict_date: datetime = Field(description="UTC timestamp the verdict was issued")
+    evaluation_horizon_days: int = Field(
+        gt=0, description="Days after verdict_date at which accuracy is evaluated"
+    )
+    price_at_evaluation: Optional[float] = Field(
+        default=None,
+        description="Closing price at evaluation time; null until evaluated",
+    )
+    price_change_pct: Optional[float] = Field(
+        default=None,
+        description=(
+            "Percent change from price_at_verdict to price_at_evaluation; "
+            "null until evaluated"
+        ),
+    )
+    directional_correct: Optional[bool] = Field(
+        default=None,
+        description=(
+            "Whether the verdict's direction matched the actual price "
+            "move; null until evaluated"
+        ),
+    )
+    evaluated_at: Optional[datetime] = Field(
+        default=None,
+        description="UTC timestamp the outcome was scored; null until evaluated",
+    )
+
+
+class AccuracyHistoryResponse(BaseModel):
+    """
+    Body returned by GET /api/v1/accuracy/history (T-091).
+
+    Same pagination shape as ``HistoryResponse`` (T-050), applied to
+    the public, platform-wide ``verdict_outcomes`` table instead of one
+    user's own analyses -- see
+    ``backend.services.accuracy_tracker.get_accuracy_history``'s
+    docstring for why this endpoint is not scoped to the caller.
+    """
+
+    items: list[AccuracyHistoryEntryResponse] = Field(
+        description="This page's verdict outcomes, newest verdict first"
+    )
+    total_count: int = Field(
+        ge=0, description="Total number of verdict_outcomes rows across all analyses"
+    )
+    limit: int = Field(description="Page size used for this request")
+    offset: int = Field(ge=0, description="Number of rows skipped before this page")
+    has_more: bool = Field(
+        description="True when at least one further row exists beyond this page"
     )
