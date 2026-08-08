@@ -168,3 +168,4 @@ async def verify_service_token(
         raise _SERVICE_UNAUTHORIZED
     if not token or not secrets.compare_digest(token, configured):
         raise _SERVICE_UNAUTHORIZED
+    return
