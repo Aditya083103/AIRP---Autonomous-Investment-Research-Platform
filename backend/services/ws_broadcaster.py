@@ -86,6 +86,28 @@ Design
   raise" rule and the identical fire-and-forget contract
   backend.services.state_persistence.persist_state already has.
 
+T-095 addition (NODE_STARTED event)
+-------------------------------------
+Every event published before T-095 described a node that had just
+FINISHED. That is still true -- nothing about the existing event's
+fields or values changes -- but a live viewer previously had no signal
+that a node had even started until it was already done, which for a
+slow node (an LLM call retrying against a rate limit) could leave a
+seat looking frozen for tens of seconds with no feedback at all.
+``event_type`` (new field, ``"node_started"`` or ``"node_completed"``)
+lets ``backend.graph.nodes`` publish a second, lightweight event the
+instant a node begins, before doing any of its real work, so the
+frontend can flip a seat to "running" immediately and to "done" only
+once the real completion event arrives. ``cast_event``'s new
+``event_type`` parameter defaults to ``EVENT_TYPE_NODE_COMPLETED`` --
+every pre-T-095 call site (``backend.graph.nodes._run_broadcast``,
+``backend.routers.websocket``'s connect-time snapshot and heartbeat)
+keeps sending byte-for-byte the same event it always did, just with one
+additional key. A client that has no idea ``event_type`` exists reads
+every field it already understood exactly as before -- the literal
+"WS clients ignoring the new event type still work" acceptance
+criterion.
+
 Public API
 ----------
     from backend.services.ws_broadcaster import (
@@ -95,6 +117,8 @@ Public API
         publish_event,
         cast_event,
         TERMINAL_STATUSES,
+        EVENT_TYPE_NODE_STARTED,
+        EVENT_TYPE_NODE_COMPLETED,
     )
 """
 
@@ -113,11 +137,26 @@ __all__ = [
     "publish_event",
     "cast_event",
     "TERMINAL_STATUSES",
+    "EVENT_TYPE_NODE_STARTED",
+    "EVENT_TYPE_NODE_COMPLETED",
 ]
 
 # ---------------------------------------------------------------------------
 # Event shape
 # ---------------------------------------------------------------------------
+
+#: A node has just begun executing -- published before any of its real
+#: work runs, from backend.graph.nodes._run_broadcast_started /
+#: _broadcast_research_node_started (T-095).
+EVENT_TYPE_NODE_STARTED: str = "node_started"
+
+#: A node has just finished -- the only event kind that existed before
+#: T-095, published from backend.graph.nodes._run_broadcast. Also the
+#: default event_type for every call site that predates T-095 and does
+#: not pass the parameter explicitly (backend.routers.websocket's
+#: connect-time snapshot and idle heartbeat), so those keep publishing
+#: byte-for-byte the same event shape they always did.
+EVENT_TYPE_NODE_COMPLETED: str = "node_completed"
 
 
 class AgentStreamEvent(TypedDict):
@@ -125,14 +164,18 @@ class AgentStreamEvent(TypedDict):
     One push payload sent over WS /api/v1/analysis/{job_id}/stream.
 
     Matches the T-049 acceptance criterion's literal shape verbatim --
-    ``{agent, status, output_preview}`` -- plus three fields needed to
+    ``{agent, status, output_preview}`` -- plus four fields needed to
     make the stream self-describing without a second GET /status call:
     ``job_id`` (so a client subscribed to multiple jobs in one tab can
     route events correctly), ``progress_percent`` (reuses
     backend.services.analysis.compute_progress -- no new progress logic,
-    per the T-048 doc's own "next task" note), and ``is_final`` (True
+    per the T-048 doc's own "next task" note), ``is_final`` (True
     exactly once, on the event that causes the server to close the
-    socket -- see backend.routers.websocket).
+    socket -- see backend.routers.websocket), and (T-095)
+    ``event_type`` -- ``EVENT_TYPE_NODE_STARTED`` or
+    ``EVENT_TYPE_NODE_COMPLETED``, letting a frontend distinguish "this
+    node just began" from "this node just finished" without guessing
+    from ``status`` alone (both kinds can carry ``status="running"``).
     """
 
     job_id: str
@@ -141,6 +184,7 @@ class AgentStreamEvent(TypedDict):
     output_preview: str
     progress_percent: int
     is_final: bool
+    event_type: str
 
 
 def cast_event(
@@ -150,6 +194,7 @@ def cast_event(
     output_preview: str,
     progress_percent: int,
     is_final: bool,
+    event_type: str = EVENT_TYPE_NODE_COMPLETED,
 ) -> AgentStreamEvent:
     """
     Construct an ``AgentStreamEvent`` dict with every field explicit.
@@ -157,19 +202,21 @@ def cast_event(
     A thin, explicitly-typed constructor (rather than building the
     TypedDict as a bare literal at each call site) so
     ``backend.graph.nodes`` and ``backend.routers.websocket`` -- the
-    two call sites that build outgoing events -- cannot accidentally
-    typo a key name or omit a field; mypy --strict checks every keyword
+    call sites that build outgoing events -- cannot accidentally typo a
+    key name or omit a field; mypy --strict checks every keyword
     argument here against ``AgentStreamEvent``'s declared fields.
 
     Args:
         job_id:           UUID string of the analysis job.
-        agent:            LangGraph node name that just completed
+        agent:            LangGraph node name this event is about
                            (e.g. 'fundamental_analyst', 'pdf_export').
         status:           Pipeline lifecycle status at the moment this
-                           node completed -- 'running', 'completed', or
-                           'failed'.
+                           event was published -- 'running',
+                           'completed', or 'failed'.
         output_preview:   Short human-readable summary of what this
-                           node produced (or its error) -- see
+                           node produced (or its error), or -- for a
+                           started event -- a lightweight "starting"
+                           message. See
                            backend.graph.nodes._build_output_preview.
         progress_percent: 0-100, computed via the same
                            backend.services.analysis.compute_progress
@@ -178,7 +225,14 @@ def cast_event(
                            disagree about how far along a job is.
         is_final:         True exactly once per job -- on the event
                            that should cause the WebSocket route
-                           handler to close the connection.
+                           handler to close the connection. Always
+                           False for a started event.
+        event_type:       (T-095) ``EVENT_TYPE_NODE_STARTED`` or
+                           ``EVENT_TYPE_NODE_COMPLETED``. Defaults to
+                           ``EVENT_TYPE_NODE_COMPLETED`` so every call
+                           site written before T-095 needs no change to
+                           keep publishing exactly the event shape it
+                           always did.
 
     Returns:
         A fully-populated AgentStreamEvent ready for publish_event.
@@ -190,6 +244,7 @@ def cast_event(
         output_preview=output_preview,
         progress_percent=progress_percent,
         is_final=is_final,
+        event_type=event_type,
     )
 
 

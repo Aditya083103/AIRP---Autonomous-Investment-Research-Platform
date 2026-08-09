@@ -397,6 +397,16 @@ class AgentStreamEventResponse(BaseModel):
             "closes the WebSocket connection"
         )
     )
+    event_type: str = Field(
+        default="node_completed",
+        description=(
+            "'node_started' (T-095) -- published the instant a node begins, "
+            "before any of its work runs -- or 'node_completed', published "
+            "once it finishes. Every event published before T-095 is a "
+            "'node_completed' event; a client that does not read this field "
+            "at all still receives every other field exactly as before."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -7,6 +7,32 @@ Thin wrapper functions that adapt each agent's public API to the
 LangGraph node contract: receive InvestmentState, return a partial
 dict that LangGraph merges back into state.
 
+T-095 addition (NODE_STARTED event)
+-------------------------------------
+Every event T-049 published described a node that had already
+FINISHED -- a live viewer had no signal that a node had even started
+until it was already done, which for a slow node (an LLM call retrying
+against a rate-limited provider) could leave a seat looking frozen for
+tens of seconds. ``_run_broadcast_started`` (companion to
+``_run_broadcast``, called from the SAME two places --
+``_persist_after``'s wrapper, for the 11 sequential nodes, and each of
+the 4 parallel research node functions via the new
+``_broadcast_research_node_started``) publishes one lightweight
+``AgentStreamEvent`` the instant a node begins, BEFORE any of its real
+work runs, with ``event_type="node_started"`` (see
+``backend.services.ws_broadcaster``'s T-095 addition). It reads the
+INCOMING state (the node has not returned anything yet, so there is no
+merged/partial dict to build a real output preview from) and reuses
+``compute_progress`` against ``state["current_node"]`` -- the node that
+finished LAST, i.e. before this one started -- for a progress figure
+that is still accurate at the instant this event fires. The existing
+completion event (``_run_broadcast``, now explicitly tagged
+``event_type="node_completed"``) is completely unchanged in every
+field and value; ``cast_event``'s new ``event_type`` parameter defaults
+to that same value, so this is the literal "existing completion event
+contract unchanged" acceptance criterion. Like ``_run_persist`` and
+``_run_broadcast``, ``_run_broadcast_started`` never raises.
+
 T-049 addition (live WebSocket broadcast)
 -------------------------------------------
 ``_persist_after`` now does two fire-and-forget things after every
@@ -175,6 +201,9 @@ Design decisions
   unit tests to stay hermetic -- a job_id with zero subscribers
   (true for every test that never calls ws_broadcaster.subscribe) is
   already a guaranteed no-op.
+* (T-095) _run_broadcast_started follows the identical never-raises,
+  no-DB-patching-needed contract as _run_broadcast -- same reasoning,
+  applied to the node-entry event instead of the node-completion one.
 
 Public API
 ----------
@@ -519,7 +548,11 @@ def _run_broadcast(
     """
     try:
         from backend.services.analysis import compute_progress
-        from backend.services.ws_broadcaster import cast_event, publish_event
+        from backend.services.ws_broadcaster import (
+            EVENT_TYPE_NODE_COMPLETED,
+            cast_event,
+            publish_event,
+        )
 
         status: str = str(merged.get("status", "running"))
         _, _, progress_percent = compute_progress(
@@ -536,6 +569,7 @@ def _run_broadcast(
             output_preview=output_preview,
             progress_percent=progress_percent,
             is_final=is_final,
+            event_type=EVENT_TYPE_NODE_COMPLETED,
         )
         publish_event(job_id=job_id, event=event)
     except Exception as exc:
@@ -549,43 +583,166 @@ def _run_broadcast(
         )
 
 
+def _build_started_preview(node_name: str) -> str:
+    """
+    Build the lightweight output_preview for a NODE_STARTED event (T-095).
+
+    Deliberately much simpler than ``_build_output_preview`` -- a node
+    that has just started has produced no output yet to summarise, so
+    this is a fixed, cheap message rather than a dispatch table. Kept
+    as its own tiny function (instead of an inline f-string at the one
+    call site) purely so a future task can swap in a friendlier label
+    (e.g. "Fundamental Analyst starting...") without touching
+    ``_run_broadcast_started`` itself.
+
+    Args:
+        node_name: The LangGraph node name that is about to run.
+
+    Returns:
+        A short, non-empty, human-readable "starting" message.
+    """
+    return f"{node_name} starting"
+
+
+def _run_broadcast_started(
+    job_id: str,
+    node_name: str,
+    state: InvestmentState,
+) -> None:
+    """
+    Publish a live NODE_STARTED AgentStreamEvent (T-095).
+
+    Companion to ``_run_broadcast``, published the instant a node
+    begins rather than after it finishes -- called from BOTH the same
+    two places ``_run_broadcast`` is: ``_persist_after``'s wrapper
+    (before it calls ``node_fn``) and each of the 4 parallel research
+    node functions via ``_broadcast_research_node_started`` (before
+    ``_run_research_node_safely`` runs).
+
+    Reads the INCOMING ``state`` rather than a merged state -- unlike
+    ``_run_broadcast``, there is no partial dict yet to merge, since
+    the node has not run. ``progress_percent`` is computed from
+    ``state["current_node"]`` -- the node that finished LAST, i.e.
+    immediately before this one started -- via the same
+    ``backend.services.analysis.compute_progress`` every other
+    progress figure in this module already uses, so a started event's
+    percentage is never out of step with the completion event that
+    will follow it. ``status`` is always reported as ``"running"``
+    regardless of ``state["status"]``'s current value (which can still
+    read ``"pending"`` for the planner's own started event, published
+    before ``_planner_node_impl`` has had a chance to set it) -- a
+    NODE_STARTED event is itself the signal that the pipeline is now
+    actively running, so hardcoding this avoids surfacing a
+    momentarily-stale "pending" to a live viewer.
+
+    Never raises -- imports lazily, exactly like ``_run_broadcast``,
+    and catches any exception from either import so a broadcaster bug
+    can never abort the LangGraph pipeline that is the actual product
+    of an analysis run.
+
+    Args:
+        job_id:    UUID string from state.
+        node_name: The node that is about to run.
+        state:     The InvestmentState this node was invoked with,
+                   BEFORE it has produced any output.
+    """
+    try:
+        from backend.services.analysis import compute_progress
+        from backend.services.ws_broadcaster import (
+            EVENT_TYPE_NODE_STARTED,
+            cast_event,
+            publish_event,
+        )
+
+        last_completed_node = state.get("current_node")
+        _, _, progress_percent = compute_progress(
+            last_completed_node=last_completed_node,
+            status="running",
+        )
+
+        event = cast_event(
+            job_id=job_id,
+            agent=node_name,
+            status="running",
+            output_preview=_build_started_preview(node_name),
+            progress_percent=progress_percent,
+            is_final=False,
+            event_type=EVENT_TYPE_NODE_STARTED,
+        )
+        publish_event(job_id=job_id, event=event)
+    except Exception as exc:
+        # Fire-and-forget: broadcast failures are non-fatal -- log and
+        # continue, identical contract to _run_broadcast.
+        logger.error(
+            "_run_broadcast_started: failed to publish event for node=%s "
+            "job_id=%s: %s",
+            node_name,
+            job_id,
+            exc,
+        )
+
+
 def _persist_after(node_fn: _NodeFn, node_name: str) -> _NodeFn:
     """
-    Wrap a node function to persist state and broadcast progress after
-    it returns (T-033 persistence; T-049 adds the live WS broadcast).
+    Wrap a node function to broadcast NODE_STARTED before it runs, and
+    persist state + broadcast NODE_COMPLETED after it returns (T-033
+    persistence; T-049 adds the live WS completion broadcast; T-095
+    adds the started broadcast ahead of it).
 
     The wrapper:
-    1. Calls the original node function to get the partial dict.
-    2. Merges the partial dict with the incoming state to build the full
+    1. Calls _run_broadcast_started (fire-and-forget, non-fatal on
+       error) using the INCOMING state, BEFORE node_fn runs -- T-095.
+    2. Calls the original node function to get the partial dict.
+    3. Merges the partial dict with the incoming state to build the full
        state snapshot that should be persisted.
-    3. Calls _run_persist (fire-and-forget, non-fatal on error).
-    4. Calls _run_broadcast (fire-and-forget, non-fatal on error) --
-       pushes one AgentStreamEvent to any WebSocket client subscribed
-       to this job_id, built from the exact same merged state _run_persist
-       just wrote to PostgreSQL.
-    5. Returns the original partial dict unchanged so LangGraph can merge
+    4. Calls _run_persist (fire-and-forget, non-fatal on error).
+    5. Calls _run_broadcast (fire-and-forget, non-fatal on error) --
+       pushes one NODE_COMPLETED AgentStreamEvent to any WebSocket
+       client subscribed to this job_id, built from the exact same
+       merged state _run_persist just wrote to PostgreSQL.
+    6. Returns the original partial dict unchanged so LangGraph can merge
        it into shared state normally.
 
-    Only sequential nodes are wrapped -- NOT the 4 parallel research nodes.
+    Only sequential nodes are wrapped -- NOT the 4 parallel research nodes
+    (those call _broadcast_research_node_started / _broadcast_research_node
+    directly from their own function bodies -- see fundamental_node).
     Existing tests that patch ``backend.graph.nodes._run_persist`` to a
     no-op (the established T-033 pattern -- see e.g.
     test_graph_skeleton.py's ``_no_db_persist`` fixture) are unaffected
-    by the T-049 addition: ``_run_broadcast`` only touches the
-    in-process ``ws_broadcaster`` registry (no DB, no network), and a
-    job_id with zero subscribers -- true for every existing test, since
-    none of them ever calls ``ws_broadcaster.subscribe`` -- is a
-    guaranteed no-op there regardless.
+    by the T-049/T-095 additions: ``_run_broadcast``/
+    ``_run_broadcast_started`` only touch the in-process
+    ``ws_broadcaster`` registry (no DB, no network), and a job_id with
+    zero subscribers -- true for every existing test, since none of
+    them ever calls ``ws_broadcaster.subscribe`` -- is a guaranteed
+    no-op there regardless.
 
     Args:
         node_fn:   The original node function.
         node_name: The node's string name (used in logs, DB, and the
-                   broadcast event's ``agent`` field).
+                   broadcast events' ``agent`` field).
 
     Returns:
         A wrapped function with the same signature as node_fn.
     """
 
     def wrapper(state: InvestmentState) -> dict[str, Any]:
+        job_id_before: str = str(state.get("job_id", ""))
+        if job_id_before:
+            try:
+                _run_broadcast_started(
+                    job_id=job_id_before, node_name=node_name, state=state
+                )
+            except Exception as exc:
+                # Fire-and-forget: broadcast errors are non-fatal -- log
+                # and continue. node_fn must still run either way.
+                logger.error(
+                    "_persist_after: _run_broadcast_started raised for "
+                    "node=%s job_id=%s: %s",
+                    node_name,
+                    job_id_before,
+                    exc,
+                )
+
         partial: dict[str, Any] = node_fn(state)
 
         # Build a merged view: start from incoming state, overlay the
@@ -868,6 +1025,54 @@ def _broadcast_research_node(
         )
 
 
+def _broadcast_research_node_started(
+    state: InvestmentState,
+    node_name: str,
+) -> None:
+    """
+    Publish a live NODE_STARTED WebSocket event for one Send-parallel
+    research node, BEFORE it runs (T-095).
+
+    Counterpart to ``_broadcast_research_node`` (that function's own
+    docstring covers why the 4 parallel research nodes broadcast
+    directly rather than through ``_persist_after``): called at the
+    very top of each of ``fundamental_node``/``technical_node``/
+    ``sentiment_node``/``macro_node``, before
+    ``_run_research_node_safely`` does any real work, so a live viewer
+    sees this seat flip to "running" the instant the Send super-step
+    dispatches it rather than only once it (and the other 3 seats,
+    since they all run concurrently) finishes.
+
+    Never raises: mirrors ``_broadcast_research_node``'s own defence-
+    in-depth try/except around the job_id lookup and the delegated call
+    to ``_run_broadcast_started`` (which already has its own
+    fire-and-forget exception handling).
+
+    Args:
+        state:     The state this node is about to be invoked with.
+        node_name: This node's string name (the broadcast event's
+                   ``agent`` field).
+    """
+    try:
+        job_id = str(state.get("job_id", ""))
+        if not job_id:
+            logger.warning(
+                "_broadcast_research_node_started: no job_id in state "
+                "for node=%s -- skipping broadcast",
+                node_name,
+            )
+            return
+
+        _run_broadcast_started(job_id=job_id, node_name=node_name, state=state)
+    except Exception as exc:
+        logger.error(
+            "_broadcast_research_node_started: failed for node=%s job_id=%s: %s",
+            node_name,
+            state.get("job_id", ""),
+            exc,
+        )
+
+
 def fundamental_node(state: InvestmentState) -> dict[str, Any]:
     """
     LangGraph node for the Fundamental Analyst agent.
@@ -889,6 +1094,8 @@ def fundamental_node(state: InvestmentState) -> dict[str, Any]:
 
     Never raises -- a timeout or unhandled error degrades to a neutral
     FundamentalAnalysis with ``error`` set (see _run_research_node_safely).
+    Broadcasts a NODE_STARTED event (T-095) before doing any real work,
+    then the existing NODE_COMPLETED event once it returns.
 
     Returns:
         Partial state dict: ``{"fundamental": <model_dump dict>}``.
@@ -897,6 +1104,7 @@ def fundamental_node(state: InvestmentState) -> dict[str, Any]:
         "fundamental_node: running for ticker=%s",
         state.get("ticker", "unknown"),
     )
+    _broadcast_research_node_started(state, NODE_FUNDAMENTAL)
     partial = _run_research_node_safely(
         state, run_fundamental_analysis, NODE_FUNDAMENTAL, _degraded_fundamental
     )
@@ -914,6 +1122,8 @@ def technical_node(state: InvestmentState) -> dict[str, Any]:
 
     Never raises -- a timeout or unhandled error degrades to a neutral
     TechnicalAnalysis with ``error`` set (see _run_research_node_safely).
+    Broadcasts a NODE_STARTED event (T-095) before doing any real work,
+    then the existing NODE_COMPLETED event once it returns.
 
     Returns:
         Partial state dict: ``{"technical": <model_dump dict>}``.
@@ -922,6 +1132,7 @@ def technical_node(state: InvestmentState) -> dict[str, Any]:
         "technical_node: running for ticker=%s",
         state.get("ticker", "unknown"),
     )
+    _broadcast_research_node_started(state, NODE_TECHNICAL)
     partial = _run_research_node_safely(
         state, run_technical_analysis, NODE_TECHNICAL, _degraded_technical
     )
@@ -943,6 +1154,9 @@ def sentiment_node(state: InvestmentState) -> dict[str, Any]:
     Groq's daily token quota was exhausted mid-run -- previously this
     crashed the whole pipeline; now it degrades gracefully instead.
 
+    Broadcasts a NODE_STARTED event (T-095) before doing any real work,
+    then the existing NODE_COMPLETED event once it returns.
+
     Returns:
         Partial state dict: ``{"sentiment": <model_dump dict>}``.
     """
@@ -950,6 +1164,7 @@ def sentiment_node(state: InvestmentState) -> dict[str, Any]:
         "sentiment_node: running for ticker=%s",
         state.get("ticker", "unknown"),
     )
+    _broadcast_research_node_started(state, NODE_SENTIMENT)
     partial = _run_research_node_safely(
         state, run_sentiment_analysis, NODE_SENTIMENT, _degraded_sentiment
     )
@@ -967,6 +1182,8 @@ def macro_node(state: InvestmentState) -> dict[str, Any]:
 
     Never raises -- a timeout or unhandled error degrades to a neutral
     MacroAnalysis with ``error`` set (see _run_research_node_safely).
+    Broadcasts a NODE_STARTED event (T-095) before doing any real work,
+    then the existing NODE_COMPLETED event once it returns.
 
     Returns:
         Partial state dict: ``{"macro": <model_dump dict>}``.
@@ -975,6 +1192,7 @@ def macro_node(state: InvestmentState) -> dict[str, Any]:
         "macro_node: running for ticker=%s",
         state.get("ticker", "unknown"),
     )
+    _broadcast_research_node_started(state, NODE_MACRO)
     partial = _run_research_node_safely(
         state, run_macro_analysis, NODE_MACRO, _degraded_macro
     )
