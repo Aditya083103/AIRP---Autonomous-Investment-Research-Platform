@@ -9,8 +9,9 @@
 
 import { useState, type ReactNode } from "react";
 
-import { PipelineGraphView } from "@/components/graph";
+import { LiveGraphView, PipelineGraphView } from "@/components/graph";
 import { Badge, Button, Card, Input, Modal, ProgressBar, Spinner, Tooltip } from "@/components/ui";
+import { type AgentStreamEvent } from "@/hooks/useAnalysisStream";
 
 /** A labelled section wrapper so each component gets its own titled block. */
 function Section({ title, children }: { title: string; children: ReactNode }): JSX.Element {
@@ -19,6 +20,118 @@ function Section({ title, children }: { title: string; children: ReactNode }): J
       <h2 className="font-display text-xl font-semibold text-ink">{title}</h2>
       <div className="mt-6 flex flex-wrap items-start gap-4">{children}</div>
     </section>
+  );
+}
+
+/**
+ * A scripted event stream for the LiveGraphView demo below (T-096) --
+ * one batch of events per "step" a reviewer can advance through with
+ * the Play/Reset controls, so the pending -> running -> done transition
+ * and the 4 parallel research nodes lighting up together (T-096's two
+ * acceptance criteria) are both visually checkable without a live
+ * backend connection. Batch 2 in particular is the whole point: all 4
+ * research nodes' started events land in the SAME step, exactly as the
+ * real backend's Send-parallel fan-out (backend/graph/graph.py) does.
+ */
+function demoEvent(overrides: Partial<AgentStreamEvent>): AgentStreamEvent {
+  return {
+    job_id: "demo-job",
+    agent: "planner",
+    status: "running",
+    output_preview: "",
+    progress_percent: 0,
+    is_final: false,
+    event_type: "node_completed",
+    ...overrides,
+  };
+}
+
+const LIVE_GRAPH_DEMO_BATCHES: AgentStreamEvent[][] = [
+  [demoEvent({ agent: "planner", event_type: "node_started" })],
+  [demoEvent({ agent: "planner", event_type: "node_completed" })],
+  [
+    demoEvent({ agent: "fundamental_analyst", event_type: "node_started" }),
+    demoEvent({ agent: "technical_analyst", event_type: "node_started" }),
+    demoEvent({ agent: "sentiment_analyst", event_type: "node_started" }),
+    demoEvent({ agent: "macro_economist", event_type: "node_started" }),
+  ],
+  [
+    demoEvent({ agent: "fundamental_analyst", event_type: "node_completed" }),
+    demoEvent({ agent: "technical_analyst", event_type: "node_completed" }),
+    demoEvent({ agent: "sentiment_analyst", event_type: "node_completed" }),
+    demoEvent({ agent: "macro_economist", event_type: "node_completed" }),
+  ],
+  [demoEvent({ agent: "research_join", event_type: "node_started" })],
+  [demoEvent({ agent: "research_join", event_type: "node_completed" })],
+  [demoEvent({ agent: "contrarian_investor", event_type: "node_started" })],
+  [
+    demoEvent({ agent: "contrarian_investor", event_type: "node_completed" }),
+    demoEvent({ agent: "debate_loop", event_type: "node_started" }),
+  ],
+  [
+    demoEvent({ agent: "debate_loop", event_type: "node_completed" }),
+    demoEvent({ agent: "risk_officer", event_type: "node_started" }),
+  ],
+  [
+    demoEvent({ agent: "risk_officer", event_type: "node_completed" }),
+    demoEvent({ agent: "valuation_agent", event_type: "node_started" }),
+  ],
+  [
+    demoEvent({ agent: "valuation_agent", event_type: "node_completed" }),
+    demoEvent({ agent: "portfolio_manager", event_type: "node_started" }),
+  ],
+  [
+    demoEvent({ agent: "portfolio_manager", event_type: "node_completed" }),
+    demoEvent({ agent: "report_generator", event_type: "node_started" }),
+  ],
+  [
+    demoEvent({ agent: "report_generator", event_type: "node_completed" }),
+    demoEvent({ agent: "pdf_export", event_type: "node_started" }),
+  ],
+  [demoEvent({ agent: "pdf_export", event_type: "node_completed", is_final: true })],
+];
+
+/** Interactive LiveGraphView demo (T-096) -- steps through LIVE_GRAPH_DEMO_BATCHES by hand. */
+function LiveGraphDemo(): JSX.Element {
+  const [step, setStep] = useState(0);
+  const events = LIVE_GRAPH_DEMO_BATCHES.slice(0, step).flat();
+  const isComplete = step >= LIVE_GRAPH_DEMO_BATCHES.length;
+
+  return (
+    <div>
+      <div className="flex flex-wrap items-center gap-3">
+        <Button
+          variant="secondary"
+          onClick={() => setStep((current) => Math.max(0, current - 1))}
+          disabled={step === 0}
+        >
+          Back
+        </Button>
+        <Button
+          onClick={() =>
+            setStep((current) => Math.min(LIVE_GRAPH_DEMO_BATCHES.length, current + 1))
+          }
+          disabled={isComplete}
+        >
+          Step forward
+        </Button>
+        <Button variant="secondary" onClick={() => setStep(0)}>
+          Reset
+        </Button>
+        <span className="text-sm text-muted">
+          Step {step} / {LIVE_GRAPH_DEMO_BATCHES.length}
+        </span>
+      </div>
+      <div className="mt-6">
+        <LiveGraphView
+          events={events}
+          isComplete={isComplete}
+          connectionStatus={isComplete ? "closed" : "open"}
+          error={null}
+          className="w-full"
+        />
+      </div>
+    </div>
   );
 }
 
@@ -160,6 +273,20 @@ export function ComponentsPreviewPage(): JSX.Element {
         </p>
         <div className="mt-6">
           <PipelineGraphView className="w-full" />
+        </div>
+      </section>
+
+      <section className="border-b border-line py-10 first:pt-0 last:border-b-0">
+        <h2 className="font-display text-xl font-semibold text-ink">Live pipeline graph (T-096)</h2>
+        <p className="mt-2 max-w-memo text-sm text-muted">
+          {"The same topology, wired to a real (hand-scripted, for this preview) event " +
+            'stream -- each node pulses "running" the instant its NODE_STARTED event ' +
+            'arrives and flips to a checkmarked "done" on completion, exactly as it will ' +
+            'during a live analysis run. Step forward to "Step 3" to see all 4 research ' +
+            "nodes pulse simultaneously."}
+        </p>
+        <div className="mt-6">
+          <LiveGraphDemo />
         </div>
       </section>
     </div>
