@@ -5,10 +5,21 @@ backend/graph/nodes.py (_run_broadcast, _build_output_preview,
 _summarise_agent_output, and _persist_after's new second
 fire-and-forget call).
 
+T-095 extends this file with sections 8-10 below: _run_broadcast_started,
+_build_started_preview, _broadcast_research_node_started, and the
+"started fires before completed, for every node" ordering guarantee --
+both for a _persist_after-wrapped sequential node and for a Send-parallel
+research node.
+
 Acceptance criteria (from project plan, T-049):
   - WebSocket sends event per agent completion
   - frontend receives and displays in order
   - connection closes cleanly
+
+Acceptance criteria (from project plan, T-095):
+  - Every node emits a started event before its completion event
+  - Existing completion event contract unchanged
+  - WS clients ignoring the new event type still work
 
 This file is the backend.graph.nodes-side counterpart to
 test_ws_broadcaster.py (which covers the broadcaster module in
@@ -34,9 +45,17 @@ Test strategy
      _run_persist and _run_broadcast; a _run_broadcast failure does not
      prevent _run_persist (or vice versa) and does not propagate
   5. End-to-end ordering -- subscribing before invoking a real
-     sequential node function delivers an event in the broadcaster
-     queue, proving the node -> _persist_after -> _run_broadcast ->
+     sequential node function delivers events in the broadcaster
+     queue, proving the node -> _persist_after -> _run_broadcast* ->
      ws_broadcaster.publish_event chain is wired correctly
+  6. Research node previews (fundamental/technical/sentiment/macro)
+  7. The 4 Send-parallel research nodes broadcast live (completion)
+  8. (T-095) _run_broadcast_started / _build_started_preview -- shape,
+     progress_percent, hardcoded status='running', never raises
+  9. (T-095) _persist_after now calls _run_broadcast_started BEFORE
+     node_fn runs, using the incoming (unmerged) state
+  10. (T-095) _broadcast_research_node_started -- the 4 parallel
+      research nodes' counterpart, called before _run_research_node_safely
 
 All external calls (DB, LLMs, Redis, APIs) are mocked or bypassed via
 patching _run_persist, matching the existing T-033 test convention
@@ -490,9 +509,36 @@ class TestEndToEndNodeToBroadcaster:
         with patch("backend.graph.nodes._run_persist"):
             planner_node(state)
 
-        event = await asyncio.wait_for(queue.get(), timeout=1.0)
-        assert event["job_id"] == _JOB_ID
-        assert event["agent"] == "planner"
+        # T-095: planner_node now also publishes a NODE_STARTED event
+        # ahead of its completion event -- drain that first, then
+        # assert on the completion event exactly as before.
+        started = await asyncio.wait_for(queue.get(), timeout=1.0)
+        completed = await asyncio.wait_for(queue.get(), timeout=1.0)
+        assert started["event_type"] == "node_started"
+        assert completed["event_type"] == "node_completed"
+        assert completed["job_id"] == _JOB_ID
+        assert completed["agent"] == "planner"
+
+    @pytest.mark.asyncio
+    async def test_started_event_precedes_completed_event(self) -> None:
+        """T-095: the started event for a node always arrives before
+        that same node's own completed event -- the literal acceptance
+        criterion ("every node emits a started event before its
+        completion event")."""
+        from backend.graph.nodes import planner_node
+
+        queue = await subscribe(_JOB_ID)
+        state = _make_state()
+
+        with patch("backend.graph.nodes._run_persist"):
+            planner_node(state)
+
+        first = await asyncio.wait_for(queue.get(), timeout=1.0)
+        second = await asyncio.wait_for(queue.get(), timeout=1.0)
+        assert first["event_type"] == "node_started"
+        assert first["agent"] == "planner"
+        assert second["event_type"] == "node_completed"
+        assert second["agent"] == "planner"
 
     @pytest.mark.asyncio
     async def test_two_sequential_nodes_are_delivered_in_order(self) -> None:
@@ -505,10 +551,16 @@ class TestEndToEndNodeToBroadcaster:
             planner_node(state)
             research_join_node(state)
 
-        first = await asyncio.wait_for(queue.get(), timeout=1.0)
-        second = await asyncio.wait_for(queue.get(), timeout=1.0)
-        assert first["agent"] == "planner"
-        assert second["agent"] == "research_join"
+        # T-095: each of the 2 sequential nodes now publishes 2 events
+        # (started, then completed) instead of 1 -- 4 events total, in
+        # this exact order.
+        events = [await asyncio.wait_for(queue.get(), timeout=1.0) for _ in range(4)]
+        assert [(e["agent"], e["event_type"]) for e in events] == [
+            ("planner", "node_started"),
+            ("planner", "node_completed"),
+            ("research_join", "node_started"),
+            ("research_join", "node_completed"),
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -728,6 +780,407 @@ class TestResearchNodesBroadcastLive:
         ):
             fundamental_node(state)
 
+        # T-095: fundamental_node now also publishes a NODE_STARTED
+        # event ahead of its completion event -- drain that first.
+        started = await asyncio.wait_for(queue.get(), timeout=1.0)
+        assert started["event_type"] == "node_started"
+        assert started["agent"] == "fundamental_analyst"
+
         event = await asyncio.wait_for(queue.get(), timeout=1.0)
+        assert event["event_type"] == "node_completed"
         assert event["agent"] == "fundamental_analyst"
         assert "6/10" in event["output_preview"]
+
+
+# ---------------------------------------------------------------------------
+# 8. (T-095) _run_broadcast_started / _build_started_preview
+# ---------------------------------------------------------------------------
+
+
+class TestBuildStartedPreview:
+    def test_returns_non_empty_string_for_any_node(self) -> None:
+        from backend.graph.nodes import _build_started_preview
+
+        preview = _build_started_preview("fundamental_analyst")
+        assert preview
+        assert "fundamental_analyst" in preview
+
+    def test_different_nodes_get_different_previews(self) -> None:
+        from backend.graph.nodes import _build_started_preview
+
+        started_preview = _build_started_preview("planner")
+        other_preview = _build_started_preview("risk_officer")
+        assert started_preview != other_preview
+
+
+class TestRunBroadcastStarted:
+    def test_calls_publish_event_once(self) -> None:
+        from backend.graph.nodes import NODE_PLANNER, _run_broadcast_started
+
+        state = _make_state()
+        with patch("backend.services.ws_broadcaster.publish_event") as mock_publish:
+            _run_broadcast_started(job_id=_JOB_ID, node_name=NODE_PLANNER, state=state)
+        mock_publish.assert_called_once()
+
+    def test_event_type_is_node_started(self) -> None:
+        from backend.graph.nodes import NODE_PLANNER, _run_broadcast_started
+
+        state = _make_state()
+        with patch("backend.services.ws_broadcaster.publish_event") as mock_publish:
+            _run_broadcast_started(job_id=_JOB_ID, node_name=NODE_PLANNER, state=state)
+        _, kwargs = mock_publish.call_args
+        assert kwargs["event"]["event_type"] == "node_started"
+
+    def test_status_is_always_running(self) -> None:
+        """Even when state['status'] is still 'pending' (the value
+        before planner_node's own impl has run), the started event
+        reports 'running' -- the started event IS the "now running"
+        signal."""
+        from backend.graph.nodes import NODE_PLANNER, _run_broadcast_started
+
+        state = _make_state(status="pending")
+        with patch("backend.services.ws_broadcaster.publish_event") as mock_publish:
+            _run_broadcast_started(job_id=_JOB_ID, node_name=NODE_PLANNER, state=state)
+        _, kwargs = mock_publish.call_args
+        assert kwargs["event"]["status"] == "running"
+
+    def test_is_final_always_false(self) -> None:
+        from backend.graph.nodes import NODE_PDF_EXPORT, _run_broadcast_started
+
+        state = _make_state(status="running")
+        with patch("backend.services.ws_broadcaster.publish_event") as mock_publish:
+            _run_broadcast_started(
+                job_id=_JOB_ID, node_name=NODE_PDF_EXPORT, state=state
+            )
+        _, kwargs = mock_publish.call_args
+        assert kwargs["event"]["is_final"] is False
+
+    def test_event_job_id_and_agent_match(self) -> None:
+        from backend.graph.nodes import NODE_RISK, _run_broadcast_started
+
+        state = _make_state()
+        with patch("backend.services.ws_broadcaster.publish_event") as mock_publish:
+            _run_broadcast_started(job_id=_JOB_ID, node_name=NODE_RISK, state=state)
+        _, kwargs = mock_publish.call_args
+        assert kwargs["event"]["job_id"] == _JOB_ID
+        assert kwargs["event"]["agent"] == NODE_RISK
+
+    def test_progress_percent_uses_current_node_not_the_node_starting(self) -> None:
+        """The progress figure for a started event must reflect what
+        was ALREADY completed before this node began -- i.e.
+        state['current_node'] -- not this node's own (not-yet-reached)
+        position in the sequence."""
+        from backend.graph.nodes import NODE_VALUATION, _run_broadcast_started
+        from backend.services.analysis import compute_progress
+
+        state = _make_state(current_node="risk_officer", status="running")
+        with patch("backend.services.ws_broadcaster.publish_event") as mock_publish:
+            _run_broadcast_started(
+                job_id=_JOB_ID, node_name=NODE_VALUATION, state=state
+            )
+        _, kwargs = mock_publish.call_args
+
+        _, _, expected_percent = compute_progress(
+            last_completed_node="risk_officer", status="running"
+        )
+        assert kwargs["event"]["progress_percent"] == expected_percent
+
+    def test_no_current_node_yet_gives_zero_percent(self) -> None:
+        """The planner's own started event -- nothing has completed
+        yet -- reports 0%, matching compute_progress's own
+        'not started' branch."""
+        from backend.graph.nodes import NODE_PLANNER, _run_broadcast_started
+
+        state = _make_state(current_node=None, status="pending")
+        with patch("backend.services.ws_broadcaster.publish_event") as mock_publish:
+            _run_broadcast_started(job_id=_JOB_ID, node_name=NODE_PLANNER, state=state)
+        _, kwargs = mock_publish.call_args
+        assert kwargs["event"]["progress_percent"] == 0
+
+    def test_never_raises_when_publish_event_raises(self) -> None:
+        from backend.graph.nodes import NODE_PLANNER, _run_broadcast_started
+
+        state = _make_state()
+        with patch(
+            "backend.services.ws_broadcaster.publish_event",
+            side_effect=RuntimeError("registry exploded"),
+        ):
+            # Must not raise.
+            _run_broadcast_started(job_id=_JOB_ID, node_name=NODE_PLANNER, state=state)
+
+    def test_never_raises_when_compute_progress_raises(self) -> None:
+        from backend.graph.nodes import NODE_PLANNER, _run_broadcast_started
+
+        state = _make_state()
+        with patch(
+            "backend.services.analysis.compute_progress",
+            side_effect=RuntimeError("boom"),
+        ):
+            # Must not raise.
+            _run_broadcast_started(job_id=_JOB_ID, node_name=NODE_PLANNER, state=state)
+
+
+# ---------------------------------------------------------------------------
+# 9. (T-095) _persist_after calls _run_broadcast_started BEFORE node_fn
+# ---------------------------------------------------------------------------
+
+
+class TestPersistAfterCallsBroadcastStarted:
+    def test_wrapper_calls_broadcast_started(self) -> None:
+        from backend.graph.nodes import _persist_after
+
+        mock_fn = MagicMock(return_value={"current_node": "planner"})
+        wrapped = _persist_after(mock_fn, "planner")
+        state = _make_state()
+        with (
+            patch("backend.graph.nodes._run_persist"),
+            patch("backend.graph.nodes._run_broadcast"),
+            patch("backend.graph.nodes._run_broadcast_started") as mock_started,
+        ):
+            wrapped(state)
+        mock_started.assert_called_once()
+
+    def test_broadcast_started_called_before_node_fn(self) -> None:
+        """The literal T-095 acceptance criterion: the started
+        broadcast happens before the node's own work runs."""
+        from backend.graph.nodes import _persist_after
+
+        call_order: list[str] = []
+
+        def mock_fn(state: InvestmentState) -> dict[str, Any]:
+            call_order.append("node_fn")
+            return {"current_node": "planner"}
+
+        wrapped = _persist_after(mock_fn, "planner")
+        state = _make_state()
+        with (
+            patch("backend.graph.nodes._run_persist"),
+            patch("backend.graph.nodes._run_broadcast"),
+            patch(
+                "backend.graph.nodes._run_broadcast_started",
+                side_effect=lambda **_: call_order.append("broadcast_started"),
+            ),
+        ):
+            wrapped(state)
+
+        assert call_order == ["broadcast_started", "node_fn"]
+
+    def test_broadcast_started_receives_incoming_state_not_merged(self) -> None:
+        """_run_broadcast_started must be called with the state the
+        node was INVOKED with (no current_node/status update from this
+        node yet) -- there is no partial dict to merge before the node
+        has run."""
+        from backend.graph.nodes import _persist_after
+
+        mock_fn = MagicMock(
+            return_value={"current_node": "risk_officer", "status": "completed"}
+        )
+        wrapped = _persist_after(mock_fn, "risk_officer")
+        state = _make_state(current_node="valuation_agent", status="running")
+        with (
+            patch("backend.graph.nodes._run_persist"),
+            patch("backend.graph.nodes._run_broadcast"),
+            patch("backend.graph.nodes._run_broadcast_started") as mock_started,
+        ):
+            wrapped(state)
+        _, kwargs = mock_started.call_args
+        assert kwargs["state"]["current_node"] == "valuation_agent"
+        assert kwargs["state"]["status"] == "running"
+
+    def test_broadcast_started_failure_does_not_prevent_node_fn_running(self) -> None:
+        from backend.graph.nodes import _persist_after
+
+        mock_fn = MagicMock(return_value={"current_node": "planner"})
+        wrapped = _persist_after(mock_fn, "planner")
+        state = _make_state()
+        with (
+            patch("backend.graph.nodes._run_persist"),
+            patch("backend.graph.nodes._run_broadcast"),
+            patch(
+                "backend.graph.nodes._run_broadcast_started",
+                side_effect=RuntimeError("broadcast exploded"),
+            ),
+        ):
+            result = wrapped(state)
+        mock_fn.assert_called_once()
+        assert result == {"current_node": "planner"}
+
+    def test_wrapper_skips_broadcast_started_when_no_job_id(self) -> None:
+        from backend.graph.nodes import _persist_after
+
+        mock_fn = MagicMock(return_value={"current_node": "planner"})
+        wrapped = _persist_after(mock_fn, "planner")
+        empty_state: InvestmentState = cast(InvestmentState, {})
+        with (
+            patch("backend.graph.nodes._run_persist"),
+            patch("backend.graph.nodes._run_broadcast"),
+            patch("backend.graph.nodes._run_broadcast_started") as mock_started,
+        ):
+            wrapped(empty_state)
+        mock_started.assert_not_called()
+
+    def test_wrapper_passes_same_node_name_to_broadcast_started(self) -> None:
+        from backend.graph.nodes import _persist_after
+
+        mock_fn = MagicMock(return_value={"current_node": "risk_officer"})
+        wrapped = _persist_after(mock_fn, "risk_officer")
+        state = _make_state()
+        with (
+            patch("backend.graph.nodes._run_persist"),
+            patch("backend.graph.nodes._run_broadcast"),
+            patch("backend.graph.nodes._run_broadcast_started") as mock_started,
+        ):
+            wrapped(state)
+        _, kwargs = mock_started.call_args
+        assert kwargs["node_name"] == "risk_officer"
+
+
+# ---------------------------------------------------------------------------
+# 10. (T-095) _broadcast_research_node_started -- the 4 parallel research
+#     nodes' counterpart, called before _run_research_node_safely
+# ---------------------------------------------------------------------------
+
+
+class TestBroadcastResearchNodeStarted:
+    def test_calls_run_broadcast_started(self) -> None:
+        from backend.graph.nodes import (
+            NODE_FUNDAMENTAL,
+            _broadcast_research_node_started,
+        )
+
+        state = _make_state()
+        with patch("backend.graph.nodes._run_broadcast_started") as mock_started:
+            _broadcast_research_node_started(state, NODE_FUNDAMENTAL)
+        mock_started.assert_called_once()
+        _, kwargs = mock_started.call_args
+        assert kwargs["job_id"] == _JOB_ID
+        assert kwargs["node_name"] == NODE_FUNDAMENTAL
+
+    def test_skips_when_no_job_id(self) -> None:
+        from backend.graph.nodes import (
+            NODE_FUNDAMENTAL,
+            _broadcast_research_node_started,
+        )
+
+        empty_state: InvestmentState = cast(InvestmentState, {})
+        with patch("backend.graph.nodes._run_broadcast_started") as mock_started:
+            _broadcast_research_node_started(empty_state, NODE_FUNDAMENTAL)
+        mock_started.assert_not_called()
+
+    def test_never_raises_when_run_broadcast_started_raises(self) -> None:
+        from backend.graph.nodes import (
+            NODE_FUNDAMENTAL,
+            _broadcast_research_node_started,
+        )
+
+        state = _make_state()
+        with patch(
+            "backend.graph.nodes._run_broadcast_started",
+            side_effect=RuntimeError("exploded"),
+        ):
+            # Must not raise.
+            _broadcast_research_node_started(state, NODE_FUNDAMENTAL)
+
+
+class TestResearchNodesBroadcastStartedBeforeWork:
+    """The literal T-095 acceptance criterion, applied to the 4
+    Send-parallel research nodes: the started broadcast fires before
+    _run_research_node_safely does any real work."""
+
+    def test_fundamental_node_broadcasts_started_before_research(self) -> None:
+        from backend.graph.nodes import fundamental_node
+
+        call_order: list[str] = []
+        state = _make_state()
+
+        def _fake_research(*args: object, **kwargs: object) -> dict[str, Any]:
+            call_order.append("research")
+            return {"fundamental": {"agent_name": "fundamental_analyst"}}
+
+        with (
+            patch(
+                "backend.graph.nodes._broadcast_research_node_started",
+                side_effect=lambda *_: call_order.append("started"),
+            ),
+            patch(
+                "backend.graph.nodes._run_research_node_safely",
+                side_effect=_fake_research,
+            ),
+            patch("backend.graph.nodes._broadcast_research_node"),
+        ):
+            fundamental_node(state)
+
+        assert call_order == ["started", "research"]
+
+    def test_technical_node_calls_broadcast_started(self) -> None:
+        from backend.graph.nodes import NODE_TECHNICAL, technical_node
+
+        state = _make_state()
+        with (
+            patch(
+                "backend.graph.nodes._run_research_node_safely",
+                return_value={"technical": {"agent_name": "technical_analyst"}},
+            ),
+            patch(
+                "backend.graph.nodes._broadcast_research_node_started"
+            ) as mock_started,
+            patch("backend.graph.nodes._broadcast_research_node"),
+        ):
+            technical_node(state)
+        mock_started.assert_called_once_with(state, NODE_TECHNICAL)
+
+    def test_sentiment_node_calls_broadcast_started(self) -> None:
+        from backend.graph.nodes import NODE_SENTIMENT, sentiment_node
+
+        state = _make_state()
+        with (
+            patch(
+                "backend.graph.nodes._run_research_node_safely",
+                return_value={"sentiment": {"agent_name": "news_sentiment"}},
+            ),
+            patch(
+                "backend.graph.nodes._broadcast_research_node_started"
+            ) as mock_started,
+            patch("backend.graph.nodes._broadcast_research_node"),
+        ):
+            sentiment_node(state)
+        mock_started.assert_called_once_with(state, NODE_SENTIMENT)
+
+    def test_macro_node_calls_broadcast_started(self) -> None:
+        from backend.graph.nodes import NODE_MACRO, macro_node
+
+        state = _make_state()
+        with (
+            patch(
+                "backend.graph.nodes._run_research_node_safely",
+                return_value={"macro": {"agent_name": "macro_economist"}},
+            ),
+            patch(
+                "backend.graph.nodes._broadcast_research_node_started"
+            ) as mock_started,
+            patch("backend.graph.nodes._broadcast_research_node"),
+        ):
+            macro_node(state)
+        mock_started.assert_called_once_with(state, NODE_MACRO)
+
+    @pytest.mark.asyncio
+    async def test_fundamental_node_started_event_delivered_before_completed(
+        self,
+    ) -> None:
+        """End-to-end: a real subscriber receives the NODE_STARTED
+        event for fundamental_node strictly before the completion
+        event -- not just a mock call-order assertion."""
+        from backend.graph.nodes import fundamental_node
+
+        queue = await subscribe(_JOB_ID)
+        state = _make_state()
+        with patch(
+            "backend.graph.nodes._run_research_node_safely",
+            return_value={"fundamental": {"agent_name": "fundamental_analyst"}},
+        ):
+            fundamental_node(state)
+
+        first = await asyncio.wait_for(queue.get(), timeout=1.0)
+        second = await asyncio.wait_for(queue.get(), timeout=1.0)
+        assert first["event_type"] == "node_started"
+        assert second["event_type"] == "node_completed"

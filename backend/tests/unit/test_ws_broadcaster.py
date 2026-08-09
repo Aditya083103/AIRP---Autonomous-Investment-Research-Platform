@@ -1,6 +1,9 @@
 # backend/tests/unit/test_ws_broadcaster.py
 """
 Unit tests for T-049: backend/services/ws_broadcaster.py
+(T-095 adds section 7 below: the EVENT_TYPE_NODE_STARTED /
+EVENT_TYPE_NODE_COMPLETED constants and cast_event's new event_type
+parameter.)
 
 Acceptance criteria (from project plan, T-049):
   - WebSocket sends event per agent completion
@@ -10,13 +13,15 @@ Acceptance criteria (from project plan, T-049):
 This file covers the in-process pub/sub registry in isolation (no
 FastAPI, no WebSocket, no DB) -- the WebSocket route handler itself is
 covered separately in test_websocket_router.py, and the
-backend.graph.nodes integration (_run_broadcast, _build_output_preview)
-is covered in test_ws_broadcast_nodes.py.
+backend.graph.nodes integration (_run_broadcast, _run_broadcast_started,
+_build_output_preview) is covered in test_ws_broadcast_nodes.py.
 
 Test strategy
 -------------
   1. cast_event           -- builds a fully-populated, correctly-typed
-                              AgentStreamEvent
+                              AgentStreamEvent; event_type defaults to
+                              EVENT_TYPE_NODE_COMPLETED (T-095) and can
+                              be overridden explicitly
   2. subscribe / unsubscribe -- registry bookkeeping (count goes up/down,
                               job_id key created/removed at the right times)
   3. publish_event        -- delivers to every subscriber of a job_id,
@@ -29,6 +34,7 @@ Test strategy
   6. Error tolerance      -- publish_event never raises even if a
                               subscriber's loop is already closed
   7. TERMINAL_STATUSES    -- contains exactly 'completed' and 'failed'
+  8. EVENT_TYPE_* constants (T-095) -- exact values, and distinctness
 
 All tests run on the real asyncio event loop (asyncio.run / pytest-asyncio)
 since this module's entire job is to coordinate real asyncio.Queue /
@@ -117,7 +123,34 @@ class TestCastEvent:
             "output_preview": "Risk score 4/10",
             "progress_percent": 70,
             "is_final": False,
+            "event_type": "node_completed",
         }
+
+    def test_event_type_defaults_to_node_completed(self) -> None:
+        """T-095: a call site written before T-095 that never passes
+        event_type still gets the same event shape it always did, just
+        with this one additional field carrying a stable default."""
+        event = cast_event(
+            job_id="job-1",
+            agent="planner",
+            status="running",
+            output_preview="Planner starting",
+            progress_percent=0,
+            is_final=False,
+        )
+        assert event["event_type"] == "node_completed"
+
+    def test_event_type_can_be_set_to_node_started(self) -> None:
+        event = cast_event(
+            job_id="job-1",
+            agent="planner",
+            status="running",
+            output_preview="planner starting",
+            progress_percent=0,
+            is_final=False,
+            event_type="node_started",
+        )
+        assert event["event_type"] == "node_started"
 
     def test_is_final_true_is_preserved(self) -> None:
         event = cast_event(
@@ -336,7 +369,32 @@ class TestTerminalStatuses:
 
 
 # ---------------------------------------------------------------------------
-# 6. Public API
+# 7. T-095 -- EVENT_TYPE_NODE_STARTED / EVENT_TYPE_NODE_COMPLETED constants
+# ---------------------------------------------------------------------------
+
+
+class TestEventTypeConstants:
+    def test_node_started_value(self) -> None:
+        from backend.services.ws_broadcaster import EVENT_TYPE_NODE_STARTED
+
+        assert EVENT_TYPE_NODE_STARTED == "node_started"
+
+    def test_node_completed_value(self) -> None:
+        from backend.services.ws_broadcaster import EVENT_TYPE_NODE_COMPLETED
+
+        assert EVENT_TYPE_NODE_COMPLETED == "node_completed"
+
+    def test_constants_are_distinct(self) -> None:
+        from backend.services.ws_broadcaster import (
+            EVENT_TYPE_NODE_COMPLETED,
+            EVENT_TYPE_NODE_STARTED,
+        )
+
+        assert EVENT_TYPE_NODE_STARTED != EVENT_TYPE_NODE_COMPLETED
+
+
+# ---------------------------------------------------------------------------
+# 8. Public API
 # ---------------------------------------------------------------------------
 
 
