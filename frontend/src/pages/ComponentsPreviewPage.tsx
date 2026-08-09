@@ -9,6 +9,7 @@
 
 import { useState, type ReactNode } from "react";
 
+import { PipelineGraphView } from "@/components/graph";
 import { Badge, Button, Card, Input, Modal, ProgressBar, Spinner, Tooltip } from "@/components/ui";
 
 /** A labelled section wrapper so each component gets its own titled block. */
@@ -147,6 +148,20 @@ export function ComponentsPreviewPage(): JSX.Element {
           <Button variant="secondary">Bottom placement</Button>
         </Tooltip>
       </Section>
+
+      <section className="border-b border-line py-10 first:pt-0 last:border-b-0">
+        <h2 className="font-display text-xl font-semibold text-ink">Pipeline graph (T-094)</h2>
+        <p className="mt-2 max-w-memo text-sm text-muted">
+          The static LangGraph topology from{" "}
+          <code className="font-mono text-xs">backend/graph/graph.py</code> -- all 15 real nodes
+          plus the START/END sentinels, including the two mutually-exclusive T-032 routing branches
+          and the T-040 debate_loop cycle (highlighted, animated). Every node here is rendered in
+          its default state; T-096 wires this same topology to live WebSocket events.
+        </p>
+        <div className="mt-6">
+          <PipelineGraphView className="w-full" />
+        </div>
+      </section>
     </div>
   );
 }
