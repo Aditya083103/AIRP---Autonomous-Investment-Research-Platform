@@ -5,6 +5,13 @@
 // (jsdom's own WebSocket never actually connects to anything) so these
 // tests run fully offline and deterministically -- no real network
 // call, no timing flakiness.
+//
+// T-096 adds a small new section: event_type is optional on the wire
+// (T-095 backend addition), so EVENT_1/EVENT_2 below deliberately stay
+// exactly as they were before T-095 -- no event_type field at all --
+// proving old-shaped fixtures are still accepted, and a handful of
+// dedicated tests confirm a message that DOES carry event_type passes
+// through untouched too.
 
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -230,5 +237,60 @@ describe("useAnalysisStream", () => {
     await waitFor(() =>
       expect(result.current.error).toBe("Analysis job not found, or it does not belong to you."),
     );
+  });
+
+  describe("event_type (T-096)", () => {
+    it("still accepts a message with no event_type field at all", async () => {
+      // EVENT_1/EVENT_2 above are the exact pre-T-095 shape -- no
+      // event_type key. This is the literal "WS clients ignoring the
+      // new event type still work" acceptance criterion, applied to
+      // this hook's own runtime guard.
+      vi.stubGlobal("WebSocket", FakeWebSocket);
+
+      const { result } = renderHook(() =>
+        useAnalysisStream({ jobId: "job-1", token: "jwt-token" }),
+      );
+
+      act(() => {
+        lastSocket().emitMessage(EVENT_1);
+      });
+
+      await waitFor(() => expect(result.current.events).toHaveLength(1));
+      expect(result.current.events[0]?.event_type).toBeUndefined();
+    });
+
+    it("passes event_type through untouched when the message does carry it", async () => {
+      vi.stubGlobal("WebSocket", FakeWebSocket);
+
+      const { result } = renderHook(() =>
+        useAnalysisStream({ jobId: "job-1", token: "jwt-token" }),
+      );
+
+      act(() => {
+        lastSocket().emitMessage({ ...EVENT_1, event_type: "node_started" });
+      });
+
+      await waitFor(() => expect(result.current.events).toHaveLength(1));
+      expect(result.current.events[0]?.event_type).toBe("node_started");
+    });
+
+    it("rejects a message where event_type is present but not a string", async () => {
+      vi.stubGlobal("WebSocket", FakeWebSocket);
+
+      const { result } = renderHook(() =>
+        useAnalysisStream({ jobId: "job-1", token: "jwt-token" }),
+      );
+
+      act(() => {
+        lastSocket().emitMessage({ ...EVENT_1, event_type: 123 });
+      });
+
+      await waitFor(() =>
+        expect(result.current.error).toBe(
+          "Received a message that does not match AgentStreamEvent.",
+        ),
+      );
+      expect(result.current.events).toHaveLength(0);
+    });
   });
 });

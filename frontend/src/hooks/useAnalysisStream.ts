@@ -22,9 +22,35 @@
 //
 // Wire format (must match backend.services.ws_broadcaster.AgentStreamEvent
 // and backend.models.schemas.AgentStreamEventResponse exactly):
-//   { job_id, agent, status, output_preview, progress_percent, is_final }
+//   { job_id, agent, status, output_preview, progress_percent, is_final,
+//     event_type }
+//
+// T-096 addition: `event_type` ("node_started" | "node_completed", added
+// backend-side in T-095) is now part of the wire shape. It stays OPTIONAL
+// on the TypeScript side and in the isAgentStreamEvent runtime guard
+// below -- a message with no event_type at all (any fixture, mock, or
+// hand-built event written before T-095 shipped, including every event
+// already exercised by this hook's own pre-T-096 test suite) is still a
+// perfectly valid AgentStreamEvent. This is the frontend-side half of the
+// "WS clients ignoring the new event type still work" acceptance
+// criterion T-095's own backend doc already establishes -- this hook
+// itself is exactly such a client until T-096 (src/lib/graph/
+// liveGraphState.ts) reads the field.
 
 import { useEffect, useRef, useState } from "react";
+
+/**
+ * A node has just begun executing -- published before any of its real
+ * work runs (backend.graph.nodes._run_broadcast_started, T-095).
+ */
+export const EVENT_TYPE_NODE_STARTED = "node_started";
+
+/**
+ * A node has just finished. Also the value a message carries when it
+ * predates T-095 and has no event_type field at all -- see
+ * isAgentStreamEvent below.
+ */
+export const EVENT_TYPE_NODE_COMPLETED = "node_completed";
 
 /**
  * One message received over WS /api/v1/analysis/{job_id}/stream.
@@ -44,6 +70,18 @@ export interface AgentStreamEvent {
   output_preview: string;
   progress_percent: number;
   is_final: boolean;
+  /**
+   * (T-096) "node_started" or "node_completed" -- see
+   * EVENT_TYPE_NODE_STARTED/EVENT_TYPE_NODE_COMPLETED above. Optional:
+   * the real backend always sends it as of T-095, but this field is
+   * deliberately not required so a message without it (any fixture
+   * predating T-095) still passes isAgentStreamEvent's runtime guard.
+   * A consumer that cares about the distinction (src/lib/graph/
+   * liveGraphState.ts) treats a missing event_type as
+   * EVENT_TYPE_NODE_COMPLETED, matching backend.services.
+   * ws_broadcaster.cast_event's own default.
+   */
+  event_type?: string;
 }
 
 /** Connection lifecycle as observed from the browser side. */
@@ -113,7 +151,8 @@ function isAgentStreamEvent(value: unknown): value is AgentStreamEvent {
     typeof candidate.status === "string" &&
     typeof candidate.output_preview === "string" &&
     typeof candidate.progress_percent === "number" &&
-    typeof candidate.is_final === "boolean"
+    typeof candidate.is_final === "boolean" &&
+    (candidate.event_type === undefined || typeof candidate.event_type === "string")
   );
 }
 
