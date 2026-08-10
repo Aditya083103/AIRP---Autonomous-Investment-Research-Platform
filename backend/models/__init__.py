@@ -10,9 +10,12 @@ from backend.models.orm import (
     AgentOutput,
     Analysis,
     Base,
+    ChatMessage,
+    ChatSession,
     Company,
     InvestmentMemo,
     User,
+    UserPreferences,
     VerdictOutcome,
 )
 
@@ -24,4 +27,7 @@ __all__ = [
     "AgentOutput",
     "InvestmentMemo",
     "VerdictOutcome",
+    "ChatSession",
+    "ChatMessage",
+    "UserPreferences",
 ]

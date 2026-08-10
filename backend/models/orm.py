@@ -11,6 +11,11 @@ Defines the six core tables that back the AIRP system:
     investment_memos — Final PDF memo and BUY/HOLD/SELL verdict per analysis
     verdict_outcomes — Verdict Accuracy Tracker (T-087); scores a past verdict
                        against the real price outcome at a later horizon
+    chat_sessions     — AIRP Assistant (T-099); one row per chat conversation,
+                        memo-scoped (analysis_id set) or portfolio-wide (NULL)
+    chat_messages     — AIRP Assistant (T-099); one row per message in a session
+    user_preferences  — AIRP Assistant (T-099); one row per user's chat/display
+                        settings
 
 Design decisions
 ────────────────
@@ -44,6 +49,7 @@ import uuid
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     DateTime,
     Enum,
     ForeignKey,
@@ -53,6 +59,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text as sa_text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -97,6 +104,37 @@ ExchangeEnum = Enum(
     "NSE",
     "BSE",
     name="exchange",
+)
+
+#: Whether a chat session is scoped to one analysis or spans the portfolio
+ChatSessionTypeEnum = Enum(
+    "memo_scoped",
+    "portfolio_wide",
+    name="chat_session_type",
+)
+
+#: Speaker role for a single chat message
+ChatMessageRoleEnum = Enum(
+    "user",
+    "assistant",
+    "system",
+    "tool",
+    name="chat_message_role",
+)
+
+#: UI theme preference
+ThemePreferenceEnum = Enum(
+    "light",
+    "dark",
+    "system",
+    name="theme_preference",
+)
+
+#: AIRP Assistant reply verbosity preference
+ChatResponseStyleEnum = Enum(
+    "concise",
+    "detailed",
+    name="chat_response_style",
 )
 
 
@@ -179,6 +217,17 @@ class User(Base):
     analyses: Mapped[list[Analysis]] = relationship(
         "Analysis",
         back_populates="requested_by_user",
+        cascade="all, delete-orphan",
+    )
+    chat_sessions: Mapped[list[ChatSession]] = relationship(
+        "ChatSession",
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+    preferences: Mapped[Optional[UserPreferences]] = relationship(
+        "UserPreferences",
+        back_populates="user",
+        uselist=False,
         cascade="all, delete-orphan",
     )
 
@@ -373,6 +422,11 @@ class Analysis(Base):
     )
     verdict_outcomes: Mapped[list[VerdictOutcome]] = relationship(
         "VerdictOutcome",
+        back_populates="analysis",
+        cascade="all, delete-orphan",
+    )
+    chat_sessions: Mapped[list[ChatSession]] = relationship(
+        "ChatSession",
         back_populates="analysis",
         cascade="all, delete-orphan",
     )
@@ -729,3 +783,297 @@ class VerdictOutcome(Base):
             f" verdict={self.verdict!r}"
             f" horizon={self.evaluation_horizon_days}d>"
         )
+
+
+# ---------------------------------------------------------------------------
+# Table: chat_sessions
+# ---------------------------------------------------------------------------
+
+
+class ChatSession(Base):
+    """
+    AIRP Assistant chat session (T-099, Phase 10).
+
+    One row per conversation. A session is either:
+
+    * **memo-scoped** — ``session_type='memo_scoped'``, ``analysis_id`` set —
+      used for "ask about this memo" Q&A grounded in one analysis's agent
+      outputs, debate transcript, and decision (T-100 builds the context
+      builder this scope feeds).
+    * **portfolio-wide** — ``session_type='portfolio_wide'``,
+      ``analysis_id`` NULL — used for cross-portfolio questions answered via
+      LangChain tool calls over the user's full analysis history and
+      uploaded documents (T-101).
+
+    A CHECK constraint (``ck_chat_sessions_scope_consistency``) enforces
+    that these two are never mismatched: a memo-scoped row always carries
+    its analysis, and a portfolio-wide row never does.
+    """
+
+    __tablename__ = "chat_sessions"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=func.gen_random_uuid(),
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+        comment="FK → users.id — the user this conversation belongs to",
+    )
+    analysis_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("analyses.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+        comment=(
+            "FK → analyses.id for a memo-scoped session (T-100); "
+            "NULL for a portfolio-wide session (T-101)"
+        ),
+    )
+    session_type: Mapped[str] = mapped_column(
+        ChatSessionTypeEnum,
+        nullable=False,
+        comment="'memo_scoped' (single analysis) or 'portfolio_wide'",
+    )
+    title: Mapped[Optional[str]] = mapped_column(
+        String(200),
+        nullable=True,
+        comment="Optional display title, e.g. auto-derived from the first message",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        comment="UTC timestamp when the session was started",
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+        comment="UTC timestamp of the most recent message in this session",
+    )
+
+    # Relationships
+    user: Mapped[User] = relationship(
+        "User",
+        back_populates="chat_sessions",
+    )
+    analysis: Mapped[Optional[Analysis]] = relationship(
+        "Analysis",
+        back_populates="chat_sessions",
+    )
+    messages: Mapped[list[ChatMessage]] = relationship(
+        "ChatMessage",
+        back_populates="session",
+        cascade="all, delete-orphan",
+        order_by="ChatMessage.created_at",
+    )
+
+    __table_args__ = (
+        Index("ix_chat_sessions_user_id", "user_id"),
+        Index("ix_chat_sessions_analysis_id", "analysis_id"),
+        CheckConstraint(
+            "(session_type = 'memo_scoped' AND analysis_id IS NOT NULL) OR "
+            "(session_type = 'portfolio_wide' AND analysis_id IS NULL)",
+            name="ck_chat_sessions_scope_consistency",
+        ),
+        {
+            "comment": (
+                "AIRP Assistant chat sessions — one row per conversation, "
+                "either scoped to a single analysis or portfolio-wide"
+            )
+        },
+    )
+
+    def __repr__(self) -> str:
+        return f"<ChatSession id={self.id} type={self.session_type!r}>"
+
+
+# ---------------------------------------------------------------------------
+# Table: chat_messages
+# ---------------------------------------------------------------------------
+
+
+class ChatMessage(Base):
+    """
+    A single message within a chat session (T-099, Phase 10).
+
+    Ordered within a session by ``created_at`` — the ``ChatSession.messages``
+    relationship reads back in that order so the transcript replays
+    correctly. ``tool_calls`` preserves any LangChain tool invocations an
+    assistant message made (name, args, result) as JSONB, matching the
+    ``agent_outputs.output_json`` pattern (T-016) of storing structured
+    Pydantic/tool output directly rather than re-deriving it from logs.
+    """
+
+    __tablename__ = "chat_messages"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=func.gen_random_uuid(),
+    )
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("chat_sessions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+        comment="FK → chat_sessions.id",
+    )
+    role: Mapped[str] = mapped_column(
+        ChatMessageRoleEnum,
+        nullable=False,
+        comment="'user' | 'assistant' | 'system' | 'tool'",
+    )
+    content: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        comment="Message text (assistant messages may also carry tool_calls)",
+    )
+    tool_calls: Mapped[Optional[dict]] = mapped_column(  # type: ignore[type-arg]
+        JSONB,
+        nullable=True,
+        comment=(
+            "LangChain tool invocations made by this assistant message "
+            "(name, args, result), if any; NULL for plain text messages"
+        ),
+    )
+    tool_name: Mapped[Optional[str]] = mapped_column(
+        String(100),
+        nullable=True,
+        comment="Which tool produced this message, when role='tool'",
+    )
+    tokens_used: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        nullable=True,
+        comment="Total tokens consumed generating this message, if known",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        comment="UTC timestamp when this message was recorded",
+    )
+
+    # Relationships
+    session: Mapped[ChatSession] = relationship(
+        "ChatSession",
+        back_populates="messages",
+    )
+
+    __table_args__ = (
+        Index("ix_chat_messages_session_id", "session_id"),
+        Index(
+            "ix_chat_messages_session_id_created_at",
+            "session_id",
+            "created_at",
+        ),
+        {
+            "comment": (
+                "AIRP Assistant chat messages — one row per message, "
+                "ordered by created_at within a session"
+            )
+        },
+    )
+
+    def __repr__(self) -> str:
+        return f"<ChatMessage session={self.session_id} role={self.role!r}>"
+
+
+# ---------------------------------------------------------------------------
+# Table: user_preferences
+# ---------------------------------------------------------------------------
+
+
+class UserPreferences(Base):
+    """
+    Per-user chat and display preferences (T-099, Phase 10).
+
+    One row per user (enforced by the unique FK on ``user_id``), created
+    lazily on first access rather than at registration time — a user with
+    no row yet simply gets the column defaults applied by the service
+    layer. Read by the AIRP Assistant (response verbosity) and the
+    frontend settings panel (theme, default exchange, watchlist,
+    notifications).
+    """
+
+    __tablename__ = "user_preferences"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=func.gen_random_uuid(),
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+        index=True,
+        comment="FK → users.id — one preferences row per user",
+    )
+    theme: Mapped[str] = mapped_column(
+        ThemePreferenceEnum,
+        nullable=False,
+        default="system",
+        server_default="system",
+        comment="UI theme: 'light' | 'dark' | 'system'",
+    )
+    chat_response_style: Mapped[str] = mapped_column(
+        ChatResponseStyleEnum,
+        nullable=False,
+        default="concise",
+        server_default="concise",
+        comment="AIRP Assistant reply verbosity: 'concise' | 'detailed'",
+    )
+    default_exchange: Mapped[Optional[str]] = mapped_column(
+        ExchangeEnum,
+        nullable=True,
+        comment="Preferred exchange (NSE/BSE) to default new analyses to",
+    )
+    watchlist_tickers: Mapped[list] = mapped_column(  # type: ignore[type-arg]
+        JSONB,
+        nullable=False,
+        default=list,
+        server_default=sa_text("'[]'::jsonb"),
+        comment="JSON array of ticker strings the user tracks (e.g. ['TCS', 'INFY'])",
+    )
+    email_notifications_enabled: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default="true",
+        comment="Whether to email the user on completed analyses / accuracy runs",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+        comment="UTC timestamp of the most recent preference change",
+    )
+
+    # Relationships
+    user: Mapped[User] = relationship(
+        "User",
+        back_populates="preferences",
+    )
+
+    __table_args__ = (
+        UniqueConstraint("user_id", name="uq_user_preferences_user_id"),
+        Index("ix_user_preferences_user_id", "user_id"),
+        {"comment": "Per-user chat and display preferences — one row per user"},
+    )
+
+    def __repr__(self) -> str:
+        return f"<UserPreferences user={self.user_id} theme={self.theme!r}>"
