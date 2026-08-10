@@ -1,5 +1,6 @@
 // frontend/src/test/liveGraphState.test.ts
-// Tests for src/lib/graph/liveGraphState.ts (T-096). Pure data
+// Tests for src/lib/graph/liveGraphState.ts (T-096; T-097 adds the
+// deriveDebateLoopEdgeState section at the bottom). Pure data
 // assertions only -- no rendering -- matching
 // src/test/pipelineTopology.test.ts and src/test/agentProgress.test.ts's
 // own established "given identical inputs, always the same output"
@@ -8,7 +9,7 @@
 import { describe, expect, it } from "vitest";
 
 import { type AgentStreamEvent } from "@/hooks/useAnalysisStream";
-import { deriveNodeStatuses } from "@/lib/graph/liveGraphState";
+import { deriveDebateLoopEdgeState, deriveNodeStatuses } from "@/lib/graph/liveGraphState";
 import {
   NODE_CONTRARIAN,
   NODE_DEBATE_LOOP,
@@ -181,5 +182,125 @@ describe("deriveNodeStatuses", () => {
     ];
     const statuses = deriveNodeStatuses(events, true);
     expect(statuses[NODE_END]).toBe("failed");
+  });
+});
+
+describe("deriveDebateLoopEdgeState", () => {
+  it("is inactive with no current round before the debate has started", () => {
+    const state = deriveDebateLoopEdgeState([], deriveNodeStatuses([], false));
+    expect(state.active).toBe(false);
+    expect(state.currentRound).toBeNull();
+  });
+
+  it("activates the instant contrarian_investor starts round 1", () => {
+    const events = [makeEvent({ agent: NODE_CONTRARIAN, event_type: "node_started" })];
+    const state = deriveDebateLoopEdgeState(events, deriveNodeStatuses(events, false));
+    expect(state.active).toBe(true);
+    expect(state.currentRound).toBe(1);
+  });
+
+  it("stays active while debate_loop itself is running, after contrarian completes", () => {
+    const events = [
+      makeEvent({ agent: NODE_CONTRARIAN, event_type: "node_started" }),
+      makeEvent({ agent: NODE_CONTRARIAN, event_type: "node_completed" }),
+      makeEvent({ agent: NODE_DEBATE_LOOP, event_type: "node_started" }),
+    ];
+    const state = deriveDebateLoopEdgeState(events, deriveNodeStatuses(events, false));
+    expect(state.active).toBe(true);
+    expect(state.currentRound).toBe(1);
+  });
+
+  it("goes inactive in the gap after round 1 completes, before round 2 starts", () => {
+    const events = [
+      makeEvent({ agent: NODE_CONTRARIAN, event_type: "node_started" }),
+      makeEvent({ agent: NODE_CONTRARIAN, event_type: "node_completed" }),
+      makeEvent({ agent: NODE_DEBATE_LOOP, event_type: "node_started" }),
+      makeEvent({ agent: NODE_DEBATE_LOOP, event_type: "node_completed" }),
+    ];
+    const state = deriveDebateLoopEdgeState(events, deriveNodeStatuses(events, false));
+    expect(state.active).toBe(false);
+    // Round 1 already fully ran (contrarian started once) -- still
+    // reported as round 1 until round 2's contrarian event arrives.
+    expect(state.currentRound).toBe(1);
+  });
+
+  it("reactivates for round 2 once contrarian_investor starts again", () => {
+    const events = [
+      makeEvent({ agent: NODE_CONTRARIAN, event_type: "node_started" }),
+      makeEvent({ agent: NODE_CONTRARIAN, event_type: "node_completed" }),
+      makeEvent({ agent: NODE_DEBATE_LOOP, event_type: "node_started" }),
+      makeEvent({ agent: NODE_DEBATE_LOOP, event_type: "node_completed" }),
+      makeEvent({ agent: NODE_CONTRARIAN, event_type: "node_started" }), // round 2
+    ];
+    const state = deriveDebateLoopEdgeState(events, deriveNodeStatuses(events, false));
+    expect(state.active).toBe(true);
+    expect(state.currentRound).toBe(2);
+  });
+
+  it("goes inactive for good once round 2's debate_loop completes", () => {
+    const events = [
+      makeEvent({ agent: NODE_CONTRARIAN, event_type: "node_started" }),
+      makeEvent({ agent: NODE_CONTRARIAN, event_type: "node_completed" }),
+      makeEvent({ agent: NODE_DEBATE_LOOP, event_type: "node_started" }),
+      makeEvent({ agent: NODE_DEBATE_LOOP, event_type: "node_completed" }),
+      makeEvent({ agent: NODE_CONTRARIAN, event_type: "node_started" }),
+      makeEvent({ agent: NODE_CONTRARIAN, event_type: "node_completed" }),
+      makeEvent({ agent: NODE_DEBATE_LOOP, event_type: "node_started" }),
+      makeEvent({ agent: NODE_DEBATE_LOOP, event_type: "node_completed" }),
+      makeEvent({ agent: NODE_RISK, event_type: "node_started" }),
+    ];
+    const state = deriveDebateLoopEdgeState(events, deriveNodeStatuses(events, false));
+    expect(state.active).toBe(false);
+    expect(state.currentRound).toBe(2);
+  });
+
+  it("produces a genuine active/inactive/active/inactive cycle across both rounds", () => {
+    // The literal "round-trip pulse... across its 2 rounds" acceptance
+    // criterion, checked as a single ordered sequence of active flags
+    // rather than four separate tests, so a regression that merges two
+    // of these phases together (e.g. staying active straight through
+    // both rounds with no gap) fails this one test directly.
+    const timeline: { events: AgentStreamEvent[]; expectedActive: boolean }[] = [];
+    const events: AgentStreamEvent[] = [];
+
+    function record(expectedActive: boolean): void {
+      timeline.push({ events: [...events], expectedActive });
+    }
+
+    events.push(makeEvent({ agent: NODE_CONTRARIAN, event_type: "node_started" }));
+    record(true); // round 1 begins
+
+    events.push(makeEvent({ agent: NODE_CONTRARIAN, event_type: "node_completed" }));
+    events.push(makeEvent({ agent: NODE_DEBATE_LOOP, event_type: "node_started" }));
+    record(true); // still round 1
+
+    events.push(makeEvent({ agent: NODE_DEBATE_LOOP, event_type: "node_completed" }));
+    record(false); // gap between rounds
+
+    events.push(makeEvent({ agent: NODE_CONTRARIAN, event_type: "node_started" }));
+    record(true); // round 2 begins
+
+    events.push(makeEvent({ agent: NODE_CONTRARIAN, event_type: "node_completed" }));
+    events.push(makeEvent({ agent: NODE_DEBATE_LOOP, event_type: "node_started" }));
+    record(true); // still round 2
+
+    events.push(makeEvent({ agent: NODE_DEBATE_LOOP, event_type: "node_completed" }));
+    record(false); // debate concluded for good
+
+    for (const { events: snapshot, expectedActive } of timeline) {
+      const state = deriveDebateLoopEdgeState(snapshot, deriveNodeStatuses(snapshot, false));
+      expect(state.active).toBe(expectedActive);
+    }
+  });
+
+  it("treats a missing event_type on a contrarian event as not-started", () => {
+    const { event_type: _omit, ...eventWithoutType } = makeEvent({ agent: NODE_CONTRARIAN });
+    const events = [eventWithoutType as AgentStreamEvent];
+    const state = deriveDebateLoopEdgeState(events, deriveNodeStatuses(events, false));
+    // A completed-shaped (missing event_type) contrarian event should
+    // not itself be counted as a "round started" -- only a genuine
+    // node_started event advances the round counter.
+    expect(state.currentRound).toBeNull();
+    expect(state.active).toBe(false);
   });
 });
