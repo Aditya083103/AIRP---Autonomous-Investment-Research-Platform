@@ -1,6 +1,7 @@
 // frontend/src/pages/AnalysisResultPage.tsx
 // AIRP -- Analysis Result page (T-057 placeholder, live viewer added T-059,
-// debate tab added T-060, full results panel added T-061, charts added T-062)
+// debate tab added T-060, full results panel added T-061, charts added T-062,
+// card/graph progress-view toggle added T-097)
 //
 // T-057 built this route purely as an honest "coming soon" placeholder
 // -- the target AnalysisPage.tsx (T-058) redirects to right after
@@ -37,12 +38,23 @@
 // payload sizes (a year of daily price points vs one JSON memo) --
 // keeping them as separate queries means a slow/failed charts fetch
 // never blocks the Investment Memo from rendering, and vice versa.
+//
+// T-097 adds a second, NESTED toggle inside the existing "Agent
+// progress" tab: Cards (AgentProgressBoard, T-059) vs Graph
+// (LiveGraphView, T-096). Both are pure, props-driven components fed
+// from the exact same `useAnalysisStream()` call this page already
+// makes once, above both toggles -- so switching `progressViewMode`
+// is purely a local UI state change; it does not touch the WebSocket
+// connection, does not reset `events`, and cannot lose any stream
+// state, because there is only ever the one subscription regardless of
+// which view (or which top-level tab) is currently rendered.
 
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import { ChartsPanel } from "@/components/charts";
 import { DebateViewer } from "@/components/debate/DebateViewer";
+import { LiveGraphView } from "@/components/graph";
 import { AgentProgressBoard } from "@/components/progress/AgentProgressBoard";
 import { ResultsPanel } from "@/components/results";
 import { ChartsPanelSkeleton, ResultsPanelSkeleton } from "@/components/skeletons";
@@ -60,10 +72,19 @@ const VIEW_TABS: { id: ResultView; label: string }[] = [
   { id: "debate", label: "Debate transcript" },
 ];
 
+/** T-097: the card/graph toggle nested inside the "Agent progress" tab. */
+type ProgressViewMode = "cards" | "graph";
+
+const PROGRESS_VIEW_TABS: { id: ProgressViewMode; label: string }[] = [
+  { id: "cards", label: "Cards" },
+  { id: "graph", label: "Graph" },
+];
+
 export function AnalysisResultPage(): JSX.Element {
   const { jobId } = useParams<{ jobId: string }>();
   const { accessToken } = useAuth();
   const [activeView, setActiveView] = useState<ResultView>("progress");
+  const [progressViewMode, setProgressViewMode] = useState<ProgressViewMode>("cards");
 
   const { events, isComplete, progressPercent, connectionStatus, error } = useAnalysisStream({
     jobId: jobId ?? "",
@@ -148,13 +169,48 @@ export function AnalysisResultPage(): JSX.Element {
 
       <div className="mt-6" role="tabpanel">
         {activeView === "progress" ? (
-          <AgentProgressBoard
-            events={events}
-            isComplete={isComplete}
-            progressPercent={progressPercent}
-            connectionStatus={connectionStatus}
-            error={error}
-          />
+          <div>
+            <div
+              className="mb-4 flex items-center justify-end gap-1"
+              role="tablist"
+              aria-label="Progress view"
+            >
+              {PROGRESS_VIEW_TABS.map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={progressViewMode === tab.id}
+                  onClick={() => setProgressViewMode(tab.id)}
+                  className={cn(
+                    "rounded-full px-3 py-1 text-xs font-medium transition-colors",
+                    progressViewMode === tab.id
+                      ? "bg-brand-600 text-white"
+                      : "bg-line text-muted hover:text-ink",
+                  )}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+
+            {progressViewMode === "cards" ? (
+              <AgentProgressBoard
+                events={events}
+                isComplete={isComplete}
+                progressPercent={progressPercent}
+                connectionStatus={connectionStatus}
+                error={error}
+              />
+            ) : (
+              <LiveGraphView
+                events={events}
+                isComplete={isComplete}
+                connectionStatus={connectionStatus}
+                error={error}
+              />
+            )}
+          </div>
         ) : (
           <DebateViewer events={events} />
         )}

@@ -1,5 +1,5 @@
 // frontend/src/test/AnalysisResultPage.test.tsx
-// Tests for AnalysisResultPage (T-059, extended T-060/T-061/T-062).
+// Tests for AnalysisResultPage (T-059, extended T-060/T-061/T-062/T-097).
 // Same FakeWebSocket approach as useAnalysisStream.test.ts -- this
 // page calls the real hook (unlike AgentProgressBoard, which takes
 // events as plain props), so a fake WebSocket global is needed to
@@ -11,6 +11,14 @@
 // below routes by URL substring so /result and /charts each resolve
 // their own response shape instead of one test's single mock
 // accidentally serving the wrong body to the other endpoint.
+//
+// T-097 adds coverage for the new nested Cards/Graph toggle inside the
+// "Agent progress" tab: defaults to Cards, switches to LiveGraphView
+// (T-096) on click, and -- the literal acceptance criterion -- proves
+// switching does NOT lose stream state by emitting an event, toggling
+// to Graph, and confirming that same event's effect (a node's live
+// status) is still reflected rather than the graph starting over from
+// nothing.
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, waitFor } from "@testing-library/react";
@@ -442,5 +450,114 @@ describe("AnalysisResultPage", () => {
         }),
       ),
     );
+  });
+
+  describe("progress view toggle (T-097)", () => {
+    it("shows the Cards view by default, with the graph not mounted", () => {
+      vi.stubGlobal("WebSocket", FakeWebSocket);
+      renderResultPage();
+
+      expect(screen.getByRole("tab", { name: "Cards" })).toHaveAttribute("aria-selected", "true");
+      expect(screen.queryByTestId("live-graph-view")).not.toBeInTheDocument();
+    });
+
+    it("switches to the Graph view when its tab is clicked", async () => {
+      vi.stubGlobal("WebSocket", FakeWebSocket);
+      renderResultPage();
+
+      await userEvent.click(screen.getByRole("tab", { name: "Graph" }));
+
+      expect(screen.getByTestId("live-graph-view")).toBeInTheDocument();
+      expect(screen.getByRole("tab", { name: "Graph" })).toHaveAttribute("aria-selected", "true");
+    });
+
+    it("switches back to Cards from Graph", async () => {
+      vi.stubGlobal("WebSocket", FakeWebSocket);
+      renderResultPage();
+
+      await userEvent.click(screen.getByRole("tab", { name: "Graph" }));
+      expect(screen.getByTestId("live-graph-view")).toBeInTheDocument();
+
+      await userEvent.click(screen.getByRole("tab", { name: "Cards" }));
+      expect(screen.queryByTestId("live-graph-view")).not.toBeInTheDocument();
+      expect(screen.getByRole("tab", { name: "Cards" })).toHaveAttribute("aria-selected", "true");
+    });
+
+    it("does not lose stream state when toggling from Cards to Graph", async () => {
+      // The literal T-097 acceptance criterion. An event received
+      // while on the Cards view must still be reflected once switched
+      // to the Graph view -- proving the underlying useAnalysisStream
+      // subscription (and its accumulated `events`) was never torn
+      // down or reset by the toggle.
+      vi.stubGlobal("WebSocket", FakeWebSocket);
+      renderResultPage();
+
+      act(() => {
+        lastSocket().emitMessage({
+          job_id: "job-1",
+          agent: "fundamental_analyst",
+          status: "running",
+          output_preview: "Revenue grew 8% YoY.",
+          progress_percent: 20,
+          is_final: false,
+          event_type: "node_started",
+        });
+      });
+      await waitFor(() => expect(screen.getByText("Revenue grew 8% YoY.")).toBeInTheDocument());
+
+      await userEvent.click(screen.getByRole("tab", { name: "Graph" }));
+
+      // The fundamental_analyst node should read "running" on the
+      // graph -- the same event, now reflected in the other view,
+      // not a graph that reset to all-pending.
+      expect(document.querySelector('[data-node-status="running"]')).not.toBeNull();
+    });
+
+    it("does not reconnect the WebSocket when toggling views", async () => {
+      // A second, more direct proof of "no lost stream state": toggling
+      // must not construct a new WebSocket at all.
+      vi.stubGlobal("WebSocket", FakeWebSocket);
+      renderResultPage();
+
+      const socketCountBeforeToggle = FakeWebSocket.instances.length;
+
+      await userEvent.click(screen.getByRole("tab", { name: "Graph" }));
+      await userEvent.click(screen.getByRole("tab", { name: "Cards" }));
+
+      expect(FakeWebSocket.instances).toHaveLength(socketCountBeforeToggle);
+    });
+
+    it("carries events received while on the Graph view back to Cards", async () => {
+      vi.stubGlobal("WebSocket", FakeWebSocket);
+      renderResultPage();
+
+      await userEvent.click(screen.getByRole("tab", { name: "Graph" }));
+
+      act(() => {
+        lastSocket().emitMessage({
+          job_id: "job-1",
+          agent: "fundamental_analyst",
+          status: "completed",
+          output_preview: "Revenue grew 8% YoY.",
+          progress_percent: 20,
+          is_final: false,
+          event_type: "node_completed",
+        });
+      });
+
+      await userEvent.click(screen.getByRole("tab", { name: "Cards" }));
+
+      expect(await screen.findByText("Revenue grew 8% YoY.")).toBeInTheDocument();
+    });
+
+    it("hides the Cards/Graph toggle while on the Debate transcript tab", async () => {
+      vi.stubGlobal("WebSocket", FakeWebSocket);
+      renderResultPage();
+
+      await userEvent.click(screen.getByRole("tab", { name: "Debate transcript" }));
+
+      expect(screen.queryByRole("tab", { name: "Cards" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("tab", { name: "Graph" })).not.toBeInTheDocument();
+    });
   });
 });

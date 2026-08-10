@@ -1,5 +1,6 @@
 // frontend/src/lib/graph/liveGraphState.ts
-// AIRP -- live per-node status derivation for the pipeline graph (T-096)
+// AIRP -- live per-node status derivation for the pipeline graph (T-096;
+// T-097 adds the debate_loop cycle edge's own live state below)
 //
 // Turns the raw AgentStreamEvent[] from useAnalysisStream.ts into one
 // PipelineNodeStatus per node in the static topology
@@ -28,9 +29,26 @@
 // LangGraph Send super-step (see backend/graph/graph.py's topology
 // comment), their real NODE_STARTED events arrive close together and
 // each flips to "running" the moment its own event lands.
+//
+// T-097 addition: deriveDebateLoopEdgeState
+// -------------------------------------------
+// Uses the exact same "read the real signal, don't guess" principle for
+// the ONE thing deriveNodeStatuses deliberately doesn't answer: is the
+// debate_loop -> contrarian_investor cycle edge (T-040's
+// route_after_contrarian DEBATE_AGAIN branch, T-094's
+// DEBATE_LOOP_EDGE_ID) currently "in motion", and which of its (at most
+// 2, per backend.graph.debate.MAX_DEBATE_ROUNDS) rounds is it on? See
+// that function's own docstring below for the full reasoning -- in
+// short, the edge is "active" whenever contrarian_investor OR
+// debate_loop is itself "running", which naturally toggles on, off,
+// then on again across a real 2-round debate with zero extra
+// event-counting logic beyond a single filter over already-published
+// NODE_STARTED events.
 
 import { EVENT_TYPE_NODE_STARTED, type AgentStreamEvent } from "@/hooks/useAnalysisStream";
 import {
+  NODE_CONTRARIAN,
+  NODE_DEBATE_LOOP,
   NODE_END,
   NODE_START,
   PIPELINE_NODE_IDS,
@@ -131,4 +149,80 @@ export function deriveNodeStatuses(
   statuses[NODE_END] = isComplete ? (pipelineFailed ? "failed" : "done") : "pending";
 
   return statuses;
+}
+
+/**
+ * The debate_loop <-> contrarian_investor cycle edge's own live state
+ * (T-097) -- separate from PipelineNodeStatus because an EDGE, not a
+ * node, is what T-097's "round-trip pulse" acceptance criterion is
+ * about; deriveNodeStatuses already tells the two nodes on either end
+ * of the cycle their own status, but says nothing about whether the
+ * CYCLE ITSELF should currently read as "in motion".
+ */
+export interface DebateLoopEdgeState {
+  /**
+   * True while the debate loop is actively in a round -- i.e. while
+   * contrarian_investor or debate_loop is itself "running". False
+   * before the debate has started, in the (typically brief) gap
+   * between one round's debate_loop completing and the next round's
+   * contrarian_investor starting, and once the debate has concluded
+   * for good (routed on to risk_officer).
+   */
+  active: boolean;
+  /**
+   * Which debate round is currently in progress -- 1 or 2, matching
+   * backend.graph.debate's MAX_DEBATE_ROUNDS cap -- or null before the
+   * debate has started. Counts contrarian_investor's own NODE_STARTED
+   * events rather than debate_loop's, since contrarian always starts
+   * first in every round; using debate_loop's own count would report
+   * "no round yet" for the entire first half of round 1, while
+   * contrarian is already visibly running.
+   */
+  currentRound: 1 | 2 | null;
+}
+
+/**
+ * Derive the debate_loop cycle edge's live state from the event
+ * stream, for T-097's LiveGraphView to style the DEBATE_AGAIN edge
+ * with: animated + full strength while `active`, dimmed and static
+ * otherwise.
+ *
+ * Why this reads as a "round-trip pulse... across its 2 rounds"
+ * with no explicit round-boundary bookkeeping: `active` is computed
+ * fresh from each render's `nodeStatuses` (already computed by
+ * deriveNodeStatuses for the same `events`), and because a node's
+ * status always reflects only its OWN latest event, `active` flips
+ * true the instant contrarian_investor starts round 1, false once
+ * debate_loop completes round 1 (and contrarian_investor has not yet
+ * restarted), true again the instant contrarian_investor starts round
+ * 2, and false for good once debate_loop completes round 2. Two
+ * separate true/false/true/false cycles, driven entirely by the same
+ * per-node "latest event wins" rule deriveNodeStatuses already uses --
+ * nothing here has to remember "which round already pulsed."
+ *
+ * @param events        Every AgentStreamEvent received so far, in
+ *                       arrival order (useAnalysisStream's `events`).
+ * @param nodeStatuses   The output of deriveNodeStatuses for the same
+ *                       `events` -- passed in rather than recomputed,
+ *                       so a caller building both a node's status and
+ *                       the edge's state in the same render (T-097's
+ *                       LiveGraphView) does exactly one status pass.
+ */
+export function deriveDebateLoopEdgeState(
+  events: readonly AgentStreamEvent[],
+  nodeStatuses: Record<string, PipelineNodeStatus>,
+): DebateLoopEdgeState {
+  const active =
+    nodeStatuses[NODE_CONTRARIAN] === "running" || nodeStatuses[NODE_DEBATE_LOOP] === "running";
+
+  const contrarianRoundsStarted = events.filter(
+    (event) => event.agent === NODE_CONTRARIAN && event.event_type === EVENT_TYPE_NODE_STARTED,
+  ).length;
+
+  let currentRound: 1 | 2 | null = null;
+  if (contrarianRoundsStarted >= 1) {
+    currentRound = contrarianRoundsStarted >= 2 ? 2 : 1;
+  }
+
+  return { active, currentRound };
 }

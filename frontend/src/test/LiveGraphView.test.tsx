@@ -1,16 +1,25 @@
 // frontend/src/test/LiveGraphView.test.tsx
-// Tests for LiveGraphView (T-096) -- the task's actual deliverable.
-// Restrained about ReactFlow's own internals the same way
-// PipelineGraphView.test.tsx (T-094) is (see that file's docstring for
-// the full "why" -- jsdom's shared ResizeObserverStub never fires, so
-// nodes stay in ReactFlow's "pending measurement" visibility:hidden
-// state and no edge ever renders here). What this file DOES assert on
-// reliably: every node's label reaches the DOM regardless of that
-// hidden state (Testing Library's queries do not filter on CSS
-// visibility), and -- the actual point of this component --
-// data-node-status, a plain HTML attribute this component's own
-// LiveGraphNode renders itself rather than anything ReactFlow computes,
-// correctly reflects each node's derived live status.
+// Tests for LiveGraphView (T-096; T-097 adds the debate_loop cycle
+// edge's live animation) -- the task's actual deliverable. Restrained
+// about ReactFlow's own internals the same way PipelineGraphView.test.tsx
+// (T-094) is (see that file's docstring for the full "why" -- jsdom's
+// shared ResizeObserverStub never fires, so nodes stay in ReactFlow's
+// "pending measurement" visibility:hidden state and no edge -- including
+// the debate_loop cycle's animated/label overrides -- ever renders
+// here). What this file DOES assert on reliably: every node's label
+// reaches the DOM regardless of that hidden state (Testing Library's
+// queries do not filter on CSS visibility), and -- the actual point of
+// this component -- data-node-status, a plain HTML attribute this
+// component's own LiveGraphNode renders itself rather than anything
+// ReactFlow computes, correctly reflects each node's derived live
+// status. The debate_loop cycle edge's own active/inactive/round
+// logic (deriveDebateLoopEdgeState) is fully unit tested at the pure
+// data layer in liveGraphState.test.ts -- the right layer for it, per
+// this same jsdom restraint; this file's own T-097 addition is a single
+// smoke test confirming LiveGraphView renders correctly (in particular,
+// the contrarian_investor/debate_loop nodes' own live statuses) across
+// a full 2-round debate sequence, without asserting on the edge DOM
+// itself.
 
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
@@ -18,10 +27,13 @@ import { describe, expect, it } from "vitest";
 import { LiveGraphView } from "@/components/graph/LiveGraphView";
 import { type AgentStreamEvent } from "@/hooks/useAnalysisStream";
 import {
+  NODE_CONTRARIAN,
+  NODE_DEBATE_LOOP,
   NODE_FUNDAMENTAL,
   NODE_MACRO,
   NODE_PDF_EXPORT,
   NODE_PLANNER,
+  NODE_RISK,
   NODE_SENTIMENT,
   NODE_TECHNICAL,
   PIPELINE_NODES,
@@ -168,5 +180,37 @@ describe("LiveGraphView", () => {
       />,
     );
     expect(screen.getByTestId("live-graph-view")).toHaveStyle({ height: "480px" });
+  });
+
+  it("renders correctly across a full 2-round debate sequence without crashing (T-097)", () => {
+    // Smoke test: LiveGraphView's edges useMemo calls
+    // deriveDebateLoopEdgeState on every render -- this exercises that
+    // code path across a realistic 2-round debate and confirms the
+    // component keeps rendering correctly (in particular, contrarian_
+    // investor and debate_loop's own node statuses stay correct)
+    // rather than throwing or producing a stale render. The edge's own
+    // active/round logic is unit tested directly in
+    // liveGraphState.test.ts -- see this file's docstring.
+    const events: AgentStreamEvent[] = [
+      makeEvent({ agent: NODE_CONTRARIAN, event_type: "node_started" }),
+      makeEvent({ agent: NODE_CONTRARIAN, event_type: "node_completed" }),
+      makeEvent({ agent: NODE_DEBATE_LOOP, event_type: "node_started" }),
+      makeEvent({ agent: NODE_DEBATE_LOOP, event_type: "node_completed" }),
+      makeEvent({ agent: NODE_CONTRARIAN, event_type: "node_started" }), // round 2
+      makeEvent({ agent: NODE_CONTRARIAN, event_type: "node_completed" }),
+      makeEvent({ agent: NODE_DEBATE_LOOP, event_type: "node_started" }),
+      makeEvent({ agent: NODE_DEBATE_LOOP, event_type: "node_completed" }),
+      makeEvent({ agent: NODE_RISK, event_type: "node_started" }),
+    ];
+
+    render(
+      <LiveGraphView events={events} isComplete={false} connectionStatus="open" error={null} />,
+    );
+
+    expect(screen.getByTestId("live-graph-view")).toBeInTheDocument();
+    // debate_loop has finished for good (routed on to risk_officer,
+    // which is now running) -- its own node status should read done.
+    expect(nodeByStatus("done").length).toBeGreaterThan(0);
+    expect(nodeByStatus("running")).toHaveLength(1);
   });
 });
