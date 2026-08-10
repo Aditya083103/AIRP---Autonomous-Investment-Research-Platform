@@ -116,9 +116,12 @@ class TestModelsImport:
 
 
 class TestMetadataTables:
-    def test_all_six_tables_in_metadata(self) -> None:
+    def test_all_nine_tables_in_metadata(self) -> None:
         # verdict_outcomes added in T-087 (Phase 8, Verdict Accuracy Tracker);
         # see test_verdict_outcomes.py for dedicated coverage of that table.
+        # chat_sessions / chat_messages / user_preferences added in T-099
+        # (Phase 10, AIRP Assistant); see test_chat_schema.py for dedicated
+        # coverage of those three tables.
         expected = {
             "users",
             "companies",
@@ -126,12 +129,15 @@ class TestMetadataTables:
             "agent_outputs",
             "investment_memos",
             "verdict_outcomes",
+            "chat_sessions",
+            "chat_messages",
+            "user_preferences",
         }
         actual = set(Base.metadata.tables.keys())
         assert expected == actual
 
     def test_no_extra_tables(self) -> None:
-        assert len(Base.metadata.tables) == 6
+        assert len(Base.metadata.tables) == 9
 
 
 # ---------------------------------------------------------------------------
