@@ -5,6 +5,16 @@ AIRP -- Graph Visualisation Export (T-034)
 Auto-exports the LangGraph Mermaid diagram to ``docs/GRAPH_DIAGRAM.md``
 every time ``build_graph()`` compiles the StateGraph.
 
+T-098 addition: ``_HEADER_TEMPLATE``'s static prose now also carries a
+"Frontend Rendering" section cross-referencing the live pipeline graph
+(``frontend/src/components/graph/PipelineGraphView.tsx`` /
+``LiveGraphView.tsx``, T-094-T-097) that renders this exact same
+topology in the browser. Like every other section of this template,
+it is hand-maintained prose interpolated around the machine-generated
+Mermaid source -- editing it here is correct; editing the checked-in
+``docs/GRAPH_DIAGRAM.md`` snapshot by hand is not, since the next
+``build_graph()`` call overwrites it from this template regardless.
+
 Behaviour
 ---------
 ``export_mermaid_diagram(compiled_graph)`` is called at the end of
@@ -152,6 +162,27 @@ Total nodes: {node_count}
   `bear_conviction >= 7` and fewer than 2 debate rounds have completed.
 - `error_handler` and `sentiment_escalation` both edge unconditionally to
   `contrarian_investor` after writing their state flags.
+
+## Frontend Rendering (T-094-T-097)
+
+This exact topology is also rendered live in the browser, at
+`frontend/src/components/graph/`:
+
+- **`PipelineGraphView`** (T-094) renders this same node/edge shape
+  statically via ReactFlow -- a build-time proof that the frontend's
+  topology (`frontend/src/lib/graph/pipelineTopology.ts`) matches this
+  file's own `add_edge()`/`add_conditional_edges()` calls, verified by
+  `frontend/src/test/pipelineTopology.test.ts`.
+- **`LiveGraphView`** (T-096) renders the same topology with each
+  node's real pending/running/done/failed status animated live from the
+  `NODE_STARTED`/completion WebSocket events this pipeline publishes as
+  it runs (T-095's `event_type` field on `AgentStreamEvent`).
+- The `contrarian_investor <-> debate_loop` cycle edge pulses distinctly
+  while a debate round is actively in progress, across both of its
+  possible rounds (T-097).
+- A Cards/Graph toggle on the analysis result page lets a user switch
+  between the original card-based progress view and this live graph
+  without losing any WebSocket stream state.
 """
 
 
