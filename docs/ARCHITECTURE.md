@@ -65,12 +65,47 @@ WebSocket, and displays live agent progress as the pipeline runs.
 | **Auth pages**                 | Login and Register with `react-hook-form` + `zod` validation          |
 | **Dashboard**                  | User's analysis history — company, date, verdict badge, risk score    |
 | **Analysis input**             | Company name autocomplete (top 50 NSE stocks), optional PDF upload    |
-| **Live agent progress viewer** | WebSocket consumer — card per agent, animated state transitions       |
+| **Live agent progress viewer** | WebSocket consumer — card per agent, animated state transitions, with a Cards/Graph toggle (below) |
+| **Live pipeline graph**        | `PipelineGraphView` / `LiveGraphView` (ReactFlow) — the same LangGraph topology `docs/GRAPH_DIAGRAM.md` documents, rendered live with per-node status |
 | **Debate viewer**              | Timeline UI showing agents arguing, colour-coded per agent            |
 | **Results page**               | Final verdict panel, bull vs bear cases, conviction gauge             |
 | **Charts**                     | Stock price, revenue trend, P/E vs peers, sentiment gauge, risk radar |
 | **Investment Memo viewer**     | Full memo with collapsible sections + PDF download button             |
 | **Compare page**               | Side-by-side analysis of two companies                                |
+
+### Live pipeline graph — detail (T-094–T-097)
+
+Alongside the original card-based progress viewer, the "Agent progress"
+tab offers a Cards/Graph toggle backed by two sibling components in
+`frontend/src/components/graph/`:
+
+- **`PipelineGraphView`** (T-094) renders the pipeline's static
+  topology — all 15 real LangGraph nodes plus the `START`/`END`
+  sentinels, coloured by role (research agents, routing/join nodes,
+  decision agents, portfolio manager, output nodes) — so the shape of
+  the graph itself is always visible, independent of any particular
+  run. The underlying node/edge data
+  (`frontend/src/lib/graph/pipelineTopology.ts`) is a hand-verified,
+  tested mirror of `backend/graph/graph.py`'s own
+  `add_edge()`/`add_conditional_edges()` calls — the same topology
+  `docs/GRAPH_DIAGRAM.md` documents from the backend's own perspective.
+- **`LiveGraphView`** (T-096) renders the same topology with each
+  node's `pending`/`running`/`done`/`failed` status derived live
+  (`frontend/src/lib/graph/liveGraphState.ts`) from the WebSocket event
+  stream (`useAnalysisStream`) and re-rendered as new events arrive. A
+  node visibly pulses the instant its `NODE_STARTED` event lands (see
+  Layer 3, below) and flips to a checkmarked "done" once its
+  completion event arrives; all 4 parallel research nodes animate
+  simultaneously, since each node's status is derived independently
+  from its own latest event.
+- The `contrarian_investor <-> debate_loop` cycle edge additionally
+  pulses distinctly — dimmed and static by default, animated at full
+  strength while a debate round is actively in progress — across both
+  of its possible rounds (T-097).
+- Both views read from the exact same `useAnalysisStream()`
+  subscription the page already holds — switching the toggle is a
+  pure local UI state change and never reconnects the WebSocket or
+  loses any accumulated stream state.
 
 ### Technology choices
 
@@ -82,6 +117,7 @@ WebSocket, and displays live agent progress as the pipeline runs.
 | Tailwind CSS          | 3.x       | Utility-first — fast UI iteration without context-switching     |
 | React Query           | 5.x       | Handles server state, loading, error, and cache automatically   |
 | Recharts              | 2.x       | Composable React chart library with good TypeScript support     |
+| ReactFlow             | 11.x      | Node/edge graph rendering for the live pipeline graph view      |
 | React Hook Form + Zod | 7.x / 3.x | Minimal re-renders; schema validation shared with backend types |
 | WebSocket (native)    | —         | No extra library needed for agent event streaming               |
 
@@ -165,26 +201,45 @@ async def start_analysis(
 
 ### WebSocket streaming pattern
 
-The pipeline emits events at each node completion. The WebSocket endpoint
-subscribes to those events and pushes them to the connected browser.
+The pipeline emits an event both when a node **starts** and when it
+**finishes**. The WebSocket endpoint reads from an in-process
+publish/subscribe registry (`backend/services/ws_broadcaster.py` — a
+plain `asyncio.Queue` per subscribed job, not Redis pub/sub; Redis is
+used elsewhere for HTTP response caching, not for this stream) and
+pushes each event to every browser currently subscribed to that job.
 
 ```
-Agent completes → publishes event to Redis pub/sub channel
-                → WebSocket handler reads from channel
-                → pushes JSON event to browser
+Node starts    → publishes a NODE_STARTED event  (T-095)
+                → in-process broadcaster fans out to subscribers
+                → WebSocket handler pushes JSON event to browser
+Node finishes  → publishes a NODE_COMPLETED event (T-049)
+                → same fan-out, same push
 ```
 
-Event schema per agent:
+Event schema (`AgentStreamEvent`, `backend/services/ws_broadcaster.py`):
 
 ```json
 {
+  "job_id": "b3f1...",
   "agent": "fundamental_analyst",
-  "status": "complete",
-  "duration_ms": 12400,
+  "status": "running",
   "output_preview": "Score: 7/10 — Strong revenue growth, healthy FCF...",
-  "timestamp": "2024-01-01T12:00:00Z"
+  "progress_percent": 45,
+  "is_final": false,
+  "event_type": "node_completed"
 }
 ```
+
+`event_type` is `"node_started"` or `"node_completed"` (T-095) and
+defaults to `"node_completed"` when absent, so a client written before
+T-095 keeps working unmodified — the literal design goal behind adding
+it as an optional field rather than changing the existing shape. The
+live pipeline graph (`LiveGraphView`, above) is the one frontend
+consumer that actually reads `event_type`, to distinguish a node that
+has just begun from one that has just finished; the card-based
+progress viewer (`AgentProgressBoard`) does not need the distinction
+and ignores the field entirely, which is exactly the backward-
+compatibility case T-095 was designed around.
 
 ---
 
