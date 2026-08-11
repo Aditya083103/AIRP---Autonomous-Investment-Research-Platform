@@ -117,7 +117,7 @@ import logging
 from typing import Any, Optional
 import uuid
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models.orm import ChatMessage, ChatSession
@@ -139,6 +139,9 @@ __all__ = [
     "create_chat_session",
     "list_chat_sessions",
     "get_chat_session_messages",
+    "ChatSessionStreamInfo",
+    "get_chat_session_stream_info",
+    "append_chat_message",
 ]
 
 #: Default / maximum page size for GET /api/v1/chat/sessions. A user's
@@ -513,3 +516,162 @@ async def get_chat_session_messages(
         limit=limit,
         offset=offset,
     )
+
+
+# ---------------------------------------------------------------------------
+# get_chat_session_stream_info / append_chat_message (T-104) -- support
+# for WS /api/v1/chat/{session_id}/stream. Purely additive: neither
+# function changes the behaviour of anything T-103 already shipped.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ChatSessionStreamInfo:
+    """
+    Everything WS /api/v1/chat/{session_id}/stream needs about a
+    session before it can start streaming a turn: who owns it (for the
+    same ownership check every other session-scoped operation
+    performs), and -- for a 'memo_scoped' session -- which analysis to
+    ground the conversation in.
+
+    A dedicated, single-query read rather than reusing
+    ``get_chat_session_messages`` (which also loads a page of message
+    rows the streaming connect step does not need yet) or
+    ``list_chat_sessions`` (which is scoped to "all of a user's
+    sessions", not one session by id).
+    """
+
+    id: uuid.UUID
+    user_id: uuid.UUID
+    session_type: str
+    analysis_id: Optional[uuid.UUID]
+
+
+async def get_chat_session_stream_info(
+    session: AsyncSession,
+    session_id: uuid.UUID,
+) -> Optional[ChatSessionStreamInfo]:
+    """
+    Read the fields WS /stream needs to authorise and scope one
+    connection: owner, session_type, and (for memo_scoped) analysis_id.
+
+    Returns None when no ``chat_sessions`` row exists for ``session_id``
+    -- deliberately NOT also checking ``user_id`` here (unlike
+    ``get_chat_session_messages``, which folds the "does it exist" and
+    "is it yours" checks into one None-for-both-cases return), because
+    the WS route needs the row's *own* ``user_id`` back to compare
+    against the connecting user itself -- see
+    ``backend.routers.chat_stream``'s own ownership check, which
+    performs that comparison and closes with the same 4404 code for
+    both "does not exist" and "not yours", preserving the identical
+    non-enumeration guarantee via one extra comparison at the call
+    site instead of inside this function.
+
+    Args:
+        session:    Active AsyncSession for this request.
+        session_id: UUID of the chat session.
+
+    Returns:
+        A ChatSessionStreamInfo, or None if session_id does not exist.
+    """
+    result = await session.execute(
+        select(
+            ChatSession.id,
+            ChatSession.user_id,
+            ChatSession.session_type,
+            ChatSession.analysis_id,
+        ).where(ChatSession.id == session_id)
+    )
+    row: Any = result.first()
+
+    if row is None:
+        logger.debug(
+            "get_chat_session_stream_info: no chat_sessions row for " "session_id=%s",
+            session_id,
+        )
+        return None
+
+    return ChatSessionStreamInfo(
+        id=row[0],
+        user_id=row[1],
+        session_type=row[2],
+        analysis_id=row[3],
+    )
+
+
+async def append_chat_message(
+    session: AsyncSession,
+    session_id: uuid.UUID,
+    role: str,
+    content: str,
+    tool_calls: Optional[dict[str, Any]] = None,
+    tool_name: Optional[str] = None,
+    tokens_used: Optional[int] = None,
+) -> ChatMessage:
+    """
+    Insert one ``chat_messages`` row and touch the parent session's
+    ``updated_at``.
+
+    ``chat_sessions.updated_at`` is documented (T-099's migration) as
+    "UTC timestamp of the most recent message in this session", but
+    SQLAlchemy's ``onupdate=func.now()`` on that column (see
+    ``backend.models.orm.ChatSession``) only fires when a ChatSession
+    row ITSELF is updated -- inserting an unrelated ChatMessage row
+    never touches it automatically. This function issues an explicit
+    ``UPDATE chat_sessions SET updated_at = now() WHERE id = ...``
+    alongside the ``ChatMessage`` insert, in the same transaction, so
+    that column's documented meaning stays true and
+    ``list_chat_sessions``'s "most recently updated first" ordering
+    (T-103) reflects actual conversation activity rather than only
+    session-metadata edits (of which there are none today -- nothing
+    else currently updates a ``ChatSession`` row after creation).
+
+    Args:
+        session:     Active AsyncSession for this request.
+        session_id:  UUID of the parent chat session. Caller is
+                     responsible for having already verified this
+                     session exists and is owned by the caller (e.g.
+                     via ``get_chat_session_stream_info``) -- this
+                     function performs no ownership check of its own,
+                     the same trust boundary
+                     ``create_chat_session``/``list_chat_sessions``
+                     place on their own callers.
+        role:        'user' | 'assistant' | 'system' | 'tool'.
+        content:     Message text.
+        tool_calls:  Optional LangChain tool-invocation record, stored
+                     as JSONB.
+        tool_name:   Which tool produced this message, when
+                     ``role='tool'``.
+        tokens_used: Total tokens consumed generating this message, if
+                     known.
+
+    Returns:
+        The newly-created ``ChatMessage`` ORM instance with its
+        server-generated UUID and ``created_at`` populated.
+    """
+    message = ChatMessage(
+        session_id=session_id,
+        role=role,
+        content=content,
+        tool_calls=tool_calls,
+        tool_name=tool_name,
+        tokens_used=tokens_used,
+    )
+    session.add(message)
+
+    await session.execute(
+        update(ChatSession)
+        .where(ChatSession.id == session_id)
+        .values(updated_at=func.now())
+    )
+
+    await session.commit()
+    await session.refresh(message)
+
+    logger.debug(
+        "append_chat_message: session_id=%s role=%s message_id=%s",
+        session_id,
+        role,
+        message.id,
+    )
+    return message
