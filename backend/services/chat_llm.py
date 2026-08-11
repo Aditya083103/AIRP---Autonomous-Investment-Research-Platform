@@ -143,7 +143,7 @@ Public API
 """
 
 import logging
-from typing import Any, Optional
+from typing import Any, AsyncIterator, Optional
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
@@ -161,6 +161,7 @@ __all__ = [
     "build_system_message",
     "build_chat_messages",
     "invoke_chat",
+    "astream_chat",
 ]
 
 # ---------------------------------------------------------------------------
@@ -482,3 +483,82 @@ def invoke_chat(
         raise ChatLLMError("AIRP Assistant returned an empty response.")
 
     return text
+
+
+# ---------------------------------------------------------------------------
+# Streaming entry point (T-104)
+# ---------------------------------------------------------------------------
+
+
+async def astream_chat(
+    history: list[dict[str, str]],
+    user_message: str,
+    *,
+    response_style: str = DEFAULT_RESPONSE_STYLE,
+    context: Optional[str] = None,
+    llm: Optional[Any] = None,
+) -> AsyncIterator[str]:
+    """
+    Run one AIRP Assistant chat turn and yield the reply token by token.
+
+    The streaming counterpart to ``invoke_chat`` -- same message
+    construction (``build_chat_messages``, so the guardrail system
+    prompt and history-role handling are identical), but calls the
+    underlying LangChain client's ``.astream(...)`` instead of
+    ``.invoke(...)`` and yields each chunk's text as it arrives,
+    for a caller (WS /api/v1/chat/{session_id}/stream, T-104) that
+    forwards each token to a connected client as it is produced rather
+    than waiting for the complete response.
+
+    Every empty chunk is skipped (some providers emit an empty leading
+    or trailing chunk as part of normal streaming, and forwarding a
+    zero-length token event over the wire would be pure overhead), but
+    an ENTIRELY empty response (zero non-empty chunks total) is treated
+    as a failure -- see the ``ChatLLMError`` raised below -- for the
+    same reason ``invoke_chat`` treats an empty non-streamed response
+    as a failure: a silently blank AIRP Assistant reply is worse for
+    the caller to receive than a clear error it can act on.
+
+    Args:
+        history:        Prior turns in this session -- see
+                         ``build_chat_messages`` for the expected
+                         shape.
+        user_message:    The new message the user just sent.
+        response_style: Forwarded to ``build_chat_messages``.
+        context:        Forwarded to ``build_chat_messages``.
+        llm:            Optional pre-built LLM client. Defaults to
+                         ``get_chat_llm()`` when not provided.
+
+    Yields:
+        Each non-empty text chunk of the assistant's reply, in the
+        order the provider streamed them.
+
+    Raises:
+        ChatLLMError: the streaming call itself failed (raised from
+            inside the ``async for`` loop, so any tokens already
+            yielded before the failure remain valid and already
+            delivered to the caller), or the stream produced zero
+            non-empty chunks.
+    """
+    messages = build_chat_messages(
+        history, user_message, response_style=response_style, context=context
+    )
+    active_llm = llm if llm is not None else get_chat_llm()
+
+    yielded_any = False
+    try:
+        async for chunk in active_llm.astream(messages):
+            raw_content: Any = chunk.content if hasattr(chunk, "content") else chunk
+            token = raw_content if isinstance(raw_content, str) else str(raw_content)
+            if token:
+                yielded_any = True
+                yield token
+    except Exception as exc:
+        logger.exception("chat_llm: streaming LLM invocation failed")
+        raise ChatLLMError(
+            "AIRP Assistant failed to generate a response.", cause=exc
+        ) from exc
+
+    if not yielded_any:
+        logger.warning("chat_llm: streaming LLM produced no tokens")
+        raise ChatLLMError("AIRP Assistant returned an empty response.")
