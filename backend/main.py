@@ -49,7 +49,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.config import settings
-from backend.routers import accuracy, analysis, auth, documents, health, websocket
+from backend.routers import accuracy, analysis, auth, chat, documents, health, websocket
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +137,7 @@ def create_app() -> FastAPI:
     application.include_router(websocket.router)
     application.include_router(documents.router)
     application.include_router(accuracy.router)
+    application.include_router(chat.router)
 
     return application
 

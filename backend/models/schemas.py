@@ -19,7 +19,14 @@ from datetime import datetime
 from typing import Optional
 import uuid
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 __all__ = [
     "UserRegisterRequest",
@@ -47,6 +54,11 @@ __all__ = [
     "AccuracySummaryResponse",
     "AccuracyHistoryEntryResponse",
     "AccuracyHistoryResponse",
+    "ChatSessionCreateRequest",
+    "ChatSessionResponse",
+    "ChatSessionListResponse",
+    "ChatMessageResponse",
+    "ChatMessagesResponse",
 ]
 
 # ---------------------------------------------------------------------------
@@ -1010,6 +1022,143 @@ class AccuracyHistoryResponse(BaseModel):
     )
     total_count: int = Field(
         ge=0, description="Total number of verdict_outcomes rows across all analyses"
+    )
+    limit: int = Field(description="Page size used for this request")
+    offset: int = Field(ge=0, description="Number of rows skipped before this page")
+    has_more: bool = Field(
+        description="True when at least one further row exists beyond this page"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Request/response schemas -- AIRP Assistant chat sessions (T-103)
+# ---------------------------------------------------------------------------
+
+
+class ChatSessionCreateRequest(BaseModel):
+    """
+    Body for POST /api/v1/chat/sessions.
+
+    Mirrors the ``ck_chat_sessions_scope_consistency`` CHECK constraint
+    already enforced at the database level (T-099's migration) at the
+    API boundary too, via ``_check_scope_consistency`` below -- so a
+    malformed request is rejected with a clear 422 validation error
+    before it ever reaches the database, rather than surfacing as an
+    opaque IntegrityError.
+    """
+
+    session_type: str = Field(
+        ...,
+        description="'memo_scoped' (tied to one analysis) or 'portfolio_wide'",
+    )
+    analysis_id: Optional[uuid.UUID] = Field(
+        default=None,
+        description=(
+            "Required, and must be a completed analysis the caller owns, "
+            "when session_type='memo_scoped'. Must be omitted/null when "
+            "session_type='portfolio_wide'."
+        ),
+    )
+    title: Optional[str] = Field(
+        default=None,
+        max_length=200,
+        description="Optional display title, e.g. derived from the first message",
+    )
+
+    @field_validator("session_type")
+    @classmethod
+    def _validate_session_type(cls, value: str) -> str:
+        valid = {"memo_scoped", "portfolio_wide"}
+        if value not in valid:
+            raise ValueError(f"session_type must be one of {sorted(valid)}")
+        return value
+
+    @model_validator(mode="after")
+    def _check_scope_consistency(self) -> "ChatSessionCreateRequest":
+        if self.session_type == "memo_scoped" and self.analysis_id is None:
+            raise ValueError("analysis_id is required when session_type='memo_scoped'")
+        if self.session_type == "portfolio_wide" and self.analysis_id is not None:
+            raise ValueError(
+                "analysis_id must not be set when session_type='portfolio_wide'"
+            )
+        return self
+
+
+class ChatSessionResponse(BaseModel):
+    """One chat session, returned by POST and listed by GET /chat/sessions."""
+
+    id: uuid.UUID = Field(description="UUID of the chat session")
+    session_type: str = Field(description="'memo_scoped' or 'portfolio_wide'")
+    analysis_id: Optional[uuid.UUID] = Field(
+        default=None, description="The analysis this session is scoped to, if any"
+    )
+    title: Optional[str] = Field(default=None, description="Optional display title")
+    created_at: datetime = Field(description="UTC timestamp when the session started")
+    updated_at: datetime = Field(
+        description="UTC timestamp of the most recent message in this session"
+    )
+
+
+class ChatSessionListResponse(BaseModel):
+    """
+    Body returned by GET /api/v1/chat/sessions.
+
+    Same limit/offset/has_more pagination shape as ``HistoryResponse``
+    (T-050) and ``AccuracyHistoryResponse`` (T-091), applied to the
+    caller's own chat sessions, newest-updated first.
+    """
+
+    items: list[ChatSessionResponse] = Field(
+        description="This page's chat sessions, most recently updated first"
+    )
+    total_count: int = Field(
+        ge=0, description="Total number of chat sessions this user has"
+    )
+    limit: int = Field(description="Page size used for this request")
+    offset: int = Field(ge=0, description="Number of rows skipped before this page")
+    has_more: bool = Field(
+        description="True when at least one further row exists beyond this page"
+    )
+
+
+class ChatMessageResponse(BaseModel):
+    """One message within a chat session, part of GET .../messages's result."""
+
+    id: uuid.UUID = Field(description="UUID of the message")
+    session_id: uuid.UUID = Field(description="UUID of the parent chat session")
+    role: str = Field(description="'user' | 'assistant' | 'system' | 'tool'")
+    content: str = Field(description="Message text")
+    tool_calls: Optional[dict] = Field(  # type: ignore[type-arg]
+        default=None,
+        description=("LangChain tool invocations this assistant message made, if any"),
+    )
+    tool_name: Optional[str] = Field(
+        default=None,
+        description="Which tool produced this message, when role='tool'",
+    )
+    tokens_used: Optional[int] = Field(
+        default=None, description="Tokens consumed generating this message, if known"
+    )
+    created_at: datetime = Field(description="UTC timestamp when the message was sent")
+
+
+class ChatMessagesResponse(BaseModel):
+    """
+    Body returned by GET /api/v1/chat/sessions/{session_id}/messages.
+
+    Same limit/offset/has_more pagination shape as every other paginated
+    list in this module, applied in TRANSCRIPT order (oldest first) --
+    unlike every other paginated endpoint here, which returns
+    newest-first, a chat transcript reads correctly only in the order
+    the conversation actually happened.
+    """
+
+    session_id: uuid.UUID = Field(description="UUID of the chat session")
+    items: list[ChatMessageResponse] = Field(
+        description="This page's messages, oldest first (transcript order)"
+    )
+    total_count: int = Field(
+        ge=0, description="Total number of messages in this session"
     )
     limit: int = Field(description="Page size used for this request")
     offset: int = Field(ge=0, description="Number of rows skipped before this page")
