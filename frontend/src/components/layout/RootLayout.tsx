@@ -10,7 +10,15 @@
 // adds a fourth link, Accuracy, pointing at the new public /accuracy
 // dashboard -- it lives in this same always-rendered PRIMARY_NAV_LINKS
 // list (not gated behind isAuthenticated) since the route itself needs
-// no signed-in user either.
+// no signed-in user either. T-105 mounts <ChatWidget /> (the floating
+// AIRP Assistant panel) here, once, gated behind isAuthenticated --
+// this is the one place it is rendered, which is what makes it
+// available on every authenticated route (Dashboard, MemoPage, ...)
+// without either of those already-shipped pages needing to change.
+// Gated behind auth (unlike the always-public PRIMARY_NAV_LINKS)
+// because, unlike the public /accuracy route, chat session creation
+// itself requires a signed-in caller
+// (backend/routers/chat.py's create_chat_session_endpoint).
 //
 // Auth actions (Log in/Get started, or the signed-in email + Log out)
 // are deliberately NOT duplicated inside the mobile panel -- they stay
@@ -25,6 +33,7 @@
 import { useEffect, useState } from "react";
 import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 
+import { ChatWidget } from "@/components/chat";
 import { Button } from "@/components/ui";
 import { useAuth } from "@/hooks/useAuth";
 import { cn } from "@/lib/cn";
@@ -133,6 +142,7 @@ function CloseIcon(): JSX.Element {
 export function RootLayout(): JSX.Element {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const location = useLocation();
+  const { isAuthenticated } = useAuth();
 
   // Closes the mobile panel on every route change -- without this, a
   // link tapped inside the panel would navigate but leave the panel
@@ -201,6 +211,8 @@ export function RootLayout(): JSX.Element {
           Built as a portfolio project - 8-agent investment committee - FastAPI - LangGraph - React
         </div>
       </footer>
+
+      {isAuthenticated ? <ChatWidget /> : null}
     </div>
   );
 }

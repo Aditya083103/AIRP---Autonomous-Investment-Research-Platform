@@ -10,33 +10,44 @@
      expected. See docs/EVALUATION.md for the full scoring methodology. -->
 
 > A production-grade multi-agent AI system that simulates an investment committee,
-> performing autonomous financial analysis and generating professional Investment Memos.
+> performing autonomous financial analysis and generating professional Investment Memos —
+> with a conversational AIRP Assistant to explore the results afterward.
 
-<!-- Demo GIF will go here after Phase 8 -->
+<!-- Demo GIF will go here after Phase 12 launch -->
 
 ## What it does
 
 Ask _"Should I invest in TCS or Infosys?"_ and AIRP orchestrates 8 collaborating AI agents
 that research, debate, and challenge each other — then produces a downloadable Investment Memo
-with a BUY / HOLD / SELL verdict and conviction score. The full pipeline completes in under 90 seconds.
+with a BUY / HOLD / SELL verdict and conviction score. The full pipeline completes in under 90
+seconds, with every agent's progress streamed live to the dashboard.
+
+Once a memo exists, the **AIRP Assistant** — a floating chat widget available on every page —
+lets you ask follow-up questions about it (or about your whole analysis history) in plain
+English. It explains the reasoning behind a verdict already reached; it never issues, revises,
+or is talked into issuing a new one.
 
 ## Tech stack
 
-| Layer         | Technologies                                           |
-| ------------- | ------------------------------------------------------ |
-| Frontend      | React 18 · TypeScript · Vite · Tailwind CSS · Recharts |
-| Backend       | FastAPI · Python 3.11 · WebSocket · Pydantic v2        |
-| Agents        | LangGraph · LangChain · Claude API (Anthropic)         |
-| Storage       | PostgreSQL (Neon) · ChromaDB · Redis (Upstash)         |
-| Observability | LangSmith · GitHub Actions CI/CD                       |
-| Deployment    | Vercel (frontend) · Render (backend)                   |
+| Layer         | Technologies                                                        |
+| ------------- | -------------------------------------------------------------------- |
+| Frontend      | React 18 · TypeScript · Vite · Tailwind CSS · Recharts · ReactFlow  |
+| Backend       | FastAPI · Python 3.11 · WebSocket · Pydantic v2 · SQLAlchemy async  |
+| Agents        | LangGraph · LangChain · Groq (Llama 3.3 70B, dev) · Claude API (demo) |
+| Storage       | PostgreSQL (Neon) · ChromaDB · Redis (Upstash)                      |
+| Observability | LangSmith (Phase 11 evaluation gate) · GitHub Actions CI/CD          |
+| Deployment    | Vercel (frontend) · Render (backend)                                 |
+
+`backend/services/llm_factory.py` abstracts the LLM provider behind one `LLM_PROVIDER` env
+var — every agent and the AIRP Assistant run on Groq's free tier through the full 25-week build,
+and switch to Claude only for the polished demo (Phase 12).
 
 ## Quick start (local)
 
 ```bash
 # 1. Clone
-git clone https://github.com/<your-handle>/airp.git
-cd airp
+git clone https://github.com/Aditya083103/AIRP---Autonomous-Investment-Research-Platform.git
+cd AIRP---Autonomous-Investment-Research-Platform
 
 # 2. Configure environment
 cp .env.example .env
@@ -69,13 +80,21 @@ npm run dev
 ## Running tests
 
 ```bash
-# Set required environment variable first
+# Backend — set required environment variable first
 export ENVIRONMENT=test       # macOS / Linux
-# $env:ENVIRONMENT="test"     # Windows PowerShell
+# $env:ENVIRONMENT="test"     # Windows PowerShell (Git Bash: set ENVIRONMENT=test, its own line)
 
 pytest                          # unit tests only (fast, mocked)
 pytest -m integration           # real API calls (needs .env)
 pytest --cov --cov-report=html  # with coverage report
+```
+
+```bash
+# Frontend
+cd frontend
+npm run test:run    # full Vitest suite, once
+npm run lint         # ESLint, --max-warnings 0
+npm run type-check   # tsc --noEmit (strict mode)
 ```
 
 ## Project structure
@@ -85,20 +104,23 @@ airp/
 ├── backend/
 │   ├── agents/       # 8 agent definitions
 │   ├── graph/        # LangGraph StateGraph + routing
-│   ├── routers/      # FastAPI route handlers
+│   ├── routers/      # FastAPI route handlers (incl. chat + chat_stream)
 │   ├── models/       # SQLAlchemy ORM + Pydantic schemas
-│   ├── services/     # Business logic layer
+│   ├── services/     # Business logic layer (incl. chat_llm, chat_service)
 │   ├── tools/        # LangChain tool definitions
 │   ├── db/           # PostgreSQL, ChromaDB, Redis clients
+│   ├── migrations/   # Alembic migrations
 │   └── tests/        # pytest unit + integration tests
 ├── frontend/
 │   └── src/
-│       ├── components/
+│       ├── components/   # incl. chat/ (AIRP Assistant widget)
 │       ├── pages/
-│       ├── hooks/
+│       ├── hooks/        # incl. useChatWidget, useChatStream
 │       ├── api/
+│       ├── lib/
 │       └── types/
-├── docs/             # Architecture, agents, data layer docs
+├── docs/             # Architecture, agents, data layer, chat docs
+├── docs/week-NN/     # Per-task workflow docs (branch → commit → PR)
 ├── docker-compose.yml
 ├── .env.example
 └── README.md
@@ -106,28 +128,54 @@ airp/
 
 ## Documentation
 
-| Doc                                             | Contents                                                                        |
-| ----------------------------------------------- | ------------------------------------------------------------------------------- |
-| [ARCHITECTURE.md](docs/ARCHITECTURE.md)         | Full system architecture — layers, request flow, state design, design decisions |
-| [CONTRIBUTING.md](docs/CONTRIBUTING.md)         | Local setup, branch strategy, commit format, PR process, testing guide          |
-| [CODING_STANDARDS.md](docs/CODING_STANDARDS.md) | Naming conventions, linting rules, pre-commit setup, CI checks                  |
-| [AGENTS.md](docs/AGENTS.md)                     | Each agent's persona, tools, output schema, example output                      |
-| [APIS.md](docs/APIS.md)                         | External APIs, free tier limits, env variable names, rate limit strategy        |
-| [EVALUATION.md](docs/EVALUATION.md)             | Verdict accuracy methodology — evaluation horizons, dead-zone scoring rule, worked examples |
+| Doc                                                 | Contents                                                                             |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| [ARCHITECTURE.md](docs/ARCHITECTURE.md)             | Full system architecture — layers, request flow, state design, design decisions       |
+| [CONTRIBUTING.md](docs/CONTRIBUTING.md)             | Local setup, branch strategy, commit format, PR process, testing guide                |
+| [CODING_STANDARDS.md](docs/CODING_STANDARDS.md)     | Naming conventions, linting rules, pre-commit setup, CI checks                        |
+| [AGENTS.md](docs/AGENTS.md)                         | Each agent's persona, tools, output schema, example output                            |
+| [APIS.md](docs/APIS.md)                             | External APIs, free tier limits, env variable names, rate limit strategy              |
+| [DATA_LAYER.md](docs/DATA_LAYER.md)                 | Data tools, caching strategy, rate-limit handling per source                          |
+| [STATE.md](docs/STATE.md)                           | `InvestmentState` shape, persistence, and resumption design                           |
+| [GRAPH_DIAGRAM.md](docs/GRAPH_DIAGRAM.md)           | Auto-exported LangGraph state diagram                                                 |
+| [PERFORMANCE_PROFILE.md](docs/PERFORMANCE_PROFILE.md) | Per-agent and per-node latency profiling                                            |
+| [EVALUATION.md](docs/EVALUATION.md)                 | Verdict accuracy methodology — evaluation horizons, dead-zone scoring, worked examples |
+| `docs/CHAT.md` _(landing in T-107)_                 | AIRP Assistant architecture, guardrails, and example transcripts                      |
 
 ## Status
 
-| Phase | Name                            | Status         |
-| ----- | ------------------------------- | -------------- |
-| 0     | Project Setup & Standards       | ✅ Complete    |
-| 1     | Data Layer & APIs               | ⬜ Not started |
-| 2     | Research Agents                 | ⬜ Not started |
-| 3     | LangGraph Orchestration         | ⬜ Not started |
-| 4     | Debate Engine & Advanced Agents | ⬜ Not started |
-| 5     | FastAPI Backend                 | ⬜ Not started |
-| 6     | React Frontend                  | ⬜ Not started |
-| 7     | Evaluation Framework            | ⬜ Not started |
-| 8     | Polish, Deploy & Launch         | ⬜ Not started |
+12 phases, ~107 tasks (`T-001`–`T-107`, plus deferred evaluation/deploy tasks `T-067`–`T-080`
+reordered into Phases 11–12). Currently in **Phase 10 — AIRP Assistant (Chatbot)**.
+
+| Phase | Name                                | Status            |
+| ----- | ------------------------------------ | ------------------ |
+| 0     | Project Setup & Standards           | ✅ Complete        |
+| 1     | Data Layer & APIs                   | ✅ Complete        |
+| 2     | Research Agents                     | ✅ Complete        |
+| 3     | LangGraph Orchestration             | ✅ Complete        |
+| 4     | Debate Engine & Advanced Agents     | ✅ Complete        |
+| 5     | FastAPI Backend                     | ✅ Complete        |
+| 6     | React Frontend                      | ✅ Complete        |
+| 7     | Bug Fixes & Verdict Calibration     | ✅ Complete        |
+| 8     | Verdict Accuracy Tracker            | ✅ Complete        |
+| 9     | Live Graph Visualization            | ✅ Complete        |
+| 10    | AIRP Assistant (Chatbot)            | 🟨 In progress (6/9) |
+| 11    | Evaluation Framework                | ⬜ Not started      |
+| 12    | Polish, Deploy & Launch             | ⬜ Not started      |
+
+**Phase 10 detail:**
+
+| Task  | Title                                    | Status |
+| ----- | ------------------------------------------ | ------ |
+| T-099 | `chat_sessions` / `chat_messages` schema   | ✅ Done |
+| T-100 | Memo-scoped context builder                | ✅ Done |
+| T-101 | Portfolio-wide tool-calling layer          | ✅ Done |
+| T-102 | `chat_llm.py` + guardrail system prompt    | ✅ Done |
+| T-103 | REST endpoints for chat sessions           | ✅ Done |
+| T-104 | WebSocket token streaming                  | ✅ Done |
+| T-105 | `ChatWidget.tsx` frontend                  | ✅ Done |
+| T-106 | Personalization via `user_preferences`     | ⬜ To do |
+| T-107 | Tests + docs for AIRP Assistant            | ⬜ To do |
 
 ---
 

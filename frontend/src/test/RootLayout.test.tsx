@@ -8,7 +8,13 @@
 // contains the primary links, and closes again after a link inside it
 // is clicked or the toggle is clicked a second time. T-092 adds the
 // fourth "Accuracy" link to both the always-visible desktop assertion
-// and the mobile panel assertion.
+// and the mobile panel assertion. T-105 adds a small assertion that
+// <ChatWidget /> is only mounted when isAuthenticated -- this file does
+// not otherwise exercise ChatWidget's own behaviour (session creation,
+// streaming, ...), which is fully covered by test/ChatWidget.test.tsx;
+// it only proves RootLayout wires the auth gate correctly, so no
+// fetch/WebSocket stubbing is needed here (the widget makes no network
+// call until it is opened).
 
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -119,5 +125,21 @@ describe("RootLayout mobile nav panel", () => {
     await user.click(within(panel).getByRole("link", { name: "Compare" }));
 
     expect(screen.queryByTestId("mobile-nav-panel")).not.toBeInTheDocument();
+  });
+});
+
+describe("RootLayout chat widget (T-105)", () => {
+  it("does not render the AIRP Assistant toggle when signed out", () => {
+    renderLayout(false);
+
+    expect(
+      screen.queryByRole("button", { name: "Open AIRP Assistant chat" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders the AIRP Assistant toggle when signed in", () => {
+    renderLayout(true);
+
+    expect(screen.getByRole("button", { name: "Open AIRP Assistant chat" })).toBeInTheDocument();
   });
 });
