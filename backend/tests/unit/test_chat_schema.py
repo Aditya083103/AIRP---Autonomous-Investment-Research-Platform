@@ -291,6 +291,44 @@ class TestUserPreferencesColumns:
 
 
 # ---------------------------------------------------------------------------
+# Test: UserPreferences personalization columns (T-106)
+# ---------------------------------------------------------------------------
+
+
+class TestUserPreferencesPersonalizationColumns:
+    """
+    risk_appetite / preferred_sectors, added by T-106's migration
+    (20260811_0000_f6a7b8c9d0e1) on top of T-099's user_preferences
+    table -- both represent "not yet known" differently on purpose
+    (NULL vs. an empty JSON array), matching the migration's own
+    docstring for why watchlist_tickers's []-means-empty convention is
+    reused for preferred_sectors rather than mixing conventions within
+    the same table.
+    """
+
+    def test_risk_appetite_nullable(self) -> None:
+        # NULL until the assistant has asked and the user has answered
+        # once -- see chat_llm.build_personalization_instruction.
+        assert _col(UserPreferences, "risk_appetite").nullable is True
+
+    def test_risk_appetite_has_no_server_default(self) -> None:
+        # Deliberately no default -- "not yet known" must be NULL, not
+        # a guessed starting value.
+        assert _col(UserPreferences, "risk_appetite").server_default is None
+
+    def test_preferred_sectors_is_jsonb(self) -> None:
+        col = _col(UserPreferences, "preferred_sectors")
+        assert isinstance(col.type, JSONB)
+
+    def test_preferred_sectors_not_nullable(self) -> None:
+        assert _col(UserPreferences, "preferred_sectors").nullable is False
+
+    def test_preferred_sectors_has_server_default(self) -> None:
+        col = _col(UserPreferences, "preferred_sectors")
+        assert col.server_default is not None
+
+
+# ---------------------------------------------------------------------------
 # Test: relationships
 # ---------------------------------------------------------------------------
 

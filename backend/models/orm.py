@@ -15,7 +15,7 @@ Defines the six core tables that back the AIRP system:
                         memo-scoped (analysis_id set) or portfolio-wide (NULL)
     chat_messages     — AIRP Assistant (T-099); one row per message in a session
     user_preferences  — AIRP Assistant (T-099); one row per user's chat/display
-                        settings
+                        settings; risk_appetite/preferred_sectors added T-106
 
 Design decisions
 ────────────────
@@ -135,6 +135,15 @@ ChatResponseStyleEnum = Enum(
     "concise",
     "detailed",
     name="chat_response_style",
+)
+
+#: AIRP Assistant personalization (T-106) -- self-reported investing risk
+#: tolerance, used only to adjust chat tone/emphasis, never a verdict
+RiskAppetiteEnum = Enum(
+    "conservative",
+    "moderate",
+    "aggressive",
+    name="risk_appetite",
 )
 
 
@@ -1050,6 +1059,29 @@ class UserPreferences(Base):
         server_default="true",
         comment="Whether to email the user on completed analyses / accuracy runs",
     )
+    risk_appetite: Mapped[Optional[str]] = mapped_column(
+        RiskAppetiteEnum,
+        nullable=True,
+        comment=(
+            "AIRP Assistant personalization (T-106): self-reported risk "
+            "tolerance -- 'conservative' | 'moderate' | 'aggressive'. NULL "
+            "until the assistant has asked and the user has answered once. "
+            "Affects chat tone/emphasis ONLY -- never a stored verdict."
+        ),
+    )
+    preferred_sectors: Mapped[list] = mapped_column(  # type: ignore[type-arg]
+        JSONB,
+        nullable=False,
+        default=list,
+        server_default=sa_text("'[]'::jsonb"),
+        comment=(
+            "AIRP Assistant personalization (T-106): JSON array of sector "
+            "names the user has said they favour (e.g. ['IT', 'Banking & "
+            "Financials']). Empty until the assistant has asked and the "
+            "user has answered once. Affects chat tone/emphasis ONLY -- "
+            "never a stored verdict."
+        ),
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -1076,4 +1108,7 @@ class UserPreferences(Base):
     )
 
     def __repr__(self) -> str:
-        return f"<UserPreferences user={self.user_id} theme={self.theme!r}>"
+        return (
+            f"<UserPreferences user={self.user_id} theme={self.theme!r} "
+            f"risk_appetite={self.risk_appetite!r}>"
+        )
