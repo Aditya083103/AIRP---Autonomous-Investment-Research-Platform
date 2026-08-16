@@ -20,7 +20,8 @@ What is faked vs. real
     database work is entirely delegated to the service functions
     below, so the fake session's content is never itself inspected).
   * backend.routers.chat_stream.get_chat_session_stream_info /
-    get_chat_session_messages / build_memo_context / append_chat_message
+    get_chat_session_messages / build_memo_context / append_chat_message /
+    apply_extracted_preferences (T-106)
     are patched directly (module-level patches, not dependency
     overrides) -- the SAME autouse pipeline-mocking fixture pattern
     T-103's own test_chat_router.py already established for its three
@@ -176,6 +177,28 @@ def _make_astream_chat(
     return _fake_astream_chat
 
 
+def _make_default_preferences(
+    risk_appetite: Any = None,
+    preferred_sectors: Any = None,
+    chat_response_style: str = "concise",
+) -> MagicMock:
+    """
+    A minimal stand-in for the ``UserPreferences`` row
+    ``apply_extracted_preferences`` (T-106) returns -- this router only
+    ever reads ``.chat_response_style`` / ``.risk_appetite`` /
+    ``.preferred_sectors`` off it, so a MagicMock with exactly those
+    three attributes set is a faithful, lightweight substitute for a
+    real ORM row in these router-level tests (which already delegate
+    all real UserPreferences persistence logic to
+    test_preference_service.py's own dedicated unit tests).
+    """
+    prefs = MagicMock()
+    prefs.risk_appetite = risk_appetite
+    prefs.preferred_sectors = preferred_sectors if preferred_sectors is not None else []
+    prefs.chat_response_style = chat_response_style
+    return prefs
+
+
 def _patch_chat_stream_services(
     *,
     stream_info: Any,
@@ -184,9 +207,10 @@ def _patch_chat_stream_services(
     append_side_effect: Any = None,
     astream_tokens: list[str] | None = None,
     astream_error: Exception | None = None,
+    preferences: Any = None,
 ) -> Any:
     """
-    Bundle the 5 module-level patches every test in this file needs,
+    Bundle the 6 module-level patches every test in this file needs,
     matching this router's real import names 1:1. Returns a context
     manager that, on __enter__, yields a plain dict of every mock
     (keyed by attribute name) -- built from individual patch() calls
@@ -215,6 +239,21 @@ def _patch_chat_stream_services(
         "build_memo_context": AsyncMock(return_value=memo_context),
         "append_chat_message": AsyncMock(
             side_effect=append_side_effect, return_value=saved_message
+        ),
+        # T-106: apply_extracted_preferences does real database I/O
+        # (select-or-insert into user_preferences, then a possible
+        # write-once update) -- patched here the same way the other
+        # four service-layer calls already are, rather than exercised
+        # against the fake AsyncSessionLocal, whose execute() always
+        # returns `current_user` regardless of query (see the `client`
+        # fixture) and is in no way a working stand-in for a real
+        # UserPreferences table. Persistence logic itself (write-once,
+        # lazy creation, the race fallback) is covered independently
+        # by test_preference_service.py.
+        "apply_extracted_preferences": AsyncMock(
+            return_value=(
+                preferences if preferences is not None else _make_default_preferences()
+            )
         ),
     }
     astream_replacement = _make_astream_chat(astream_tokens or [], astream_error)
@@ -477,6 +516,12 @@ class TestIncrementalTokens:
             )
             stack.enter_context(
                 patch(
+                    "backend.routers.chat_stream.apply_extracted_preferences",
+                    new=AsyncMock(return_value=_make_default_preferences()),
+                )
+            )
+            stack.enter_context(
+                patch(
                     "backend.routers.chat_stream.astream_chat",
                     new=astream_replacement,
                 )
@@ -554,6 +599,9 @@ class TestSlowTokenDoesNotTruncateReply:
             ),
             build_memo_context=AsyncMock(return_value=None),
             append_chat_message=AsyncMock(return_value=MagicMock(id=uuid.uuid4())),
+            apply_extracted_preferences=AsyncMock(
+                return_value=_make_default_preferences()
+            ),
             astream_chat=_slow_astream_chat,
         ):
             with client.websocket_connect(
@@ -744,6 +792,9 @@ class TestGracefulReconnect:
                 side_effect=AnalysisNotReadyError(status="running")
             ),
             append_chat_message=AsyncMock(return_value=MagicMock(id=uuid.uuid4())),
+            apply_extracted_preferences=AsyncMock(
+                return_value=_make_default_preferences()
+            ),
             astream_chat=_make_astream_chat(["ok"]),
         ):
             with client.websocket_connect(
@@ -805,3 +856,170 @@ class TestMessagePersistence:
         assistant_call_kwargs = append_mock.call_args_list[1].kwargs
         assert assistant_call_kwargs["role"] == "assistant"
         assert assistant_call_kwargs["content"] == "Hello, world!"
+
+
+# ---------------------------------------------------------------------------
+# 7. Personalization wiring (T-106)
+# ---------------------------------------------------------------------------
+#
+# The actual extraction/persistence LOGIC (write-once, lazy row
+# creation, the creation-race fallback) is covered independently and
+# exhaustively by test_preference_service.py and
+# test_preference_extractor.py -- these tests only prove this router
+# calls apply_extracted_preferences with the right arguments on every
+# turn, and forwards its return value's three fields into astream_chat
+# correctly, matching this task's "user_preferences populated after
+# first relevant exchange" acceptance criterion end to end at the
+# router layer.
+
+
+class TestPersonalizationWiring:
+    def test_apply_extracted_preferences_called_with_the_users_message(
+        self, client: TestClient, auth_token: str, current_user: User
+    ) -> None:
+        session_id = uuid.uuid4()
+        info = _make_stream_info(session_id, user_id=current_user.id)
+        with _patch_chat_stream_services(
+            stream_info=info, astream_tokens=["ok"]
+        ) as mocks:
+            with client.websocket_connect(
+                f"/api/v1/chat/{session_id}/stream?token={auth_token}"
+            ) as ws:
+                ws.send_json({"message": "I'm a conservative investor."})
+                ws.receive_json()  # start
+                ws.receive_json()  # token
+                ws.receive_json()  # done
+
+        apply_mock = mocks["apply_extracted_preferences"]
+        apply_mock.assert_awaited_once()
+        call_args = apply_mock.call_args
+        # (session, user_id, extraction) -- positional per
+        # backend.routers.chat_stream's own call site.
+        assert call_args.args[1] == current_user.id
+        extraction = call_args.args[2]
+        assert extraction.risk_appetite == "conservative"
+
+    def test_preferences_return_value_forwarded_into_astream_chat(
+        self, client: TestClient, auth_token: str, current_user: User
+    ) -> None:
+        session_id = uuid.uuid4()
+        info = _make_stream_info(session_id, user_id=current_user.id)
+        recorded_calls: list[tuple[Any, Any, dict[str, Any]]] = []
+        astream_replacement = _make_astream_chat(["ok"], calls=recorded_calls)
+        stub_preferences = _make_default_preferences(
+            risk_appetite="aggressive",
+            preferred_sectors=["IT", "Auto"],
+            chat_response_style="detailed",
+        )
+
+        with ExitStack() as stack:
+            stack.enter_context(
+                patch(
+                    "backend.routers.chat_stream.get_chat_session_stream_info",
+                    new=AsyncMock(return_value=info),
+                )
+            )
+            stack.enter_context(
+                patch(
+                    "backend.routers.chat_stream.get_chat_session_messages",
+                    new=AsyncMock(return_value=_make_empty_history_page(session_id)),
+                )
+            )
+            stack.enter_context(
+                patch(
+                    "backend.routers.chat_stream.build_memo_context",
+                    new=AsyncMock(return_value=None),
+                )
+            )
+            stack.enter_context(
+                patch(
+                    "backend.routers.chat_stream.append_chat_message",
+                    new=AsyncMock(return_value=MagicMock(id=uuid.uuid4())),
+                )
+            )
+            stack.enter_context(
+                patch(
+                    "backend.routers.chat_stream.apply_extracted_preferences",
+                    new=AsyncMock(return_value=stub_preferences),
+                )
+            )
+            stack.enter_context(
+                patch(
+                    "backend.routers.chat_stream.astream_chat",
+                    new=astream_replacement,
+                )
+            )
+            with client.websocket_connect(
+                f"/api/v1/chat/{session_id}/stream?token={auth_token}"
+            ) as ws:
+                ws.send_json({"message": "what's the verdict?"})
+                ws.receive_json()  # start
+                ws.receive_json()  # token
+                ws.receive_json()  # done
+
+        assert len(recorded_calls) == 1
+        _, _, kwargs = recorded_calls[0]
+        assert kwargs["response_style"] == "detailed"
+        assert kwargs["risk_appetite"] == "aggressive"
+        assert kwargs["preferred_sectors"] == ["IT", "Auto"]
+
+    def test_default_preferences_stub_forwards_concise_and_unknowns(
+        self, client: TestClient, auth_token: str, current_user: User
+    ) -> None:
+        """When nothing is known yet (a brand-new user's first ever
+        turn), astream_chat still receives concise/None/[] -- exactly
+        what chat_llm.build_personalization_instruction needs to
+        produce the "ask once" instruction."""
+        session_id = uuid.uuid4()
+        info = _make_stream_info(session_id, user_id=current_user.id)
+        recorded_calls: list[tuple[Any, Any, dict[str, Any]]] = []
+        with _patch_chat_stream_services(
+            stream_info=info, astream_tokens=["ok"]
+        ) as mocks:
+            # Swap in a tracking astream_chat replacement without
+            # losing the rest of _patch_chat_stream_services's setup.
+            with patch(
+                "backend.routers.chat_stream.astream_chat",
+                new=_make_astream_chat(["ok"], calls=recorded_calls),
+            ):
+                with client.websocket_connect(
+                    f"/api/v1/chat/{session_id}/stream?token={auth_token}"
+                ) as ws:
+                    ws.send_json({"message": "hello"})
+                    ws.receive_json()  # start
+                    ws.receive_json()  # token
+                    ws.receive_json()  # done
+
+        assert mocks["apply_extracted_preferences"].await_count == 1
+        assert len(recorded_calls) == 1
+        _, _, kwargs = recorded_calls[0]
+        assert kwargs["response_style"] == "concise"
+        assert kwargs["risk_appetite"] is None
+        assert kwargs["preferred_sectors"] == []
+
+    def test_apply_extracted_preferences_called_once_per_turn_not_per_connection(
+        self, client: TestClient, auth_token: str, current_user: User
+    ) -> None:
+        """Two turns on the same connection -> two independent
+        apply_extracted_preferences calls, each free to learn something
+        new (or not) -- personalization is evaluated every turn, the
+        same way response_style/context already are."""
+        session_id = uuid.uuid4()
+        info = _make_stream_info(session_id, user_id=current_user.id)
+        with _patch_chat_stream_services(
+            stream_info=info, astream_tokens=["ok"]
+        ) as mocks:
+            with client.websocket_connect(
+                f"/api/v1/chat/{session_id}/stream?token={auth_token}"
+            ) as ws:
+                ws.send_json({"message": "first message"})
+                ws.receive_json()
+                ws.receive_json()
+                ws.receive_json()
+
+                ws.send_json({"message": "second message"})
+                ws.receive_json()
+                ws.receive_json()
+                ws.receive_json()
+
+        assert mocks["apply_extracted_preferences"].await_count == 2

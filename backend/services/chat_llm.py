@@ -68,6 +68,28 @@ mean in general terms -- what it must never do is convert that
 discussion into a new BUY/HOLD/SELL call, conviction score, or price
 target of its own.
 
+Personalization (T-106) -- why it is a SEPARATE instruction block, not
+folded into ``SYSTEM_PROMPT`` itself
+------------------------------------------------------------------------
+``SYSTEM_PROMPT`` is identical for every call, by design (see "The
+guardrail" above) -- it has no per-user state. Risk appetite and
+preferred sectors (``user_preferences.risk_appetite`` /
+``.preferred_sectors``, added by T-106's migration on top of T-099's
+table) are per-user and change what gets built into the prompt on a
+per-call basis, the same way ``response_style`` already does via
+``RESPONSE_STYLE_INSTRUCTIONS``.
+``build_personalization_instruction()`` follows that same established
+pattern rather than inventing a new one: a small, independently
+testable function that returns instruction text,
+``build_system_prompt()`` appends it after the response-style
+instruction and before any grounded ``context``. Its hard rule
+("personalization affects tone/emphasis only, never a verdict") is
+DELIBERATELY restated immediately beside the personalization data
+itself, not only once in ``SYSTEM_PROMPT`` -- the same "restate a
+guardrail against the concrete thing that could tempt a model to break
+it, not only once in the abstract" reasoning "The guardrail" section
+above already gives for the verdict-override rule.
+
 Why ``get_chat_llm()`` does not change temperature/config
 ------------------------------------------------------------------------
 ``get_llm()`` constructs both providers with ``temperature=0`` -- every
@@ -160,6 +182,7 @@ __all__ = [
     "build_system_prompt",
     "build_system_message",
     "build_chat_messages",
+    "build_personalization_instruction",
     "invoke_chat",
     "astream_chat",
 ]
@@ -241,6 +264,10 @@ AIRP analysis -- if asked, redirect the user to run an AIRP analysis \
 for that company instead.
   - Never present your own summarisation or interpretation as if it \
 were additional analysis from the investment committee.
+  - Never let a user's stated risk appetite or preferred sectors \
+change a verdict, conviction score, price target, or any numeric \
+figure in a stored analysis -- personalization may only adjust your \
+tone and which already-stored details you choose to emphasise.
 
 If a user asks something the stored context and the tools available to \
 you cannot answer, say so plainly rather than guessing."""
@@ -319,6 +346,81 @@ def get_chat_llm() -> Any:
 
 
 # ---------------------------------------------------------------------------
+# Personalization (T-106)
+# ---------------------------------------------------------------------------
+
+
+def build_personalization_instruction(
+    risk_appetite: Optional[str] = None,
+    preferred_sectors: Optional[list[str]] = None,
+) -> str:
+    """
+    Build the personalization instruction block appended to the system
+    prompt (T-106).
+
+    Two mutually exclusive shapes, matching this task's "ask and
+    remember... once" acceptance criterion:
+
+      * Nothing known yet (``risk_appetite`` is None and
+        ``preferred_sectors`` is empty/None): instructs the assistant
+        to ask, at most ONCE per conversation, in a brief and natural
+        way -- never as an interrogation, and never blocking the
+        actual answer to whatever the user just asked.
+      * Something is known: states it plainly, with an adjacent HARD
+        RULE that it may only steer tone/emphasis/which already-stored
+        details to highlight -- never a verdict, conviction score,
+        price target, or any numeric figure in the stored analysis.
+        See this module's docstring for why the hard rule is repeated
+        here rather than left to only ``SYSTEM_PROMPT``.
+
+    Args:
+        risk_appetite: 'conservative' | 'moderate' | 'aggressive', or
+            None if not yet known
+            (``user_preferences.risk_appetite`` is NULL).
+        preferred_sectors: Sector names the user favours, or an
+            empty/None list if not yet known
+            (``user_preferences.preferred_sectors`` is ``[]``).
+
+    Returns:
+        Instruction text to append to the system prompt.
+    """
+    sectors = preferred_sectors or []
+
+    if risk_appetite is None and not sectors:
+        return (
+            "PERSONALIZATION: You do not yet know this user's risk "
+            "appetite or preferred sectors. If a natural moment arises "
+            "in this reply, ask ONE brief question about their risk "
+            "appetite (conservative, moderate, or aggressive) and/or "
+            "which sectors they are most interested in -- do not force "
+            "it, and never let it delay or replace answering what they "
+            "actually asked. Ask this at most once per conversation: if "
+            "you already asked earlier in this session, do not ask "
+            "again even if they have not answered yet."
+        )
+
+    known_bits = []
+    if risk_appetite is not None:
+        known_bits.append(f"risk appetite: {risk_appetite}")
+    if sectors:
+        known_bits.append(f"preferred sectors: {', '.join(sectors)}")
+    known_summary = "; ".join(known_bits)
+
+    return (
+        f"PERSONALIZATION: This user has told you -- {known_summary}. "
+        "Use this only to adjust your tone and which already-stored "
+        "details you choose to emphasise -- for example, lead with "
+        "downside risk and capital-preservation factors for a "
+        "conservative investor, lead with growth catalysts for an "
+        "aggressive one, or note a stored analysis's relevance to a "
+        "sector they favour. HARD RULE: this NEVER changes a verdict, "
+        "conviction score, price target, or any numeric figure in the "
+        "stored analysis -- those come only from the investment "
+        "committee's own completed analysis, exactly as required above."
+    )
+
+
+# ---------------------------------------------------------------------------
 # Prompt / message builders
 # ---------------------------------------------------------------------------
 
@@ -326,16 +428,19 @@ def get_chat_llm() -> Any:
 def build_system_prompt(
     response_style: str = DEFAULT_RESPONSE_STYLE,
     context: Optional[str] = None,
+    risk_appetite: Optional[str] = None,
+    preferred_sectors: Optional[list[str]] = None,
 ) -> str:
     """
     Build the full system prompt text for one AIRP Assistant call.
 
     Always starts with the objectivity guardrail (``SYSTEM_PROMPT``),
-    then the response-style instruction, then -- only when provided --
-    the grounded context block (e.g. a memo-scoped session's
-    ``MemoChatContext.full_context`` from T-100). ``context`` is never
-    validated or summarised here; this function only assembles text
-    the caller already trusts.
+    then the response-style instruction, then the personalization
+    instruction (T-106, see ``build_personalization_instruction``),
+    then -- only when provided -- the grounded context block (e.g. a
+    memo-scoped session's ``MemoChatContext.full_context`` from T-100).
+    ``context`` is never validated or summarised here; this function
+    only assembles text the caller already trusts.
 
     Args:
         response_style: One of the keys in
@@ -345,6 +450,12 @@ def build_system_prompt(
         context: Optional grounded context to append, e.g. a
             memo-scoped session's rendered analysis, or a short note
             describing which portfolio-wide tools are available.
+        risk_appetite: Forwarded to
+            ``build_personalization_instruction`` -- typically a
+            ``UserPreferences.risk_appetite`` value (T-106).
+        preferred_sectors: Forwarded to
+            ``build_personalization_instruction`` -- typically a
+            ``UserPreferences.preferred_sectors`` value (T-106).
 
     Returns:
         The full system prompt text, ready to wrap in a
@@ -353,7 +464,11 @@ def build_system_prompt(
     style_instruction = RESPONSE_STYLE_INSTRUCTIONS.get(
         response_style, RESPONSE_STYLE_INSTRUCTIONS[DEFAULT_RESPONSE_STYLE]
     )
-    parts = [SYSTEM_PROMPT, style_instruction]
+    parts = [
+        SYSTEM_PROMPT,
+        style_instruction,
+        build_personalization_instruction(risk_appetite, preferred_sectors),
+    ]
     if context:
         parts.append(f"Grounded context for this conversation:\n{context}")
     return "\n\n".join(parts)
@@ -362,9 +477,15 @@ def build_system_prompt(
 def build_system_message(
     response_style: str = DEFAULT_RESPONSE_STYLE,
     context: Optional[str] = None,
+    risk_appetite: Optional[str] = None,
+    preferred_sectors: Optional[list[str]] = None,
 ) -> SystemMessage:
     """Wrap ``build_system_prompt()``'s output in a ``SystemMessage``."""
-    return SystemMessage(content=build_system_prompt(response_style, context))
+    return SystemMessage(
+        content=build_system_prompt(
+            response_style, context, risk_appetite, preferred_sectors
+        )
+    )
 
 
 def build_chat_messages(
@@ -373,6 +494,8 @@ def build_chat_messages(
     *,
     response_style: str = DEFAULT_RESPONSE_STYLE,
     context: Optional[str] = None,
+    risk_appetite: Optional[str] = None,
+    preferred_sectors: Optional[list[str]] = None,
 ) -> list[BaseMessage]:
     """
     Assemble the full message list for one AIRP Assistant LLM call.
@@ -394,12 +517,16 @@ def build_chat_messages(
         user_message: The new message the user just sent.
         response_style: Forwarded to ``build_system_prompt``.
         context: Forwarded to ``build_system_prompt``.
+        risk_appetite: Forwarded to ``build_system_prompt`` (T-106).
+        preferred_sectors: Forwarded to ``build_system_prompt`` (T-106).
 
     Returns:
         A list of LangChain ``BaseMessage`` objects ready to pass to
         ``llm.invoke(...)``.
     """
-    messages: list[BaseMessage] = [build_system_message(response_style, context)]
+    messages: list[BaseMessage] = [
+        build_system_message(response_style, context, risk_appetite, preferred_sectors)
+    ]
 
     for turn in history:
         role = turn.get("role")
@@ -426,6 +553,8 @@ def invoke_chat(
     *,
     response_style: str = DEFAULT_RESPONSE_STYLE,
     context: Optional[str] = None,
+    risk_appetite: Optional[str] = None,
+    preferred_sectors: Optional[list[str]] = None,
     llm: Optional[Any] = None,
 ) -> str:
     """
@@ -449,6 +578,8 @@ def invoke_chat(
             memo-scoped session's ``MemoChatContext.full_context``
             (T-100) or a short description of which portfolio-wide
             tools (T-101) are bound for this call.
+        risk_appetite: Forwarded to ``build_chat_messages`` (T-106).
+        preferred_sectors: Forwarded to ``build_chat_messages`` (T-106).
         llm: Optional pre-built LLM client (e.g. one already bound to
             portfolio tools via ``.bind_tools(...)``). Defaults to
             ``get_chat_llm()`` when not provided.
@@ -463,7 +594,12 @@ def invoke_chat(
             degrading gracefully.
     """
     messages = build_chat_messages(
-        history, user_message, response_style=response_style, context=context
+        history,
+        user_message,
+        response_style=response_style,
+        context=context,
+        risk_appetite=risk_appetite,
+        preferred_sectors=preferred_sectors,
     )
     active_llm = llm if llm is not None else get_chat_llm()
 
@@ -496,6 +632,8 @@ async def astream_chat(
     *,
     response_style: str = DEFAULT_RESPONSE_STYLE,
     context: Optional[str] = None,
+    risk_appetite: Optional[str] = None,
+    preferred_sectors: Optional[list[str]] = None,
     llm: Optional[Any] = None,
 ) -> AsyncIterator[str]:
     """
@@ -503,12 +641,13 @@ async def astream_chat(
 
     The streaming counterpart to ``invoke_chat`` -- same message
     construction (``build_chat_messages``, so the guardrail system
-    prompt and history-role handling are identical), but calls the
-    underlying LangChain client's ``.astream(...)`` instead of
-    ``.invoke(...)`` and yields each chunk's text as it arrives,
-    for a caller (WS /api/v1/chat/{session_id}/stream, T-104) that
-    forwards each token to a connected client as it is produced rather
-    than waiting for the complete response.
+    prompt, personalization instruction (T-106), and history-role
+    handling are identical), but calls the underlying LangChain
+    client's ``.astream(...)`` instead of ``.invoke(...)`` and yields
+    each chunk's text as it arrives, for a caller (WS /api/v1/chat/
+    {session_id}/stream, T-104) that forwards each token to a
+    connected client as it is produced rather than waiting for the
+    complete response.
 
     Every empty chunk is skipped (some providers emit an empty leading
     or trailing chunk as part of normal streaming, and forwarding a
@@ -526,6 +665,8 @@ async def astream_chat(
         user_message:    The new message the user just sent.
         response_style: Forwarded to ``build_chat_messages``.
         context:        Forwarded to ``build_chat_messages``.
+        risk_appetite:  Forwarded to ``build_chat_messages`` (T-106).
+        preferred_sectors: Forwarded to ``build_chat_messages`` (T-106).
         llm:            Optional pre-built LLM client. Defaults to
                          ``get_chat_llm()`` when not provided.
 
@@ -541,7 +682,12 @@ async def astream_chat(
             non-empty chunks.
     """
     messages = build_chat_messages(
-        history, user_message, response_style=response_style, context=context
+        history,
+        user_message,
+        response_style=response_style,
+        context=context,
+        risk_appetite=risk_appetite,
+        preferred_sectors=preferred_sectors,
     )
     active_llm = llm if llm is not None else get_chat_llm()
 

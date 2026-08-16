@@ -139,20 +139,65 @@ handler returns -- so a reconnecting client's next
 same WS route loads on reconnect) shows the user what the assistant
 had said so far, instead of that generation vanishing without a trace.
 
-Why response_style is hard-coded to "concise" for now, not read from
-``user_preferences.chat_response_style``
+Why response_style is now read from ``user_preferences.chat_response_style``
+(as of T-106), after being hard-coded to "concise" through T-104/T-105
 ------------------------------------------------------------------------
-T-099's schema already has this column, and ``backend.services.
-chat_llm.build_system_prompt`` already accepts a ``response_style``
-argument -- wiring an actual per-user preference lookup here is a
-small, natural, and DELIBERATELY DEFERRED follow-up, not an oversight:
-T-104's acceptance criteria are entirely about the WebSocket streaming
-mechanics (incremental delivery, clean close, graceful reconnect), not
-about preference plumbing, and reading a value this router does not
-yet have any other use for would be scope creep against those three
-specific criteria. The one hard-coded default is captured in a single
-named constant (``_DEFAULT_RESPONSE_STYLE`` below) so wiring the real
-preference later is a one-line change at exactly one call site.
+T-099's schema always had this column, and ``backend.services.
+chat_llm.build_system_prompt`` always accepted a ``response_style``
+argument -- T-104's own docstring called wiring an actual per-user
+lookup here a "small, natural, and DELIBERATELY DEFERRED follow-up,
+not an oversight", specifically because T-104's acceptance criteria
+were entirely about the WebSocket streaming mechanics, not preference
+plumbing. T-106 -- literally titled "Personalization via
+user_preferences" -- is that deferred follow-up: this router now loads
+the caller's ``UserPreferences`` row once per turn via
+``apply_extracted_preferences`` (which lazily creates the row via
+``get_or_create_user_preferences`` if this is the caller's very first
+chat turn ever -- see ``preference_service.py``) and passes its actual
+``chat_response_style`` to ``astream_chat``. A brand-new row's
+``chat_response_style`` is simply T-099's own column default
+(``server_default="concise"``) -- this router no longer keeps its own
+separate hard-coded constant for it; the one former hard-coded
+constant this module used through T-104/T-105 has been removed rather
+than left around unused.
+
+Personalization (T-106): risk appetite and preferred sectors
+------------------------------------------------------------------------
+Two NEW ``user_preferences`` columns (T-106's migration, on top of
+T-099's table): ``risk_appetite`` and ``preferred_sectors``, both NULL
+/empty until the AIRP Assistant has asked and the user has answered
+once (``backend.services.chat_llm.build_personalization_instruction``
+carries the actual "ask, at most once" instruction text; this router
+only loads and persists the data, it contains no wording of its own).
+Each turn:
+
+  1. ``get_or_create_user_preferences`` loads (or lazily creates) the
+     caller's preferences row -- the same row ``chat_response_style``
+     above is read from.
+  2. ``extract_preferences`` (``backend.services.
+     preference_extractor``) runs a deterministic, keyword-based check
+     of the user's OWN just-sent message for a stated risk appetite
+     and/or preferred sectors -- see that module's own docstring for
+     why this is intentionally NOT a second LLM call.
+  3. ``apply_extracted_preferences`` persists anything newly
+     recognised, but ONLY into a field that is still unset --
+     see ``backend.services.preference_service``'s own docstring for
+     why an already-known preference is never silently overwritten by
+     a later, more casual mention.
+  4. The (possibly just-updated) ``risk_appetite``/``preferred_sectors``
+     are passed to ``astream_chat``, which threads them into
+     ``build_system_prompt`` -- see ``chat_llm.py``'s own docstring for
+     why that is a separate, independently testable instruction block
+     rather than folded into the guardrail itself.
+
+This entire flow reads and writes ONLY ``user_preferences`` -- it never
+touches ``analyses``, ``investment_memos``, or any other
+verdict-bearing table, and ``backend/agents/portfolio_manager.py`` (the
+only code that ever produces a BUY/HOLD/SELL verdict) has no
+preferences argument and is not imported anywhere in this router or in
+the personalization modules it calls -- the concrete, checkable basis
+for this task's "verdicts remain byte-identical regardless of
+preferences" acceptance criterion.
 
 Why a memo-scoped session's grounded context is loaded once per turn,
 not cached for the connection's lifetime
@@ -220,6 +265,8 @@ from backend.services.chat_session_service import (
     get_chat_session_messages,
     get_chat_session_stream_info,
 )
+from backend.services.preference_extractor import extract_preferences
+from backend.services.preference_service import apply_extracted_preferences
 
 logger = logging.getLogger(__name__)
 
@@ -257,9 +304,6 @@ _HEARTBEAT_AFTER_TICKS = 5
 #: client message cannot balloon the prompt sent to the LLM or the row
 #: written to chat_messages.content.
 _MAX_USER_MESSAGE_LENGTH = 4000
-
-#: See "Why response_style is hard-coded" in the module docstring.
-_DEFAULT_RESPONSE_STYLE = "concise"
 
 #: Prefix written to chat_messages.content when a generation is cut
 #: short by a mid-stream client disconnect -- see "Why reconnecting...
@@ -524,6 +568,19 @@ async def _run_one_turn(
                 )
                 context = None
 
+        # Personalization (T-106). Recognise (deterministically, no LLM
+        # call -- see preference_extractor.py's own docstring) any
+        # risk appetite / preferred sectors the user just stated, and
+        # persist anything newly learned into a still-unset field only
+        # -- see preference_service.py's own docstring for why an
+        # already-known preference is never silently overwritten by a
+        # later, more casual mention. Also picks up chat_response_style
+        # from the same row, replacing the constant this router used
+        # through T-104/T-105 -- see the module docstring's "Why
+        # response_style is now read from user_preferences..." section.
+        extraction = extract_preferences(user_message)
+        preferences = await apply_extracted_preferences(db_session, user.id, extraction)
+
         await append_chat_message(
             db_session, session_id=session_id, role="user", content=user_message
         )
@@ -541,8 +598,10 @@ async def _run_one_turn(
         token_iter = astream_chat(
             history,
             user_message,
-            response_style=_DEFAULT_RESPONSE_STYLE,
+            response_style=preferences.chat_response_style,
             context=context,
+            risk_appetite=preferences.risk_appetite,
+            preferred_sectors=preferences.preferred_sectors,
         ).__aiter__()
 
         while True:

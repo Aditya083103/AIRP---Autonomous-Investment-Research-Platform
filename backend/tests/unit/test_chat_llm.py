@@ -52,6 +52,7 @@ from backend.services.chat_llm import (  # noqa: E402
     SYSTEM_PROMPT,
     ChatLLMError,
     build_chat_messages,
+    build_personalization_instruction,
     build_system_message,
     build_system_prompt,
     get_chat_llm,
@@ -123,6 +124,16 @@ class TestSystemPromptGuardrail:
         # Guards against an accidental placeholder/truncated string.
         assert len(SYSTEM_PROMPT) > 500
 
+    def test_forbids_personalization_from_changing_a_verdict(self) -> None:
+        # T-106's acceptance criterion ("verdicts remain byte-identical
+        # regardless of preferences") stated as a hard rule directly in
+        # the guardrail itself, not only in the separate
+        # personalization instruction block (see
+        # TestBuildPersonalizationInstruction below).
+        lowered = SYSTEM_PROMPT.lower()
+        assert "risk appetite or preferred sectors" in lowered
+        assert "tone and which already-stored details" in lowered
+
 
 # ---------------------------------------------------------------------------
 # 2. get_chat_llm -- thin-wrapper delegation
@@ -137,6 +148,63 @@ class TestGetChatLlm:
         result = get_chat_llm()
         assert result is sentinel
         mock_get_llm.assert_called_once_with()
+
+
+# ---------------------------------------------------------------------------
+# 3a. build_personalization_instruction (T-106)
+# ---------------------------------------------------------------------------
+
+
+class TestBuildPersonalizationInstruction:
+    def test_nothing_known_yields_ask_once_instruction(self) -> None:
+        text = build_personalization_instruction(None, None)
+        lowered = text.lower()
+        assert "do not yet know" in lowered
+        assert "ask" in lowered
+        assert "at most once" in lowered
+
+    def test_nothing_known_with_empty_sector_list_same_as_none(self) -> None:
+        with_none = build_personalization_instruction(None, None)
+        with_empty_list = build_personalization_instruction(None, [])
+        assert with_none == with_empty_list
+
+    def test_ask_instruction_never_mentions_a_verdict(self) -> None:
+        # The "ask" branch should be purely about eliciting the
+        # preference -- it must not itself talk about verdicts (that
+        # would be a strange place for a verdict-related instruction
+        # to leak in from).
+        text = build_personalization_instruction(None, None).lower()
+        assert "verdict" not in text
+
+    def test_risk_appetite_known_is_stated_plainly(self) -> None:
+        text = build_personalization_instruction("conservative", None)
+        assert "risk appetite: conservative" in text.lower()
+
+    def test_preferred_sectors_known_are_stated_plainly(self) -> None:
+        text = build_personalization_instruction(None, ["IT", "FMCG"])
+        assert "preferred sectors: IT, FMCG" in text
+
+    def test_both_known_are_both_stated(self) -> None:
+        text = build_personalization_instruction("aggressive", ["Auto"])
+        lowered = text.lower()
+        assert "risk appetite: aggressive" in lowered
+        assert "preferred sectors: auto" in lowered
+
+    def test_known_branch_does_not_contain_the_ask_instruction(self) -> None:
+        text = build_personalization_instruction("moderate", None).lower()
+        assert "do not yet know" not in text
+
+    def test_known_branch_states_the_hard_rule(self) -> None:
+        text = build_personalization_instruction("moderate", None).lower()
+        assert "hard rule" in text
+        assert "never changes a verdict" in text
+        assert "conviction score" in text
+        assert "price target" in text
+
+    def test_known_branch_describes_tone_only_effect(self) -> None:
+        text = build_personalization_instruction("moderate", ["IT"]).lower()
+        assert "tone" in text
+        assert "emphasise" in text or "emphasize" in text
 
 
 # ---------------------------------------------------------------------------
@@ -175,6 +243,31 @@ class TestBuildSystemPrompt:
         prompt = build_system_prompt(context="")
         assert "Grounded context for this conversation" not in prompt
 
+    def test_personalization_defaults_to_ask_instruction(self) -> None:
+        # No risk_appetite/preferred_sectors passed -- same default as
+        # every call site that predates T-106.
+        prompt = build_system_prompt()
+        assert "do not yet know this user's risk" in prompt.lower()
+
+    def test_risk_appetite_forwarded_into_prompt(self) -> None:
+        prompt = build_system_prompt(risk_appetite="aggressive")
+        assert "risk appetite: aggressive" in prompt.lower()
+
+    def test_preferred_sectors_forwarded_into_prompt(self) -> None:
+        prompt = build_system_prompt(preferred_sectors=["FMCG"])
+        assert "preferred sectors: FMCG" in prompt
+
+    def test_personalization_appears_between_style_and_context(self) -> None:
+        prompt = build_system_prompt(
+            response_style="detailed",
+            context="TCS verdict: BUY.",
+            risk_appetite="conservative",
+        )
+        style_pos = prompt.find(RESPONSE_STYLE_INSTRUCTIONS["detailed"])
+        personalization_pos = prompt.lower().find("risk appetite: conservative")
+        context_pos = prompt.find("Grounded context for this conversation")
+        assert style_pos < personalization_pos < context_pos
+
 
 class TestBuildSystemMessage:
     def test_returns_system_message_with_matching_content(self) -> None:
@@ -183,6 +276,13 @@ class TestBuildSystemMessage:
         assert message.content == build_system_prompt(
             response_style="detailed", context="ctx"
         )
+
+    def test_personalization_args_forwarded(self) -> None:
+        message = build_system_message(
+            risk_appetite="moderate", preferred_sectors=["Auto"]
+        )
+        assert "risk appetite: moderate" in message.content.lower()
+        assert "preferred sectors: Auto" in message.content
 
 
 # ---------------------------------------------------------------------------
@@ -257,6 +357,17 @@ class TestBuildChatMessages:
         assert isinstance(messages[0], SystemMessage)
         assert RESPONSE_STYLE_INSTRUCTIONS["detailed"] in messages[0].content
         assert "TCS: BUY" in messages[0].content
+
+    def test_personalization_forwarded(self) -> None:
+        messages = build_chat_messages(
+            [],
+            "hello",
+            risk_appetite="conservative",
+            preferred_sectors=["Pharma & Healthcare"],
+        )
+        lowered = messages[0].content.lower()
+        assert "risk appetite: conservative" in lowered
+        assert "preferred sectors: pharma & healthcare" in lowered
 
 
 # ---------------------------------------------------------------------------
@@ -352,3 +463,95 @@ class TestChatLLMError:
         original = ValueError("inner")
         err = ChatLLMError("boom", cause=original)
         assert err.cause is original
+
+
+# ---------------------------------------------------------------------------
+# T-106 acceptance criterion: "verdicts remain byte-identical regardless
+# of preferences"
+# ---------------------------------------------------------------------------
+
+
+class TestPersonalizationNeverAffectsVerdicts:
+    """
+    The concrete, checkable basis for T-106's third acceptance
+    criterion. Two complementary angles:
+
+    1. Architectural separation -- this module (the only place
+       personalization data is ever read on the chat path) never
+       imports the verdict-producing code
+       (backend.agents.portfolio_manager), and that module's own
+       decision function takes no preferences argument at all, so
+       there is no code path by which a chat preference could reach a
+       verdict computation even in principle.
+    2. Content isolation -- varying risk_appetite/preferred_sectors
+       changes ONLY the personalization block's own text; a fixed
+       `context` string (the actual stand-in for "the grounded memo /
+       verdict data" in this module's API) is carried through
+       byte-for-byte, unmodified, regardless of which preferences are
+       passed alongside it.
+    """
+
+    def test_chat_llm_module_does_not_import_portfolio_manager(self) -> None:
+        import inspect
+
+        import backend.services.chat_llm as chat_llm_module
+
+        source = inspect.getsource(chat_llm_module)
+        assert "portfolio_manager" not in source
+
+    def test_verdict_decision_function_takes_no_preferences_argument(self) -> None:
+        import inspect
+
+        from backend.agents.portfolio_manager import run_portfolio_manager_decision
+
+        params = inspect.signature(run_portfolio_manager_decision).parameters
+        assert "risk_appetite" not in params
+        assert "preferred_sectors" not in params
+        assert "user_preferences" not in params
+        assert "user_id" not in params
+
+    def test_context_text_is_byte_identical_regardless_of_preferences(self) -> None:
+        fixed_context = (
+            "TCS (TCS.NS) -- Verdict: BUY, conviction 8/10, "
+            "price target INR 4200. Generated 2026-01-15T10:00:00Z."
+        )
+
+        prompt_no_prefs = build_system_prompt(context=fixed_context)
+        prompt_conservative = build_system_prompt(
+            context=fixed_context, risk_appetite="conservative"
+        )
+        prompt_aggressive_with_sectors = build_system_prompt(
+            context=fixed_context,
+            risk_appetite="aggressive",
+            preferred_sectors=["IT", "Auto"],
+        )
+
+        all_prompts = (
+            prompt_no_prefs,
+            prompt_conservative,
+            prompt_aggressive_with_sectors,
+        )
+        for prompt in all_prompts:
+            # The verdict-bearing context substring itself is carried
+            # through completely unmodified -- not paraphrased,
+            # summarised, or altered in any way by personalization.
+            assert fixed_context in prompt
+
+    def test_different_preferences_change_only_the_personalization_block(self) -> None:
+        fixed_context = "HDFC Bank -- Verdict: HOLD, conviction 5/10."
+
+        prompt_a = build_system_prompt(
+            context=fixed_context, risk_appetite="conservative"
+        )
+        prompt_b = build_system_prompt(
+            context=fixed_context, risk_appetite="aggressive"
+        )
+
+        # Both still contain the exact same verdict-bearing text...
+        assert fixed_context in prompt_a
+        assert fixed_context in prompt_b
+        # ...and the ONLY difference between the two full prompts is
+        # confined to the personalization block's own risk-appetite
+        # word -- SYSTEM_PROMPT, the response-style instruction, and
+        # the context block are otherwise identical strings.
+        assert prompt_a.replace("conservative", "aggressive") == prompt_b
