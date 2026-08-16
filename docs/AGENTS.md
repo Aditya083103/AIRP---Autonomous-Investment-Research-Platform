@@ -1,13 +1,25 @@
 # AIRP Agent System — Design Reference
 
-**Document version:** 1.0  
-**Phase:** 2 (Research Agents complete)  
-**Last updated:** T-028
+**Document version:** 1.1
+**Phase:** 2 (Research Agents complete); Section 11 added T-107 (Phase 10)
+**Last updated:** T-107
 
 This document is the authoritative reference for the AIRP investment
 committee agent system. It covers each agent's persona, tools, scoring
 logic, output schema, example JSON output, known limitations, and
 interaction with the LangGraph pipeline.
+
+Sections 1–10 describe the 8-agent investment committee and predate
+the AIRP Assistant (Phase 10) — they are unchanged by this update.
+Section 11 (new, T-107) documents the AIRP Assistant, a separate
+conversational layer that answers questions about a committee's
+already-completed analysis; it is deliberately NOT a 9th committee
+agent (see Section 11.1 for why), which is why it lives in its own
+section rather than being folded into the numbered agent list above.
+For the AIRP Assistant's full architecture (system prompt, guardrails,
+personalization, streaming protocol), see `docs/CHAT.md` (T-107) —
+this section is a persona-reference summary in AGENTS.md's own
+established format, not a duplicate of that document.
 
 ---
 
@@ -23,6 +35,7 @@ interaction with the LangGraph pipeline.
 8. [LangGraph Execution Order](#8-langgraph-execution-order)
 9. [Error Handling Convention](#9-error-handling-convention)
 10. [LangSmith Tracing Tags](#10-langsmith-tracing-tags)
+11. [AIRP Assistant Persona (T-107)](#11-airp-assistant-persona-t-107)
 
 ---
 
@@ -780,3 +793,116 @@ LANGCHAIN_ENDPOINT=https://api.smith.langchain.com
 
 Tracing is automatically disabled in the test environment
 (`LANGSMITH_API_KEY` is empty in `test_settings`).
+
+---
+
+## 11. AIRP Assistant Persona (T-107)
+
+### 11.1 Why this is not "Agent 9"
+
+Sections 1–10 describe the **investment committee**: 8 agents whose
+job is to independently research, debate, and ultimately *produce* a
+BUY/HOLD/SELL verdict via `run_portfolio_manager_decision`
+(`backend/agents/portfolio_manager.py`). The AIRP Assistant is a
+categorically different thing — a conversational layer that runs
+**after** a verdict already exists, and whose entire job is to
+*explain* that verdict, never to issue, revise, or be talked into
+revising one. It has no `agent_name` in `InvestmentState`, writes no
+`state[key]`, and is never a LangGraph node — it lives entirely
+outside the pipeline described in Section 8, invoked instead through
+`POST /api/v1/chat/sessions` and `WS /api/v1/chat/{session_id}/stream`
+(`backend/routers/chat.py`, `backend/routers/chat_stream.py`). That
+architectural separation is deliberate and load-bearing: an LLM that
+both produces a verdict AND can be conversationally argued into
+changing it is a materially weaker guarantee than two LLM roles with a
+hard boundary between them — see `docs/CHAT.md`'s "The guardrail"
+section for the full reasoning.
+
+### 11.2 Persona
+
+> _"You are the AIRP Assistant, a helpful research aide for a
+> completed AIRP investment analysis. Your job is to explain, clarify,
+> and contextualise a decision the investment committee has ALREADY
+> made — never to make, revise, or imply a new one."_
+
+(`backend.services.chat_llm.SYSTEM_PROMPT`, T-102)
+
+### 11.3 Two modes
+
+| Mode | `session_type` | Grounded in | Built by |
+| --- | --- | --- | --- |
+| Memo-scoped | `memo_scoped` | One completed analysis's full agent outputs, debate transcript, and decision | `backend.services.chat_service.build_memo_context` (T-100) |
+| Portfolio-wide | `portfolio_wide` | The user's own analysis history + uploaded documents, via LangChain tool calls | `backend.tools.portfolio_tools.build_portfolio_tools` (T-101) |
+
+### 11.4 Tools (portfolio-wide mode only)
+
+| Tool | Purpose |
+| --- | --- |
+| `get_user_analyses` | List the caller's own past analyses (ticker, verdict, date) |
+| `get_memo_by_ticker` | Fetch one past analysis's decision by ticker symbol |
+| `search_uploaded_documents` | Semantic search over the caller's uploaded documents (ChromaDB) |
+
+Every tool is scoped to the calling user's own `user_id` at
+construction time (`build_portfolio_tools(user_id, ...)`, a factory
+closure) — the LLM itself never supplies or can override whose data a
+tool call reads, closing off the "ask it to fetch someone else's
+memo" class of prompt-injection attempt at the tool layer rather than
+relying on prompt wording alone.
+
+### 11.5 Personalization (T-106)
+
+The assistant may ask, at most once per conversation, about the
+user's investing risk appetite and preferred sectors
+(`user_preferences.risk_appetite` / `.preferred_sectors`), and — once
+known — uses them to adjust **tone and emphasis only** (e.g. leading
+with downside risk for a conservative investor, growth catalysts for
+an aggressive one). Recognition of a stated preference is
+deterministic keyword matching (`backend.services.preference_extractor`),
+not a second LLM call — see that module's own docstring for why.
+**Hard rule, stated directly in the prompt both in `SYSTEM_PROMPT` and
+in the personalization instruction itself:** a known preference never
+changes a verdict, conviction score, price target, or any numeric
+figure in the stored analysis.
+
+### 11.6 Guardrails — what it must never do
+
+1. Never state or imply a BUY/HOLD/SELL call, conviction score, or
+   price target that did not come verbatim from a stored analysis.
+2. Never claim an agent said something it did not say; never fabricate
+   numbers, quotes, or tool results.
+3. Never give generic stock-market advice unconnected to a stored
+   analysis.
+4. Never present its own summarisation as if it were additional
+   committee analysis.
+5. Never let a stated risk appetite or preferred sector change a
+   verdict, conviction score, price target, or any stored figure.
+
+See `docs/CHAT.md` §4 for the full guardrail text and adversarial
+manual-QA transcripts proving it holds against a real LLM.
+
+### 11.7 Example transcript (memo-scoped)
+
+```
+USER: What was the verdict on TCS, and why?
+
+ASSISTANT: The committee rated TCS a BUY with a conviction score of
+8/10 and a 12-18 month price target of ₹4,250. The call rests on three
+things: exceptional fundamentals (9/10 — 12.4% YoY revenue growth,
+45.2% gross margin), a constructive technical setup (price above both
+the 50-day and 200-day moving averages), and low governance risk
+(3/10 on the risk scale, no critical flags). The main risk the
+committee flagged is a possible slowdown in discretionary IT spending
+among US/EU clients.
+
+USER: What would you recommend I do right now?
+
+ASSISTANT: I can't give you a personal recommendation beyond what the
+committee already decided — that would mean issuing a new call outside
+the analysis you already have. What I can do is walk through the bull
+case, the bear case, or any specific risk in more depth if that would
+help you decide for yourself.
+```
+
+(Second turn is adapted from `scripts/manual_qa_chat_llm.py`'s actual
+"direct opinion request" adversarial test case — see `docs/CHAT.md`
+for the full four-turn transcript and every reply verbatim.)
