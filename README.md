@@ -140,12 +140,13 @@ airp/
 | [GRAPH_DIAGRAM.md](docs/GRAPH_DIAGRAM.md)           | Auto-exported LangGraph state diagram                                                 |
 | [PERFORMANCE_PROFILE.md](docs/PERFORMANCE_PROFILE.md) | Per-agent and per-node latency profiling                                            |
 | [EVALUATION.md](docs/EVALUATION.md)                 | Verdict accuracy methodology — evaluation horizons, dead-zone scoring, worked examples |
-| `docs/CHAT.md` _(landing in T-107)_                 | AIRP Assistant architecture, guardrails, and example transcripts                      |
+| [CHAT.md](docs/CHAT.md)                             | AIRP Assistant architecture, guardrails, personalization, and example transcripts     |
 
 ## Status
 
 12 phases, ~107 tasks (`T-001`–`T-107`, plus deferred evaluation/deploy tasks `T-067`–`T-080`
-reordered into Phases 11–12). Currently in **Phase 10 — AIRP Assistant (Chatbot)**.
+reordered into Phases 11–12). Phase 10 (AIRP Assistant) is now complete; next up is
+**Phase 11 — Evaluation Framework**.
 
 | Phase | Name                                | Status            |
 | ----- | ------------------------------------ | ------------------ |
@@ -159,7 +160,7 @@ reordered into Phases 11–12). Currently in **Phase 10 — AIRP Assistant (Chat
 | 7     | Bug Fixes & Verdict Calibration     | ✅ Complete        |
 | 8     | Verdict Accuracy Tracker            | ✅ Complete        |
 | 9     | Live Graph Visualization            | ✅ Complete        |
-| 10    | AIRP Assistant (Chatbot)            | 🟨 In progress (6/9) |
+| 10    | AIRP Assistant (Chatbot)            | ✅ Complete         |
 | 11    | Evaluation Framework                | ⬜ Not started      |
 | 12    | Polish, Deploy & Launch             | ⬜ Not started      |
 
@@ -174,8 +175,8 @@ reordered into Phases 11–12). Currently in **Phase 10 — AIRP Assistant (Chat
 | T-103 | REST endpoints for chat sessions           | ✅ Done |
 | T-104 | WebSocket token streaming                  | ✅ Done |
 | T-105 | `ChatWidget.tsx` frontend                  | ✅ Done |
-| T-106 | Personalization via `user_preferences`     | ⬜ To do |
-| T-107 | Tests + docs for AIRP Assistant            | ⬜ To do |
+| T-106 | Personalization via `user_preferences`     | ✅ Done |
+| T-107 | Tests + docs for AIRP Assistant            | ✅ Done |
 
 ---
 
