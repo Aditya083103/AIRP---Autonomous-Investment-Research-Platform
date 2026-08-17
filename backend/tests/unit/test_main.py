@@ -205,9 +205,12 @@ class TestCORS:
     """
     The configured frontend origin must receive CORS headers.
 
-    settings.cors_origins defaults to "http://localhost:5173" (the Vite
-    dev server origin) per config.py and .env.example, so that exact
-    origin is used here rather than a value invented for the test.
+    The `test_settings` fixture (conftest.py) pins cors_origins to
+    "http://localhost:5173" explicitly for this test module, so that
+    exact origin is used here rather than a value invented for the
+    test -- independent of whatever config.py's class-level default is
+    (currently "http://localhost:3000", matching frontend/vite.config.ts's
+    dev server port as of T-073).
     """
 
     @pytest.mark.asyncio

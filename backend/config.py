@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     # ── 1. Application ────────────────────────────────────────────────────
     environment: Literal["development", "test", "staging", "production"] = "development"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
-    cors_origins: str = "http://localhost:5173"
+    cors_origins: str = "http://localhost:3000"
     secret_key: str = Field(
         default="insecure-default-change-in-production",
         min_length=32,

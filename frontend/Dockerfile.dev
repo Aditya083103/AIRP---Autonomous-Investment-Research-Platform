@@ -1,0 +1,32 @@
+# frontend/Dockerfile.dev
+# =============================================================================
+# AIRP — Frontend LOCAL DEVELOPMENT image (T-073)
+#
+# Runs the real Vite dev server (npm run dev) with hot module reload, so
+# `docker-compose up` gives the same edit-and-see-it-instantly workflow as
+# running `npm run dev` directly on the host. Used ONLY by
+# docker-compose.yml — production deploys use frontend/Dockerfile instead.
+#
+# Build context: ./frontend (see docker-compose.yml)
+# =============================================================================
+FROM node:20-alpine
+
+WORKDIR /app
+
+# Copy manifest files first so `npm ci` is cached in its own Docker layer
+# and only re-runs when package.json / package-lock.json actually change,
+# not on every source-code edit.
+COPY package.json package-lock.json ./
+RUN npm ci
+
+# Real source is bind-mounted over this by docker-compose.yml's
+# `volumes: - ./frontend:/app` for instant hot reload — this COPY only
+# matters if the image is ever run standalone (docker run, no compose).
+COPY . .
+
+EXPOSE 3000
+
+# --host 0.0.0.0 is required inside a container: Vite's default
+# --host localhost binds only to the container's loopback interface,
+# which is unreachable from the host even with the port published.
+CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "3000"]

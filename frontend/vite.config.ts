@@ -3,6 +3,20 @@ import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
+// T-073 (Dockerize the full stack): the dev proxy target below must be
+// "http://localhost:8000" when Vite runs directly on the host (`npm run
+// dev`) but "http://api:8000" when Vite runs inside the frontend
+// container spun up by docker-compose.yml — inside that container,
+// "localhost" resolves to the frontend container itself, not the
+// sibling "api" container, so a hardcoded localhost target would make
+// every proxied request fail with ECONNREFUSED even though the backend
+// is healthy. DOCKER_BACKEND_URL is a plain Node-side env var (no VITE_
+// prefix — it's read here in vite.config.ts, which runs in Node, and is
+// never bundled into client code), set only by docker-compose.yml's
+// frontend service. Falls back to localhost:8000 for every other case
+// (bare `npm run dev`, CI, vitest importing this config).
+const backendTarget = process.env.DOCKER_BACKEND_URL || "http://localhost:8000";
+
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react()],
@@ -38,7 +52,7 @@ export default defineConfig({
       // /auth/login and POST /api/v1/analysis/start both succeed
       // through this same proxy entry, since those are plain HTTP).
       "/api": {
-        target: "http://localhost:8000",
+        target: backendTarget,
         changeOrigin: true,
         ws: true,
       },
@@ -46,7 +60,7 @@ export default defineConfig({
       // "/api/v1" (see backend/main.py's router registration), so it
       // needs its own proxy entry rather than falling under "/api" above.
       "/auth": {
-        target: "http://localhost:8000",
+        target: backendTarget,
         changeOrigin: true,
       },
     },

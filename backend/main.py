@@ -129,8 +129,9 @@ def create_app() -> FastAPI:
     # -- CORS --------------------------------------------------------------
     # settings.cors_origins_list is parsed from the comma-separated
     # CORS_ORIGINS env var (config.py). Defaults to the Vite dev server
-    # origin (http://localhost:5173) so the React frontend built in
-    # Phase 6 can call this API without any extra local configuration.
+    # origin (http://localhost:3000, see frontend/vite.config.ts's
+    # server.port) so the React frontend built in Phase 6 can call this
+    # API without any extra local configuration.
     application.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins_list,

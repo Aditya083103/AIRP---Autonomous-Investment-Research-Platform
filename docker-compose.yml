@@ -1,33 +1,25 @@
 version: "3.9"
 
-# ─────────────────────────────────────────────
-# AIRP — Local development stack
-# Usage: docker-compose up
-# ─────────────────────────────────────────────
+# =============================================================================
+# AIRP — Local development stack (T-073)
+#
+# Usage:
+#   cp .env.example .env   # fill in real API keys — see docs/APIS.md
+#   docker-compose up
+#
+#   Frontend  → http://localhost:3000
+#   API       → http://localhost:8000  (Swagger: http://localhost:8000/docs)
+#   Postgres  → localhost:5432 (user/pass: airp/airp, db: airp)
+#   Redis     → localhost:6379
+#   ChromaDB  → http://localhost:8001
+#
+# All four backing services + the API + the frontend start with one
+# command; source code for both api and frontend is bind-mounted so
+# edits on the host hot-reload inside the containers.
+# =============================================================================
 
 services:
-  # ── FastAPI backend ───────────────────────
-  api:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    ports:
-      - "8000:8000"
-    volumes:
-      - ./backend:/app # hot-reload on code changes
-    env_file: .env
-    environment:
-      DATABASE_URL: postgresql+asyncpg://airp:airp@postgres:5432/airp
-      REDIS_URL: redis://redis:6379
-      ENVIRONMENT: development
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
-
-  # ── PostgreSQL ────────────────────────────
+  # ── PostgreSQL ────────────────────────────────────────────────────────────
   postgres:
     image: postgres:16-alpine
     environment:
@@ -44,7 +36,7 @@ services:
       timeout: 5s
       retries: 5
 
-  # ── Redis ─────────────────────────────────
+  # ── Redis ─────────────────────────────────────────────────────────────────
   redis:
     image: redis:7-alpine
     ports:
@@ -57,32 +49,94 @@ services:
       timeout: 3s
       retries: 5
 
-  # ── ChromaDB ─────────────────────────────
+  # ── ChromaDB ──────────────────────────────────────────────────────────────
+  # Standalone Chroma server, included per T-073's acceptance criteria and
+  # so the stack is ready for ENVIRONMENT=production's HttpClient path
+  # (backend/db/chroma_client.py). Note: with the default
+  # ENVIRONMENT=development below, the API container actually talks to
+  # ChromaDB via a local on-disk PersistentClient (the "backend_chroma_data"
+  # volume mounted into the api service), not to this container — that
+  # routing is existing application behavior from T-017/T-018, unchanged
+  # here. Flip ENVIRONMENT=production on the api service to exercise the
+  # HttpClient path against this container instead.
   chromadb:
     image: chromadb/chroma:latest
     ports:
       - "8001:8000"
     volumes:
-      - chroma_data:/chroma/chroma
+      - chroma_server_data:/chroma/chroma
     environment:
       IS_PERSISTENT: "TRUE"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/heartbeat')\" || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
 
-  # ── React frontend ────────────────────────
+  # ── FastAPI backend ───────────────────────────────────────────────────────
+  api:
+    build:
+      # Build context is the REPO ROOT (not ./backend) — every backend
+      # module imports as `backend.<module>` (see backend/main.py,
+      # backend/Dockerfile's own header comment), which only resolves if
+      # the image keeps `backend/` as a real subpackage under /app rather
+      # than flattening its contents into /app directly.
+      context: .
+      dockerfile: backend/Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      # Bind-mount the whole repo root (matching the build context) so
+      # `uvicorn --reload` below picks up host edits under backend/.
+      - .:/app
+      - backend_chroma_data:/app/.chroma_data
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://airp:airp@postgres:5432/airp
+      DATABASE_TEST_URL: postgresql+asyncpg://airp:airp@postgres:5432/airp_test
+      REDIS_URL: redis://redis:6379
+      CHROMA_HOST: chromadb
+      CHROMA_PORT: "8000"
+      CHROMA_PERSIST_DIR: /app/.chroma_data
+      ENVIRONMENT: development
+      CORS_ORIGINS: http://localhost:3000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      chromadb:
+        condition: service_healthy
+    # Overrides backend/Dockerfile's production CMD with --reload for
+    # local dev. The image's ENTRYPOINT (backend/docker-entrypoint.sh)
+    # still runs `alembic upgrade head` first either way.
+    command: uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # ── React frontend ────────────────────────────────────────────────────────
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile.dev
     ports:
-      - "5173:5173"
+      - "3000:3000"
     volumes:
       - ./frontend:/app
       - /app/node_modules # anonymous volume prevents host override
     environment:
-      VITE_API_URL: http://localhost:8000
+      # Container-network hostname for Vite's dev proxy — see
+      # frontend/vite.config.ts's DOCKER_BACKEND_URL comment. Deliberately
+      # NOT VITE_API_BASE_URL / VITE_AUTH_BASE_URL: those stay unset so
+      # the frontend keeps using relative "/api/v1" and "/auth" paths,
+      # which this proxy then forwards to the "api" service server-side
+      # — identical to the non-Docker dev setup, just with a different
+      # proxy target.
+      DOCKER_BACKEND_URL: http://api:8000
     depends_on:
       - api
 
 volumes:
   postgres_data:
   redis_data:
-  chroma_data:
+  chroma_server_data: # standalone ChromaDB container's own storage
+  backend_chroma_data: # api container's local PersistentClient storage
