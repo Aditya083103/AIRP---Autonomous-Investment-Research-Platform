@@ -104,21 +104,25 @@ describe("createChatSession", () => {
       .mockResolvedValue(jsonResponse(409, { detail: "analysis_id=job-1 is not ready yet" }));
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(
-      createChatSession({
+    // A single call/catch, not two separate `.rejects.toThrow(...)`
+    // assertions -- each of those would invoke createChatSession
+    // (and therefore fetch()) again, but `fetchMock.mockResolvedValue`
+    // hands back the exact same Response instance every call, and a
+    // Response body stream can only be read once. A second call's
+    // `response.json()` throws "body stream already read", which
+    // parseErrorDetail's own catch swallows, silently falling back to
+    // the generic message -- not what this test means to check.
+    try {
+      await createChatSession({
         accessToken: "jwt-token",
         sessionType: "memo_scoped",
         analysisId: "job-1",
-      }),
-    ).rejects.toThrow(ChatApiError);
-
-    await expect(
-      createChatSession({
-        accessToken: "jwt-token",
-        sessionType: "memo_scoped",
-        analysisId: "job-1",
-      }),
-    ).rejects.toThrow("analysis_id=job-1 is not ready yet");
+      });
+      expect.unreachable("createChatSession should have thrown");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ChatApiError);
+      expect((error as ChatApiError).message).toBe("analysis_id=job-1 is not ready yet");
+    }
   });
 
   it("throws ChatApiError carrying the response status", async () => {

@@ -51,6 +51,7 @@ from backend.agents.sentiment_analyst import (  # noqa: E402
 from backend.evals.sentiment_eval_dataset import (  # noqa: E402
     SENTIMENT_DIRECTION_DATASET,
     SENTIMENT_SCANDAL_DATASET,
+    ArticleInput,
 )
 from backend.evals.sentiment_evaluators import (  # noqa: E402
     DIRECTION_ACCURACY_TARGET_PCT,
@@ -73,7 +74,7 @@ from backend.evals.sentiment_evaluators import (  # noqa: E402
 # ---------------------------------------------------------------------------
 
 
-def _article_text(article: dict[str, str]) -> str:
+def _article_text(article: ArticleInput) -> str:
     return f"{article['title']} {article['description']}".lower()
 
 
@@ -164,7 +165,7 @@ class TestDatasetShape:
 
 class TestScoreNewsSet:
     def test_strongly_positive_article_scores_positive(self) -> None:
-        articles = (
+        articles: tuple[ArticleInput, ...] = (
             {
                 "title": "Company wins record order",
                 "description": "Strong growth and robust profit expansion",
@@ -176,7 +177,7 @@ class TestScoreNewsSet:
         assert flags == []
 
     def test_strongly_negative_article_scores_negative(self) -> None:
-        articles = (
+        articles: tuple[ArticleInput, ...] = (
             {
                 "title": "Company misses estimates, cuts guidance",
                 "description": "Stock falls as demand weakens and margins decline",
@@ -188,7 +189,7 @@ class TestScoreNewsSet:
         assert flags == []
 
     def test_no_keyword_article_is_neutral(self) -> None:
-        articles = (
+        articles: tuple[ArticleInput, ...] = (
             {
                 "title": "Company schedules shareholder meeting",
                 "description": "Routine administrative agenda items",
@@ -200,7 +201,7 @@ class TestScoreNewsSet:
         assert flags == []
 
     def test_scandal_text_triggers_red_flags(self) -> None:
-        articles = (
+        articles: tuple[ArticleInput, ...] = (
             {
                 "title": "SEBI launches investigation into accounting fraud",
                 "description": "Probe finds whistleblower complaint credible",

@@ -38,7 +38,7 @@ import.
 from __future__ import annotations
 
 import os
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 os.environ.setdefault("ENVIRONMENT", "test")
@@ -281,7 +281,8 @@ class TestBuildSystemMessage:
         message = build_system_message(
             risk_appetite="moderate", preferred_sectors=["Auto"]
         )
-        assert "risk appetite: moderate" in message.content.lower()
+        content = cast(str, message.content)
+        assert "risk appetite: moderate" in content.lower()
         assert "preferred sectors: Auto" in message.content
 
 
@@ -326,7 +327,8 @@ class TestBuildChatMessages:
         # Only the module's own guardrail SystemMessage + the new HumanMessage.
         assert len(messages) == 2
         assert isinstance(messages[0], SystemMessage)
-        assert "never override a stored verdict" in messages[0].content.lower()
+        content = cast(str, messages[0].content)
+        assert "never override a stored verdict" in content.lower()
 
     def test_tool_role_rows_are_skipped(self) -> None:
         history: list[dict[str, str]] = [
@@ -337,12 +339,12 @@ class TestBuildChatMessages:
 
     def test_row_missing_role_is_skipped(self) -> None:
         history: list[dict[str, Any]] = [{"content": "no role here"}]
-        messages = build_chat_messages(history, "hello")  # type: ignore[arg-type]
+        messages = build_chat_messages(history, "hello")
         assert len(messages) == 2
 
     def test_row_with_non_string_content_is_skipped(self) -> None:
         history: list[dict[str, Any]] = [{"role": "user", "content": 12345}]
-        messages = build_chat_messages(history, "hello")  # type: ignore[arg-type]
+        messages = build_chat_messages(history, "hello")
         assert len(messages) == 2
 
     def test_unknown_role_is_skipped(self) -> None:
@@ -365,7 +367,7 @@ class TestBuildChatMessages:
             risk_appetite="conservative",
             preferred_sectors=["Pharma & Healthcare"],
         )
-        lowered = messages[0].content.lower()
+        lowered = cast(str, messages[0].content).lower()
         assert "risk appetite: conservative" in lowered
         assert "preferred sectors: pharma & healthcare" in lowered
 
@@ -551,7 +553,20 @@ class TestPersonalizationNeverAffectsVerdicts:
         assert fixed_context in prompt_a
         assert fixed_context in prompt_b
         # ...and the ONLY difference between the two full prompts is
-        # confined to the personalization block's own risk-appetite
-        # word -- SYSTEM_PROMPT, the response-style instruction, and
-        # the context block are otherwise identical strings.
-        assert prompt_a.replace("conservative", "aggressive") == prompt_b
+        # confined to the personalization block's own substituted
+        # "risk appetite: <value>" phrase -- SYSTEM_PROMPT, the
+        # response-style instruction, the context block, and the
+        # personalization block's OWN static example text (which
+        # illustrates both a "conservative investor" and an
+        # "aggressive one" side by side, regardless of which risk
+        # appetite was actually passed in) are otherwise identical
+        # strings. A naive whole-string
+        # prompt_a.replace("conservative", "aggressive") would also
+        # mangle that static example text (turning "for a
+        # conservative investor" into the ungrammatical "for a
+        # aggressive investor"), so this targets only the specific
+        # substituted phrase instead.
+        prompt_a_with_swap = prompt_a.replace(
+            "risk appetite: conservative", "risk appetite: aggressive", 1
+        )
+        assert prompt_a_with_swap == prompt_b

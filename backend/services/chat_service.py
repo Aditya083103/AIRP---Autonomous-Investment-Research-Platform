@@ -249,9 +249,9 @@ def _fmt_list(value: Any, empty: str = _NONE_NOTED) -> str:
 
 
 def _fmt_text(value: Any, fallback: str = _NOT_AVAILABLE) -> str:
-    if not value or not isinstance(value, str):
-        return fallback
-    return value
+    if isinstance(value, str) and value:
+        return value
+    return fallback
 
 
 # ---------------------------------------------------------------------------

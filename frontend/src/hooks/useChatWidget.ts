@@ -92,14 +92,29 @@ export function useChatWidget(): UseChatWidgetResult {
   // Tracks the scopeKey a creation attempt has already been made for
   // (successful or not), so a FAILED attempt (e.g. a 409 -- analysis
   // not ready yet) does not retry itself in a tight loop: the
-  // create-session effect below depends on `isCreatingSession` (so a
-  // second open() while already creating is a safe no-op rather than
-  // a duplicate POST), and that same dependency would otherwise cause
-  // the effect to re-fire the instant `isCreatingSession` flips back
-  // to false after a failure, with every other guard condition
-  // (isOpen, session === null, isAuthenticated, accessToken) still
-  // true -- an unbounded retry loop hitting the backend on every
-  // render. Cleared whenever the scope itself changes (see the reset
+  // create-session effect below relies SOLELY on this ref (not on
+  // `isCreatingSession` state) to guard against a second attempt for
+  // the same scope -- `attemptedScopeKeyRef.current = scopeKey` is
+  // set synchronously, before the async call starts, so it already
+  // blocks any duplicate POST for this scope on every subsequent
+  // effect run, success or failure, with no dependency on
+  // `isCreatingSession` at all. This distinction matters:
+  // `isCreatingSession` must NOT also be a dependency of the effect
+  // that sets it -- `setIsCreatingSession(true)` is the first line
+  // inside `createForCurrentScope()`, so if the effect depended on
+  // `isCreatingSession`, that very state flip would re-run the effect
+  // immediately (before the in-flight `fetch` has resolved), firing
+  // this effect's own cleanup and setting `cancelled = true` on the
+  // request that is still awaiting a response. The real result,
+  // whichever way it turns out, would then be silently discarded --
+  // `session`/`sessionError` never get set, and `isCreatingSession`
+  // (only ever reset to false inside that same now-cancelled branch)
+  // would be stuck true forever. `isCreatingSession` remains ordinary
+  // state (not folded into a ref) purely because ChatWidget.tsx's UI
+  // needs it to re-render a loading spinner -- it is read once, at
+  // the top of `createForCurrentScope()`, to drive that render, and
+  // otherwise plays no role in this effect's own guard/dependency
+  // logic. Cleared whenever the scope itself changes (see the reset
   // effect), so a genuinely new scope always gets its own fresh
   // attempt; a retry for the SAME failed scope only happens if the
   // person closes and re-opens the panel (see `close`/`toggle` below
@@ -121,7 +136,6 @@ export function useChatWidget(): UseChatWidgetResult {
     if (
       !isOpen ||
       session !== null ||
-      isCreatingSession ||
       attemptedScopeKeyRef.current === scopeKey ||
       !isAuthenticated ||
       accessToken === null
@@ -171,7 +185,6 @@ export function useChatWidget(): UseChatWidgetResult {
   }, [
     isOpen,
     session,
-    isCreatingSession,
     isAuthenticated,
     accessToken,
     scope.sessionType,

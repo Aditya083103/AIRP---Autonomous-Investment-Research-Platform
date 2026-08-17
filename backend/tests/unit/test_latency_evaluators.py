@@ -351,7 +351,7 @@ def _make_run(
         "status": status,
         "total_elapsed_s": total_elapsed_s,
         "node_latencies_ms": latencies,
-        "node_call_counts": {k: 1 for k in latencies},
+        "node_call_counts": dict.fromkeys(latencies, 1),
         "error": error,
     }
 
@@ -406,7 +406,9 @@ class TestSummarizeLatencyRuns:
         # p50 of the 2 completed runs (60, 65) -- the failed run's 999s
         # total must NOT pollute the percentile calculation.
         assert summary["p50_s"] == pytest.approx(62.5)
-        assert summary["p95_s"] < 100.0
+        p95_s = summary["p95_s"]
+        assert p95_s is not None
+        assert p95_s < 100.0
 
     def test_all_runs_failed_returns_degenerate_summary_without_raising(self) -> None:
         runs = [
