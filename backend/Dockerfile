@@ -19,10 +19,19 @@
 #   2. final     — copies only the venv + app source; no compilers,
 #      no pip cache, no apt lists left behind. Keeps the shipped image
 #      free of the tool-chain used only to build it.
+#
+# NOTE ON BASE IMAGE PINNING (fix for exit code 100 apt failure):
+# `python:3.11-slim` is a FLOATING tag — Docker Hub repoints it at
+# whatever Debian release is currently "stable" (it moved from
+# bookworm to trixie in 2025/2026). When that happens, apt package
+# names inside the image can change or disappear out from under you
+# with no warning (e.g. `libgdk-pixbuf2.0-0` was restructured in
+# trixie). Pinning to `slim-bookworm` makes this build reproducible —
+# apt-get install will keep working until we deliberately upgrade.
 # =============================================================================
 
 # ── Stage 1: builder ─────────────────────────────────────────────────────────
-FROM python:3.11-slim AS builder
+FROM python:3.11-slim-bookworm AS builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -55,7 +64,7 @@ RUN pip install --upgrade pip \
 
 
 # ── Stage 2: runtime ──────────────────────────────────────────────────────────
-FROM python:3.11-slim AS runtime
+FROM python:3.11-slim-bookworm AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -69,10 +78,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # then the app crashes on first PDF render with
 # "OSError: cannot load library 'libpango-1.0.so.0'". They must be
 # present in the FINAL image, not just the builder stage.
+#
+# libgdk-pixbuf-2.0-0 (hyphen before "2.0") is the correct Debian
+# bookworm/trixie package name — libgdk-pixbuf2.0-0 (no hyphen) was
+# the old naming and no longer resolves on current Debian mirrors.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libpango-1.0-0 \
         libpangocairo-1.0-0 \
-        libgdk-pixbuf2.0-0 \
+        libgdk-pixbuf-2.0-0 \
         libcairo2 \
         libffi8 \
         shared-mime-info \
