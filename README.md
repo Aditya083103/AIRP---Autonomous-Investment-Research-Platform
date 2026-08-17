@@ -55,10 +55,26 @@ cp .env.example .env
 
 # 3. Start everything with Docker
 docker-compose up
-# API → http://localhost:8000
-# Frontend → http://localhost:5173
-# API docs → http://localhost:8000/docs
+# Frontend  → http://localhost:3000
+# API       → http://localhost:8000
+# API docs  → http://localhost:8000/docs
+# Postgres  → localhost:5432 (airp/airp)
+# Redis     → localhost:6379
+# ChromaDB  → http://localhost:8001
 ```
+
+`docker-compose up` builds and starts five containers — `api`
+([`backend/Dockerfile`](backend/Dockerfile)), `frontend`
+([`frontend/Dockerfile.dev`](frontend/Dockerfile.dev)), `postgres`,
+`redis`, and `chromadb` — runs Alembic migrations automatically before
+the API starts serving (see
+[`backend/docker-entrypoint.sh`](backend/docker-entrypoint.sh)), and
+bind-mounts both `backend/` and `frontend/` source so edits on the host
+hot-reload inside the containers. See
+[`docker-compose.yml`](docker-compose.yml) for the full service
+breakdown. A separate production-style image
+([`frontend/Dockerfile`](frontend/Dockerfile), multi-stage build served
+by nginx) exists for containerized frontend deploys outside Vercel.
 
 ## Development setup (without Docker)
 
@@ -110,18 +126,23 @@ airp/
 │   ├── tools/        # LangChain tool definitions
 │   ├── db/           # PostgreSQL, ChromaDB, Redis clients
 │   ├── migrations/   # Alembic migrations
-│   └── tests/        # pytest unit + integration tests
+│   ├── tests/        # pytest unit + integration tests
+│   ├── Dockerfile           # production backend image
+│   └── docker-entrypoint.sh # runs `alembic upgrade head`, then execs CMD
 ├── frontend/
-│   └── src/
-│       ├── components/   # incl. chat/ (AIRP Assistant widget)
-│       ├── pages/
-│       ├── hooks/        # incl. useChatWidget, useChatStream
-│       ├── api/
-│       ├── lib/
-│       └── types/
+│   ├── src/
+│   │   ├── components/   # incl. chat/ (AIRP Assistant widget)
+│   │   ├── pages/
+│   │   ├── hooks/        # incl. useChatWidget, useChatStream
+│   │   ├── api/
+│   │   ├── lib/
+│   │   └── types/
+│   ├── Dockerfile        # production image (multi-stage build → nginx)
+│   ├── Dockerfile.dev    # local dev image (Vite dev server, used by compose)
+│   └── nginx.conf.template
 ├── docs/             # Architecture, agents, data layer, chat docs
 ├── docs/week-NN/     # Per-task workflow docs (branch → commit → PR)
-├── docker-compose.yml
+├── docker-compose.yml  # local dev: api + postgres + redis + chromadb + frontend
 ├── .env.example
 └── README.md
 ```

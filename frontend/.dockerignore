@@ -1,0 +1,27 @@
+# frontend/.dockerignore
+# =============================================================================
+# AIRP — applies to both frontend/Dockerfile and frontend/Dockerfile.dev
+# (build context: ./frontend). Prevents host node_modules, build output,
+# and local env files from being copied over the container's own
+# `npm ci` install or leaking into the image.
+# =============================================================================
+
+node_modules
+dist
+coverage
+
+# Local env overrides — real values come from docker-compose environment/
+# env_file, never baked into an image layer
+.env
+.env.local
+.env.*.local
+
+# Editor / OS cruft
+.DS_Store
+.vscode
+.idea
+
+# Version control
+.git
+
+Dockerfile*
