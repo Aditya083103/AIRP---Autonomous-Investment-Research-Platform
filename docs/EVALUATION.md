@@ -5,6 +5,11 @@
 > the evaluation-horizon mapping, the dead-zone directional scoring rule, and the public
 > API + dashboard that expose the results. Update this file whenever the horizon mapping,
 > the dead-zone percentage, or the aggregation logic changes.
+>
+> **Looking for the LangSmith agent-quality eval suite instead** (Fundamental Analyst
+> accuracy, Sentiment direction, Debate quality, latency benchmarks — Phase 11,
+> T-067–T-072)? That's a separate, complementary system — see
+> [`docs/AGENT_EVALUATION.md`](AGENT_EVALUATION.md).
 
 ---
 

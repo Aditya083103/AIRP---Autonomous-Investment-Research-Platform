@@ -297,6 +297,16 @@ already gets a one-line pointer to the other) or to merge Phase 8 content
 into a new top-level section of a restructured `EVALUATION.md`. This design
 doc does not overwrite the Phase 8 file, so both remain intact either way.
 
+**Resolved in T-072:** kept both files separate and intact — `docs/
+EVALUATION.md` (Phase 8) is untouched apart from a one-line cross-link
+added to its intro. The Phase 11 write-up this doc feeds into lives at
+`docs/AGENT_EVALUATION.md` (not a bare `docs/EVALUATION.md` overwrite),
+so the acceptance criterion's "EVALUATION.md" is satisfied in spirit — a
+complete, recruiter-readable evaluation write-up exists — without
+destroying the already-shipped Phase 8 documentation the literal filename
+would have collided with. Both files now cross-link to each other and
+`docs/AGENT_EVALUATION.md` §9 explains how the two systems relate.
+
 ## 7. Open questions for T-068–T-071
 
 Flagged here rather than silently decided, since each affects how much extra
