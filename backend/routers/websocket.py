@@ -345,6 +345,31 @@ async def _forward_live_events(websocket: WebSocket, job_id: uuid.UUID) -> None:
     enough for a router/proxy/browser idle-connection timeout to close
     it out from under a still-healthy pipeline.
 
+    BUGFIX (root cause of the "Connection closed unexpectedly (code
+    1006)" report): the disconnect probe below used to be a fresh
+    ``asyncio.wait_for(websocket.receive(), timeout=0.01)`` call made
+    on EVERY poll tick, cancelling the underlying ``receive()`` the
+    instant it timed out (which, with no client ever sending anything
+    on this server-push-only stream, was every single tick). Starlette/
+    uvicorn's ``receive()`` is a resumable, stateful awaitable --
+    conceptually the same kind of object an async generator's
+    ``__anext__()`` is (see ``backend.routers.chat_stream``'s own
+    ``_turn_loop`` comment on ``token_iter.__anext__()`` for the
+    identical lesson, already learned and fixed there for the LLM
+    token stream, but never applied to this receive-based probe until
+    now). Cancelling it mid-flight, repeatedly, corrupts the
+    connection's receive state badly enough that uvicorn tears the
+    socket down itself -- observed by the client as an abnormal
+    closure, WebSocket close code 1006, typically within the first
+    couple of idle poll ticks (i.e. as soon as one agent takes longer
+    than ``_QUEUE_POLL_INTERVAL_SECONDS`` to finish, which is the
+    common case, not the exception). The fix: keep exactly ONE
+    ``receive()`` call in flight for the whole streaming loop, polled
+    non-destructively via ``asyncio.wait(..., timeout=...)`` (which
+    never cancels on timeout) alongside the broadcaster queue, and only
+    actually cancel it once, in the ``finally`` block, when the
+    connection is already being torn down for good.
+
     Args:
         websocket: The accepted, already-authenticated connection.
         job_id:    UUID of the analysis job to stream.
@@ -352,20 +377,41 @@ async def _forward_live_events(websocket: WebSocket, job_id: uuid.UUID) -> None:
     queue = await subscribe(str(job_id))
     idle_ticks = 0
     last_progress_percent = 0
+
+    # Single, persistent receive() call used only to detect a
+    # client-initiated disconnect -- see the BUGFIX note above for why
+    # this must never be cancelled mid-flight.
+    disconnect_task: "asyncio.Task[object]" = asyncio.ensure_future(websocket.receive())
+
     try:
         while True:
-            try:
-                event = await asyncio.wait_for(
-                    queue.get(), timeout=_QUEUE_POLL_INTERVAL_SECONDS
-                )
-            except asyncio.TimeoutError:
-                # No node completed within the poll interval -- probe
-                # for a client-initiated disconnect with a zero-timeout
-                # receive rather than blocking indefinitely on queue.get()
-                # while a dead connection's subscriber sits registered.
-                if not await _client_still_connected(websocket):
-                    return
+            # asyncio.Queue.get() (unlike websocket.receive()) is
+            # always safe to create fresh and cancel every tick -- it
+            # has no persistent protocol state to corrupt, just a
+            # waiter that gets removed from the queue's internal list.
+            queue_task: "asyncio.Task[AgentStreamEvent]" = asyncio.ensure_future(
+                queue.get()
+            )
 
+            done, _pending = await asyncio.wait(
+                {queue_task, disconnect_task},
+                timeout=_QUEUE_POLL_INTERVAL_SECONDS,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+
+            if disconnect_task in done:
+                queue_task.cancel()
+                if _is_real_disconnect(disconnect_task):
+                    return
+                # A benign, unexpected client message -- this endpoint
+                # defines no client->server protocol, so it is ignored.
+                # Start listening for the NEXT inbound message and fall
+                # through to the normal idle/heartbeat bookkeeping below
+                # (the queue event, if any, has not necessarily arrived
+                # yet).
+                disconnect_task = asyncio.ensure_future(websocket.receive())
+
+            if queue_task not in done:
                 idle_ticks += 1
                 if idle_ticks >= _HEARTBEAT_AFTER_TICKS:
                     idle_ticks = 0
@@ -385,6 +431,7 @@ async def _forward_live_events(websocket: WebSocket, job_id: uuid.UUID) -> None:
                         return
                 continue
 
+            event = queue_task.result()
             idle_ticks = 0
             last_progress_percent = event["progress_percent"]
 
@@ -399,43 +446,30 @@ async def _forward_live_events(websocket: WebSocket, job_id: uuid.UUID) -> None:
                 await websocket.close(code=1000)
                 return
     finally:
+        if not disconnect_task.done():
+            disconnect_task.cancel()
         await unsubscribe(str(job_id), queue)
 
 
-async def _client_still_connected(websocket: WebSocket) -> bool:
+def _is_real_disconnect(disconnect_task: "asyncio.Task[object]") -> bool:
     """
-    Best-effort check for whether ``websocket`` is still connected.
-
-    A WebSocket's TCP connection can drop without the server ever
-    receiving a close frame -- Starlette/FastAPI does not surface this
-    on its own (see the module docstring's "Why a custom close code"
-    section for the analogous header-access limitation; this is the
-    same "browsers/networks don't tell the server everything" class of
-    constraint). The standard workaround -- used here -- is a
-    zero-timeout ``receive`` call: if the connection is actually dead,
-    Starlette raises ``WebSocketDisconnect`` as soon as it processes
-    the already-buffered close/EOF event, which a live connection with
-    nothing to say will not do within the (effectively instant) timeout.
-
-    Args:
-        websocket: The connection to probe.
+    Classify a completed ``websocket.receive()`` task.
 
     Returns:
-        True if the connection still appears live, False if a
-        disconnect was detected.
+        True if this represents an actual client disconnect (a
+        ``{"type": "websocket.disconnect"}`` ASGI message, a raised
+        ``WebSocketDisconnect``, or any other receive-path failure that
+        leaves the connection in an unusable state -- safer to treat
+        as "gone" than to keep forwarding to it). False for a benign,
+        unexpected client message that should simply be ignored on
+        this server-push-only stream.
     """
     try:
-        await asyncio.wait_for(websocket.receive(), timeout=0.01)
-    except asyncio.TimeoutError:
-        return True
+        message = disconnect_task.result()
     except WebSocketDisconnect:
-        return False
+        return True
     except Exception:
-        # Any other receive-path error is treated as "connection is no
-        # longer usable" -- safer to stop forwarding than to keep
-        # writing to a socket in an unknown state.
-        return False
-    # The client sent something we did not expect on a server-push-only
-    # stream (this endpoint defines no client->server protocol). Still
-    # connected; the message itself is simply ignored.
-    return True
+        return True
+    return bool(
+        isinstance(message, dict) and message.get("type") == "websocket.disconnect"
+    )

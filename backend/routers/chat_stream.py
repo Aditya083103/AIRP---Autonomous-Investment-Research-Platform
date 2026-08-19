@@ -242,6 +242,7 @@ Design decisions
 """
 
 import asyncio
+import json
 import logging
 from typing import Any, Optional, TypedDict
 import uuid
@@ -417,6 +418,72 @@ def _extract_user_message(payload: Any) -> tuple[Optional[str], Optional[str]]:
 
 
 # ---------------------------------------------------------------------------
+# Inbound message reader -- ONE persistent, never-mid-flight-cancelled
+# receive() for the whole connection (BUGFIX, see class docstring)
+# ---------------------------------------------------------------------------
+
+
+class _InboundReader:
+    """
+    Single, persistent, non-destructively-polled consumer of this
+    connection's incoming messages.
+
+    Shared across the whole connection lifetime -- both the per-turn
+    message reads in ``_turn_loop`` AND the mid-stream disconnect probe
+    in ``_run_one_turn`` -- so there is never more than one
+    ``websocket.receive()`` call in flight at a time.
+
+    BUGFIX (root cause of the "AIRP Assistant failed to generate a
+    response" / connection dying mid-reply reports): the previous
+    ``_client_still_connected`` helper called
+    ``asyncio.wait_for(websocket.receive(), timeout=0.01)`` fresh on
+    EVERY idle poll tick while waiting for the next LLM token,
+    cancelling the underlying ``receive()`` call the instant it timed
+    out -- which, since the client never sends anything mid-reply, was
+    every single tick. Starlette/uvicorn's ``receive()`` is a
+    resumable, stateful awaitable -- the exact same kind of object an
+    async generator's ``__anext__()`` is, and this module's own
+    ``_run_one_turn`` already documents (for ``token_iter.__anext__()``)
+    that cancelling such a call mid-flight destroys its paused state.
+    The identical lesson applies to ``receive()``: repeatedly
+    cancelling it corrupts the connection's receive state badly enough
+    that the connection dies from under a still-healthy request --
+    observed as an abnormal closure (WebSocket close code 1006) as
+    soon as a single token took longer than
+    ``_TOKEN_POLL_INTERVAL_SECONDS`` to arrive, which is the realistic
+    case for any real LLM provider, not the exception. This class
+    instead keeps exactly one ``receive()`` call in flight for the
+    connection's entire lifetime and is polled via
+    ``asyncio.wait({reader.task, ...}, timeout=...)`` (which never
+    cancels on timeout) -- ``reader.task`` itself is only ever awaited
+    inside such a ``asyncio.wait(...)`` call, never cancelled, except
+    once in ``close()`` when the connection is already being torn down
+    for good.
+    """
+
+    def __init__(self, websocket: WebSocket) -> None:
+        self._websocket = websocket
+        self.task: "asyncio.Task[dict[str, Any]]" = asyncio.ensure_future(
+            websocket.receive()
+        )
+
+    def advance(self) -> dict[str, Any]:
+        """
+        Consume the just-completed message and start listening for the
+        next one. Only valid to call once ``self.task.done()`` is True
+        (i.e. after it has appeared in an ``asyncio.wait(...)`` result).
+        """
+        message = self.task.result()
+        self.task = asyncio.ensure_future(self._websocket.receive())
+        return message
+
+    def close(self) -> None:
+        """Final teardown only -- cancels the in-flight receive for good."""
+        if not self.task.done():
+            self.task.cancel()
+
+
+# ---------------------------------------------------------------------------
 # WS /api/v1/chat/{session_id}/stream
 # ---------------------------------------------------------------------------
 
@@ -455,7 +522,13 @@ async def stream_chat(
         await websocket.close(code=_CLOSE_NOT_FOUND)
         return
 
-    await _turn_loop(websocket, session_id=session_id, user=user, info=stream_info)
+    reader = _InboundReader(websocket)
+    try:
+        await _turn_loop(
+            websocket, session_id=session_id, user=user, info=stream_info, reader=reader
+        )
+    finally:
+        reader.close()
 
 
 async def _turn_loop(
@@ -463,6 +536,7 @@ async def _turn_loop(
     session_id: uuid.UUID,
     user: User,
     info: ChatSessionStreamInfo,
+    reader: "_InboundReader",
 ) -> None:
     """
     Receive client messages and stream one AIRP Assistant reply per
@@ -470,17 +544,53 @@ async def _turn_loop(
 
     Extracted from ``stream_chat`` so the connect-time auth/ownership
     checks above stay separate from the (much longer) per-turn
-    streaming logic.
+    streaming logic. Reads via ``reader`` (see ``_InboundReader``)
+    rather than ``websocket.receive_json()`` directly, so the exact
+    same never-cancelled receive task can also be polled from inside
+    ``_run_one_turn``'s token-streaming loop without ever having two
+    concurrent ``receive()`` calls on the same connection.
     """
     while True:
         try:
-            payload = await websocket.receive_json()
+            await reader.task
         except WebSocketDisconnect:
             return
         except Exception:
-            # Malformed JSON, or some other receive-path error that is
-            # not a clean disconnect -- tell the client and keep
-            # listening rather than tearing the connection down.
+            # Receive-path error that is not a clean disconnect --
+            # treat the connection as unusable; nothing left to read.
+            return
+
+        try:
+            message = reader.advance()
+        except WebSocketDisconnect:
+            return
+        except Exception:
+            return
+
+        if message.get("type") == "websocket.disconnect":
+            return
+
+        raw_text = message.get("text")
+        if raw_text is None:
+            # Binary frame or some other unexpected message on a
+            # JSON-only protocol -- tell the client and keep listening.
+            try:
+                await websocket.send_json(
+                    _cast_stream_event(
+                        session_id,
+                        event_type="error",
+                        error="expected a text (JSON) message",
+                    )
+                )
+            except Exception:
+                return
+            continue
+
+        try:
+            payload = json.loads(raw_text)
+        except Exception:
+            # Malformed JSON -- tell the client and keep listening
+            # rather than tearing the connection down.
             try:
                 await websocket.send_json(
                     _cast_stream_event(
@@ -512,6 +622,7 @@ async def _turn_loop(
             user=user,
             info=info,
             user_message=user_message,
+            reader=reader,
         )
 
 
@@ -521,6 +632,7 @@ async def _run_one_turn(
     user: User,
     info: ChatSessionStreamInfo,
     user_message: str,
+    reader: "_InboundReader",
 ) -> None:
     """
     Stream exactly one AIRP Assistant reply for ``user_message``.
@@ -626,19 +738,46 @@ async def _run_one_turn(
             if pending_next is None:
                 pending_next = asyncio.ensure_future(token_iter.__anext__())
 
+            # BUGFIX: the disconnect probe below used to be
+            # ``_client_still_connected(websocket)``, which cancelled a
+            # fresh ``websocket.receive()`` call every idle tick -- see
+            # ``_InboundReader``'s class docstring for the full
+            # explanation of why that corrupted the connection (the
+            # actual root cause of the "AIRP Assistant failed to
+            # generate a response" report). ``reader.task`` is the
+            # SAME never-cancelled-mid-flight receive task
+            # ``_turn_loop`` itself waits on between turns; waiting on
+            # it here too (never cancelling it) is what makes it safe
+            # to share.
             done, _pending = await asyncio.wait(
-                {pending_next}, timeout=_TOKEN_POLL_INTERVAL_SECONDS
+                {pending_next, reader.task},
+                timeout=_TOKEN_POLL_INTERVAL_SECONDS,
+                return_when=asyncio.FIRST_COMPLETED,
             )
 
-            if pending_next not in done:
-                # Still waiting on the same in-flight call -- probe for
-                # a client-initiated disconnect and/or send a heartbeat,
-                # then loop back and keep waiting on it (not a new one).
-                if not await _client_still_connected(websocket):
+            if reader.task in done and pending_next not in done:
+                try:
+                    message = reader.advance()
+                except WebSocketDisconnect:
+                    message = {"type": "websocket.disconnect"}
+                except Exception:
+                    message = {"type": "websocket.disconnect"}
+
+                if message.get("type") == "websocket.disconnect":
                     pending_next.cancel()
                     await _persist_interrupted_reply(session_id, collected)
                     return
+                # A benign, unexpected message mid-reply -- this
+                # endpoint has no mid-turn client protocol, so it is
+                # ignored (reader.task has already been advanced to
+                # listen for the next one). Fall through to the
+                # idle/heartbeat bookkeeping below since the token
+                # itself has not necessarily arrived yet.
 
+            if pending_next not in done:
+                # Still waiting on the same in-flight token call --
+                # send a heartbeat if it has been quiet long enough,
+                # then loop back and keep waiting on it (not a new one).
                 idle_ticks += 1
                 if idle_ticks >= _HEARTBEAT_AFTER_TICKS:
                     idle_ticks = 0
@@ -731,25 +870,3 @@ async def _persist_interrupted_reply(
             "chat_stream: failed to persist interrupted reply for session_id=%s",
             session_id,
         )
-
-
-async def _client_still_connected(websocket: WebSocket) -> bool:
-    """
-    Best-effort liveness probe -- identical technique and rationale to
-    ``backend.routers.websocket._client_still_connected`` (T-049): a
-    zero-timeout ``receive()`` surfaces an already-buffered
-    disconnect/EOF without blocking a live connection that has nothing
-    to say (this endpoint defines no other client -> server protocol
-    beyond the ``{"message": ...}`` turns already read in
-    ``_turn_loop``, so any other payload received here is simply
-    ignored, same as T-049's own equivalent).
-    """
-    try:
-        await asyncio.wait_for(websocket.receive(), timeout=0.01)
-    except asyncio.TimeoutError:
-        return True
-    except WebSocketDisconnect:
-        return False
-    except Exception:
-        return False
-    return True

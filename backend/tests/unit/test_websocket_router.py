@@ -464,21 +464,28 @@ class TestLiveForwarding:
 class _FakeStreamWebSocket:
     """
     Minimal async double for the one WebSocket surface
-    ``_forward_live_events`` touches: ``send_json`` and, via
-    ``_client_still_connected``, ``receive``.
+    ``_forward_live_events`` touches: ``send_json`` and the single,
+    persistent disconnect-probe ``receive()`` call it now keeps alive
+    for the whole streaming loop (see that function's BUGFIX docstring
+    section).
 
-    ``receive`` never resolves within ``_client_still_connected``'s
-    0.01s probe window until ``disconnect_after`` calls have been made,
-    at which point it raises WebSocketDisconnect -- simulating "still
-    connected" for a controlled number of idle ticks, then a clean
-    client-initiated disconnect so the test's while-loop terminates.
+    Unlike the pre-fix version of this fake, ``receive()`` is expected
+    to be awaited (and, at most, ``advance``d again after a completed
+    call) only a small, deterministic number of times -- NOT once per
+    poll tick -- because ``_forward_live_events`` no longer cancels an
+    in-flight ``receive()`` on every timeout. This fake instead sleeps
+    for a fixed, wall-clock ``disconnect_after_seconds`` before raising
+    ``WebSocketDisconnect`` (or never resolves at all, when
+    ``disconnect_after_seconds`` is ``None``), simulating "still
+    connected" for as long as the caller needs, then a clean
+    client-initiated disconnect so a test's while-loop can terminate.
     """
 
-    def __init__(self, disconnect_after: int) -> None:
+    def __init__(self, disconnect_after_seconds: float | None) -> None:
         self.sent: list[dict[str, Any]] = []
         self.closed_with_code: int | None = None
-        self._receive_calls = 0
-        self._disconnect_after = disconnect_after
+        self.receive_calls = 0
+        self._disconnect_after_seconds = disconnect_after_seconds
 
     async def send_json(self, data: dict[str, Any]) -> None:
         self.sent.append(data)
@@ -487,17 +494,23 @@ class _FakeStreamWebSocket:
         self.closed_with_code = code
 
     async def receive(self) -> dict[str, Any]:
-        self._receive_calls += 1
-        if self._receive_calls > self._disconnect_after:
-            raise WebSocketDisconnect()
-        await asyncio.sleep(1)  # never resolves within the 0.01s probe
-        return {}  # pragma: no cover -- unreachable, sleep always wins
+        self.receive_calls += 1
+        if self._disconnect_after_seconds is None:
+            await asyncio.sleep(3600)  # effectively never resolves
+            return {}  # pragma: no cover -- unreachable
+        await asyncio.sleep(self._disconnect_after_seconds)
+        raise WebSocketDisconnect()
 
 
 class TestHeartbeat:
     async def test_heartbeat_sent_after_idle_ticks_with_no_events(self) -> None:
         job_id = uuid.uuid4()
-        fake_ws = _FakeStreamWebSocket(disconnect_after=3)
+        # _QUEUE_POLL_INTERVAL_SECONDS=0.01, _HEARTBEAT_AFTER_TICKS=2
+        # below -> first heartbeat at ~0.02s. Disconnecting at 0.1s
+        # leaves comfortable room for several heartbeats to fire before
+        # the fake's one persistent receive() call finally resolves and
+        # ends the loop.
+        fake_ws = _FakeStreamWebSocket(disconnect_after_seconds=0.1)
 
         with (
             patch("backend.routers.websocket._QUEUE_POLL_INTERVAL_SECONDS", 0.01),
@@ -509,10 +522,13 @@ class TestHeartbeat:
         assert heartbeats, "expected at least one heartbeat event"
         assert all(h["is_final"] is False for h in heartbeats)
         assert all(h["job_id"] == str(job_id) for h in heartbeats)
+        # The whole point of the fix: exactly one receive() call for
+        # the entire loop, never repeatedly cancelled-and-recreated.
+        assert fake_ws.receive_calls == 1
 
     async def test_no_heartbeat_when_real_events_keep_arriving(self) -> None:
         job_id = uuid.uuid4()
-        fake_ws = _FakeStreamWebSocket(disconnect_after=100)
+        fake_ws = _FakeStreamWebSocket(disconnect_after_seconds=None)
 
         async def _publish_soon() -> None:
             await asyncio.sleep(0.02)
