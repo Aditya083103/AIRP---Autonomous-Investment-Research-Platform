@@ -1,5 +1,3 @@
-version: "3.9"
-
 # =============================================================================
 # AIRP — Local development stack (T-073)
 #
@@ -60,7 +58,17 @@ services:
   # here. Flip ENVIRONMENT=production on the api service to exercise the
   # HttpClient path against this container instead.
   chromadb:
-    image: chromadb/chroma:latest
+    # Pinned to match backend/requirements.txt's chromadb==0.5.0 client.
+    # "latest" previously floated onto a Chroma 1.x server build, which
+    # deprecated the /api/v1/* REST endpoints (including /api/v1/heartbeat)
+    # in favour of /api/v2/*. The healthcheck below still calls the v1
+    # endpoint, so with a v1.x server it always failed -- Docker marked
+    # this container permanently unhealthy, and since `api` depends_on
+    # chromadb with condition: service_healthy, `docker compose up` never
+    # started the api (or frontend) service at all. Pinning both client
+    # and server to 0.5.0 keeps the v1 API healthcheck valid and matches
+    # this project's existing "always pin image tags" convention.
+    image: chromadb/chroma:0.5.0
     ports:
       - "8001:8000"
     volumes:
