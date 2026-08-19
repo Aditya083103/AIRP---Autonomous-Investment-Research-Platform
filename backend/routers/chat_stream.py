@@ -82,13 +82,15 @@ in spirit)
   handling both this stream and the analysis progress stream can share
   one close-code interpretation table across both.
 * The poll/heartbeat/disconnect-probe SHAPE of T-049's
-  ``_forward_live_events`` (``asyncio.wait_for(..., timeout=...)``
-  around the next item, a heartbeat after N consecutive timeouts, a
-  zero-timeout ``receive()`` to detect a dead TCP connection between
-  real events) -- applied here to ``astream_chat``'s own async
-  iterator instead of a broadcaster queue, since (per the point above)
-  there is no queue in this design, only the LLM's own token stream to
-  poll the same way.
+  ``_forward_live_events`` (``asyncio.wait(..., timeout=...)`` around
+  the next item -- NOT ``wait_for``, which cancels on timeout and was
+  the actual bug in both routers' original disconnect probes, see
+  ``_InboundReader``'s docstring -- plus a heartbeat after N
+  consecutive timeouts, and a single persistent ``receive()`` task to
+  detect a dead TCP connection between real events) -- applied here to
+  ``astream_chat``'s own async iterator instead of a broadcaster queue,
+  since (per the point above) there is no queue in this design, only
+  the LLM's own token stream to poll the same way.
 * The same "accept the connection, then close with an explicit
   application code" strategy (rather than denying the handshake) for
   the same reason T-049's docstring gives: the browser WebSocket API
