@@ -44,14 +44,23 @@ from backend.main import API_TITLE, API_VERSION, create_app
 
 
 @pytest.fixture
-async def client() -> AsyncGenerator[httpx.AsyncClient, None]:
+async def client(
+    test_settings: Settings,
+) -> AsyncGenerator[httpx.AsyncClient, None]:
     """
     Async test client bound to the real app via in-process ASGI transport.
+
+    Built against ``test_settings`` (see conftest.py) rather than the
+    process-wide ``backend.config.settings`` singleton -- the CORS tests
+    below assert against ``test_settings.cors_origins_list``, so the app
+    under test must actually be configured with those same origins rather
+    than whatever CORS_ORIGINS happens to be set to in the shell/CI
+    environment pytest runs in.
 
     Runs the app's lifespan (startup/shutdown) automatically as part of
     the `async with` block, so lifespan errors surface as test failures.
     """
-    app = create_app()
+    app = create_app(settings_override=test_settings)
     # httpx's ASGITransport type stub expects an inline Callable matching
     # its private ASGIApp protocol (httpx._transports.asgi), which is not
     # part of httpx's public API to import and is structurally satisfied

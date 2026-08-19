@@ -48,7 +48,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from backend.config import settings
+from backend.config import Settings, settings
 from backend.routers import (
     accuracy,
     analysis,
@@ -107,7 +107,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 # ---------------------------------------------------------------------------
 
 
-def create_app() -> FastAPI:
+def create_app(settings_override: Settings | None = None) -> FastAPI:
     """
     Build and configure the FastAPI application.
 
@@ -115,7 +115,18 @@ def create_app() -> FastAPI:
     the app trivially re-creatable in tests with different settings, and
     keeps ``app`` at the bottom of this module as a thin call to this
     function -- the conventional FastAPI pattern.
+
+    ``settings_override`` lets callers (namely tests) build the app against
+    a fully self-contained ``Settings`` instance -- e.g. the ``test_settings``
+    fixture in ``backend/tests/conftest.py`` -- instead of the process-wide
+    ``backend.config.settings`` singleton, which is populated from real
+    environment variables at import time. Without this, CORS-related tests
+    silently depend on whatever CORS_ORIGINS happens to be set to in the
+    environment pytest runs in, rather than the value the test itself
+    asserts against.
     """
+    active_settings = settings_override or settings
+
     application = FastAPI(
         title=API_TITLE,
         description=API_DESCRIPTION,
@@ -134,7 +145,7 @@ def create_app() -> FastAPI:
     # API without any extra local configuration.
     application.add_middleware(
         CORSMiddleware,
-        allow_origins=settings.cors_origins_list,
+        allow_origins=active_settings.cors_origins_list,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
