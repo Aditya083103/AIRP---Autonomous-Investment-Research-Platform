@@ -151,6 +151,7 @@ import uuid
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.config import settings
 from backend.graph.state import InvestmentState, make_initial_state
 from backend.models.orm import Analysis, Company
 from backend.tools.financials import fetch_income_statement
@@ -163,6 +164,8 @@ __all__ = [
     "resolve_company",
     "get_or_create_company",
     "create_analysis_job",
+    "reserve_analysis_slot",
+    "release_analysis_slot",
     "run_analysis_pipeline",
     "AnalysisStatusResult",
     "CANONICAL_NODE_SEQUENCE",
@@ -492,6 +495,56 @@ async def _record_pending_evaluations_safely(
         )
 
 
+# ---------------------------------------------------------------------------
+# Concurrency limiting (T-074 audit findings C9/F9)
+# ---------------------------------------------------------------------------
+#
+# settings.max_concurrent_analyses caps how many LangGraph pipelines run at
+# once, in-process. Each pipeline holds a worker thread (asyncio.to_thread,
+# below) plus 7+ LLM calls' worth of memory for up to ~90 seconds -- on a
+# memory-constrained single-instance deploy target, an unbounded number of
+# concurrent analyses can thrash or OOM the process. This is deliberately
+# an in-process counter (mirrors backend.services.ws_broadcaster's own
+# documented in-process-only pattern) rather than a Redis-backed one: a
+# single Render web service instance is the actual deploy target this
+# guards, and a distributed counter would be over-engineering for that.
+#
+# reserve_analysis_slot() is called from the router BEFORE the analysis
+# row is even created, so a caller at capacity gets a fast 503 rather than
+# a job record that will never actually run. release_analysis_slot() is
+# called from run_analysis_pipeline's finally block once the pipeline
+# actually finishes (success or failure) -- NOT from the router, since the
+# whole point is to bound pipelines that are actually executing, not
+# requests that are merely in flight.
+_in_flight_analyses = 0
+_in_flight_lock = asyncio.Lock()
+
+
+async def reserve_analysis_slot() -> bool:
+    """
+    Attempt to reserve one concurrency slot.
+
+    Returns:
+        True if a slot was reserved (caller must eventually call
+        release_analysis_slot() exactly once). False if
+        settings.max_concurrent_analyses is already reached -- the caller
+        must not create an analysis job or schedule the pipeline.
+    """
+    global _in_flight_analyses
+    async with _in_flight_lock:
+        if _in_flight_analyses >= settings.max_concurrent_analyses:
+            return False
+        _in_flight_analyses += 1
+        return True
+
+
+async def release_analysis_slot() -> None:
+    """Release one concurrency slot reserved by reserve_analysis_slot()."""
+    global _in_flight_analyses
+    async with _in_flight_lock:
+        _in_flight_analyses = max(0, _in_flight_analyses - 1)
+
+
 async def run_analysis_pipeline(
     job_id: uuid.UUID,
     company_name: str,
@@ -556,39 +609,100 @@ async def run_analysis_pipeline(
     )
 
     try:
-        final_state = await asyncio.to_thread(_invoke_graph_sync, initial_state)
-        logger.info(
-            "run_analysis_pipeline: pipeline completed job_id=%s",
-            job_id,
-        )
-        if str(final_state.get("status")) == "completed":
-            await _record_pending_evaluations_safely(job_id, final_state)
-    except Exception as exc:
-        logger.error(
-            "run_analysis_pipeline: pipeline failed job_id=%s: %s",
-            job_id,
-            exc,
-        )
-        from backend.db.session import AsyncSessionLocal
-
         try:
-            async with AsyncSessionLocal() as session:
-                svc = StatePersistenceService(session)
-                await svc.mark_failed(
-                    job_id=str(job_id),
-                    error_message=str(exc),
-                    node_name="run_analysis_pipeline",
-                )
-        except Exception as persist_exc:
-            # Persistence failures here are non-fatal by the same
-            # project-wide rule backend.services.state_persistence
-            # itself follows -- a DB error while reporting an earlier
-            # DB or pipeline error must not crash the background task.
-            logger.error(
-                "run_analysis_pipeline: failed to mark job_id=%s as " "failed: %s",
+            final_state = await asyncio.to_thread(_invoke_graph_sync, initial_state)
+            logger.info(
+                "run_analysis_pipeline: pipeline completed job_id=%s",
                 job_id,
-                persist_exc,
             )
+            if str(final_state.get("status")) == "completed":
+                await _record_pending_evaluations_safely(job_id, final_state)
+        except Exception as exc:
+            logger.error(
+                "run_analysis_pipeline: pipeline failed job_id=%s: %s",
+                job_id,
+                exc,
+            )
+            from backend.db.session import AsyncSessionLocal
+
+            try:
+                async with AsyncSessionLocal() as session:
+                    svc = StatePersistenceService(session)
+                    await svc.mark_failed(
+                        job_id=str(job_id),
+                        error_message=str(exc),
+                        node_name="run_analysis_pipeline",
+                    )
+            except Exception as persist_exc:
+                # Persistence failures here are non-fatal by the same
+                # project-wide rule backend.services.state_persistence
+                # itself follows -- a DB error while reporting an earlier
+                # DB or pipeline error must not crash the background task.
+                logger.error(
+                    "run_analysis_pipeline: failed to mark job_id=%s as " "failed: %s",
+                    job_id,
+                    persist_exc,
+                )
+
+            # BUGFIX (found during live end-to-end verification): when an
+            # exception escapes EVERY node's own "never raises" contract
+            # (e.g. a genuine bug, or every retry path exhausted) rather
+            # than being caught and gracefully degraded inside the node
+            # itself, this except block above updates PostgreSQL via
+            # mark_failed but -- until this fix -- never told any live
+            # WebSocket subscriber. backend.graph.nodes._run_broadcast is
+            # only ever invoked from a node's own successful return path,
+            # so a client watching WS /api/v1/analysis/{job_id}/stream in
+            # real time (backend.routers.websocket._forward_live_events)
+            # would just wait forever for an is_final event that was
+            # never going to arrive, until the connection eventually died
+            # of an unrelated timeout -- surfacing to the user as exactly
+            # the ambiguous "Connection closed unexpectedly (code 1006)"
+            # this project's own live testing was run to chase down.
+            # Publishing the terminal failure event here, the same way
+            # _run_broadcast does for every normal node completion,
+            # closes that gap: any live subscriber gets an immediate,
+            # correctly-labelled is_final=True/status="failed" event
+            # instead of a silent hang.
+            try:
+                from backend.services.ws_broadcaster import (
+                    EVENT_TYPE_NODE_COMPLETED,
+                    cast_event,
+                    publish_event,
+                )
+
+                _, _, progress_percent = compute_progress(
+                    last_completed_node=None,
+                    status="failed",
+                )
+                publish_event(
+                    job_id=str(job_id),
+                    event=cast_event(
+                        job_id=str(job_id),
+                        agent="pipeline",
+                        status="failed",
+                        output_preview=str(exc),
+                        progress_percent=progress_percent,
+                        is_final=True,
+                        event_type=EVENT_TYPE_NODE_COMPLETED,
+                    ),
+                )
+            except Exception as broadcast_exc:
+                # Fire-and-forget, mirroring _run_broadcast's own
+                # contract -- a broadcaster bug must not make this
+                # already-in-an-except-block cleanup path raise.
+                logger.error(
+                    "run_analysis_pipeline: failed to broadcast failure "
+                    "event for job_id=%s: %s",
+                    job_id,
+                    broadcast_exc,
+                )
+    finally:
+        # T-074 audit findings C9/F9: release the concurrency slot the
+        # router reserved via reserve_analysis_slot() before scheduling
+        # this task, whether the pipeline succeeded, failed, or this
+        # function itself hit an unexpected error above.
+        await release_analysis_slot()
 
 
 # ---------------------------------------------------------------------------

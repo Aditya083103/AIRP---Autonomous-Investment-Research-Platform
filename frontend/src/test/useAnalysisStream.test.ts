@@ -168,6 +168,46 @@ describe("useAnalysisStream", () => {
     expect(result.current.events).toHaveLength(0);
   });
 
+  it("ignores a well-formed JSON message that does not match AgentStreamEvent's shape, without crashing", async () => {
+    // T-074 audit (Part B3): a message that parses as JSON but is missing
+    // required fields (e.g. a truncated payload, or a future backend
+    // schema change) must be rejected by isAgentStreamEvent, not crash the
+    // render or silently populate `events` with undefined fields.
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+
+    const { result } = renderHook(() => useAnalysisStream({ jobId: "job-1", token: "jwt-token" }));
+
+    act(() => {
+      lastSocket().emitMessage({ job_id: "job-1", agent: "fundamental_analyst" });
+    });
+
+    await waitFor(() =>
+      expect(result.current.error).toBe("Received a message that does not match AgentStreamEvent."),
+    );
+    expect(result.current.events).toHaveLength(0);
+  });
+
+  it("handles a duplicate event delivered twice by appending both, without crashing", async () => {
+    // T-074 audit (Part B3): the pipeline can legitimately re-broadcast the
+    // same node's event (e.g. a retry), and out-of-order/duplicate delivery
+    // must degrade gracefully -- the hook has no dedup logic by design (each
+    // event is a distinct progress tick), so this confirms it simply keeps
+    // appending in arrival order rather than throwing.
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+
+    const { result } = renderHook(() => useAnalysisStream({ jobId: "job-1", token: "jwt-token" }));
+
+    act(() => {
+      lastSocket().emitMessage(EVENT_1);
+      lastSocket().emitMessage(EVENT_1);
+    });
+
+    await waitFor(() => expect(result.current.events).toHaveLength(2));
+    expect(result.current.events[0]).toEqual(EVENT_1);
+    expect(result.current.events[1]).toEqual(EVENT_1);
+    expect(result.current.error).toBeNull();
+  });
+
   it("closes the socket on unmount", () => {
     vi.stubGlobal("WebSocket", FakeWebSocket);
 
@@ -237,6 +277,52 @@ describe("useAnalysisStream", () => {
     await waitFor(() =>
       expect(result.current.error).toBe("Analysis job not found, or it does not belong to you."),
     );
+  });
+
+  describe("stale-socket race (found during live end-to-end verification)", () => {
+    it("ignores a belated close/error from a superseded socket after a reconnect", async () => {
+      // Regression test for the exact bug: React 18 StrictMode's
+      // development-only mount -> cleanup -> mount double-invoke (or any
+      // jobId/token change) opens a first socket, tears it down almost
+      // immediately, then opens a second one. If the FIRST socket's
+      // close/error event arrives asynchronously AFTER the second socket
+      // has already taken over, it must not be allowed to overwrite the
+      // second (real, current) socket's state -- previously this hook
+      // used a single shared boolean ref that a later effect run would
+      // reset to "current" out from under the earlier socket's in-flight
+      // callbacks, so the stale socket's belated close(1006) incorrectly
+      // set a "Connection closed unexpectedly" error even though the
+      // real connection was open and healthy.
+      vi.stubGlobal("WebSocket", FakeWebSocket);
+
+      const { result, rerender } = renderHook(
+        ({ jobId }: { jobId: string }) => useAnalysisStream({ jobId, token: "jwt-token" }),
+        { initialProps: { jobId: "job-1" } },
+      );
+
+      const staleSocket = lastSocket();
+
+      // Changing jobId tears down the first effect (closing staleSocket)
+      // and runs a fresh one, opening a second socket -- the same shape
+      // of transition StrictMode's double-invoke produces.
+      rerender({ jobId: "job-2" });
+      const currentSocket = lastSocket();
+      expect(currentSocket).not.toBe(staleSocket);
+
+      act(() => {
+        currentSocket.emitOpen();
+      });
+      await waitFor(() => expect(result.current.connectionStatus).toBe("open"));
+
+      // The stale socket's close event arrives late, after the real
+      // connection is already open -- it must be ignored entirely.
+      act(() => {
+        staleSocket.emitClose(1006);
+      });
+
+      expect(result.current.connectionStatus).toBe("open");
+      expect(result.current.error).toBeNull();
+    });
   });
 
   describe("event_type (T-096)", () => {

@@ -36,7 +36,6 @@ Usage (inside an agent):
     })
     articles = result["articles"]     # list of dicts matching NewsArticle
 """
-from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import logging

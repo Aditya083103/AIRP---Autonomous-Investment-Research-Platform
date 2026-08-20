@@ -177,6 +177,8 @@ from backend.services.analysis import (
     get_analysis_result,
     get_analysis_status,
     get_or_create_company,
+    release_analysis_slot,
+    reserve_analysis_slot,
     resolve_company,
     run_analysis_pipeline,
 )
@@ -210,18 +212,41 @@ async def start_analysis(
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_async_session),
 ) -> AnalysisStartResponse:
-    resolution = resolve_company(
-        raw_query=body.company_name,
-        ticker_override=body.ticker,
-        exchange_override=body.exchange,
-    )
+    # T-074 audit findings C9/F9: reserve a concurrency slot BEFORE
+    # creating the analysis row, so a caller at capacity gets a fast 503
+    # with no DB write and no pipeline ever scheduled for a job that would
+    # never run -- see reserve_analysis_slot's own docstring for why this
+    # is an in-process counter, not a distributed one.
+    if not await reserve_analysis_slot():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "Too many analyses are currently running. "
+                "Please try again in a moment."
+            ),
+        )
 
-    company = await get_or_create_company(session, resolution)
-    analysis = await create_analysis_job(
-        session,
-        company=company,
-        user_id=current_user.id,
-    )
+    try:
+        resolution = resolve_company(
+            raw_query=body.company_name,
+            ticker_override=body.ticker,
+            exchange_override=body.exchange,
+        )
+
+        company = await get_or_create_company(session, resolution)
+        analysis = await create_analysis_job(
+            session,
+            company=company,
+            user_id=current_user.id,
+        )
+    except Exception:
+        # The slot was reserved above but the pipeline will now never be
+        # scheduled (run_analysis_pipeline -- the only other place that
+        # releases it -- never got the chance to run), so it must be
+        # released here or every failed /start request would permanently
+        # leak one concurrency slot.
+        await release_analysis_slot()
+        raise
 
     background_tasks.add_task(
         run_analysis_pipeline,

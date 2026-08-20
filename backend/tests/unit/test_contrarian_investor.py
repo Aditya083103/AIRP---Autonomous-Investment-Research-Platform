@@ -1023,7 +1023,21 @@ class TestRunContrarianAnalysisNode:
         result = run_contrarian_analysis(state)
         assert "contrarian" in result
         assert result["contrarian"].get("error") is not None
-        assert result["debate_round_count"] == 0
+        # T-074 audit finding F-D: this path must increment debate_round_count
+        # the same way every other exit path does (prev_count + 1), not reset
+        # it to 0, so state stays consistent if this path is ever reached
+        # with a non-zero starting count.
+        assert result["debate_round_count"] == 1
+
+    def test_missing_ticker_increments_existing_round_count(self) -> None:
+        state: dict[str, Any] = {
+            "job_id": "test-no-ticker",
+            "company_name": "Test Corp",
+            "ticker": "",
+            "debate_round_count": 1,
+        }
+        result = run_contrarian_analysis(state)
+        assert result["debate_round_count"] == 2
 
     @patch("backend.agents.contrarian_investor.get_llm")
     def test_none_research_dicts_handled(self, mock_get_llm: MagicMock) -> None:

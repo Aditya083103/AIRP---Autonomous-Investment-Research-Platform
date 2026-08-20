@@ -59,6 +59,7 @@ from backend.routers import (
     health,
     websocket,
 )
+from backend.services.rate_limiter import RateLimitMiddleware
 
 logger = logging.getLogger(__name__)
 
@@ -150,6 +151,18 @@ def create_app(settings_override: Settings | None = None) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # -- Rate limiting (T-074 audit findings C9/F9) -------------------------
+    # In-process, per-client-IP fixed-window limiter -- protects the Groq
+    # and NewsAPI free-tier quotas from a single caller's runaway traffic
+    # once this is a public URL. See backend.services.rate_limiter's own
+    # module docstring for the full design rationale (why in-process, why
+    # fixed-window, why /health is exempt).
+    if active_settings.feature_rate_limiting:
+        application.add_middleware(
+            RateLimitMiddleware,
+            requests_per_minute=active_settings.rate_limit_requests_per_minute,
+        )
 
     # -- Routers -------------------------------------------------------------
     application.include_router(health.router)

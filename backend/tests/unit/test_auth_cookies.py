@@ -112,6 +112,63 @@ _VALID_PASSWORD = "correct-horse-battery-staple"
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture
+async def production_client(
+    fake_session: _FakeAsyncSession, test_settings: Settings
+) -> AsyncGenerator[httpx.AsyncClient, None]:
+    """
+    Same as the `client` fixture, but with a production-environment
+    Settings override so the samesite="none"/secure=True branch of
+    _set_access_token_cookie can be exercised directly (T-074 audit
+    finding C7).
+    """
+    production_settings = test_settings.model_copy(
+        update={"environment": "production", "secret_key": "x" * 32}
+    )
+    app: FastAPI = create_app()
+    app.dependency_overrides[get_async_session] = _make_session_override(fake_session)
+    app.dependency_overrides[get_settings_dependency] = lambda: production_settings
+
+    transport = httpx.ASGITransport(app=cast(Any, app))
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as ac:
+        yield ac
+
+
+class TestCookieSameSiteIsEnvironmentConditional:
+    """T-074 audit finding C7: samesite must be "lax" in non-production
+    (same-origin dev/Compose deployments) and "none" in production (the
+    actual cross-SITE Vercel+Render deploy shape) -- SameSite=Lax is
+    silently never attached to a cross-site fetch/XHR at all, which would
+    make this cookie permanently inert in production as written before
+    this fix."""
+
+    @pytest.mark.asyncio
+    async def test_samesite_is_lax_outside_production(
+        self, client: httpx.AsyncClient
+    ) -> None:
+        response = await client.post(
+            "/auth/register",
+            json={"email": "samesite-lax@example.com", "password": _VALID_PASSWORD},
+        )
+        set_cookie = response.headers.get("set-cookie", "").lower()
+        assert "samesite=lax" in set_cookie
+        assert "secure" not in set_cookie
+
+    @pytest.mark.asyncio
+    async def test_samesite_is_none_and_secure_in_production(
+        self, production_client: httpx.AsyncClient
+    ) -> None:
+        response = await production_client.post(
+            "/auth/register",
+            json={"email": "samesite-none@example.com", "password": _VALID_PASSWORD},
+        )
+        set_cookie = response.headers.get("set-cookie", "").lower()
+        assert "samesite=none" in set_cookie
+        assert "secure" in set_cookie
+
+
 class TestRegisterSetsCookie:
     @pytest.mark.asyncio
     async def test_sets_httponly_cookie(self, client: httpx.AsyncClient) -> None:

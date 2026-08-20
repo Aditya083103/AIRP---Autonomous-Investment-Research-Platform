@@ -22,22 +22,20 @@ exclude = '''
 [tool.isort]
 profile = "black"
 line_length = 88
-known_first_party = [
-    "agents",
-    "graph",
-    "routers",
-    "models",
-    "services",
-    "tools",
-    "db",
-    "dependencies",
-]
+# T-074 audit finding C13: the old list ("agents", "graph", "routers", ...)
+# named bare subpackage names, but every import in this codebase uses the
+# "backend." prefix (e.g. `from backend.config import settings`) -- the old
+# list matched nothing real and was stale even before this fix (it also
+# omitted evals/migrations/tests, which existed as real subpackages).
+# "backend" is the one first-party root every module actually imports from.
+known_first_party = ["backend"]
 force_sort_within_sections = true
 combine_as_imports = true
 
 [tool.mypy]
 python_version = "3.11"
 strict = true
+warn_unused_ignores = true
 ignore_missing_imports = true
 plugins = ["pydantic.mypy"]
 
@@ -137,3 +135,24 @@ exclude_lines = [
     "if TYPE_CHECKING:",
     "raise NotImplementedError",
 ]
+
+[tool.bandit]
+# T-074 audit finding C16 -- bandit -r backend/ triage.
+#
+# B101 (assert_used) is skipped project-wide: AIRP uses `assert` for
+# internal invariant narrowing (developer bugs, not security boundaries --
+# e.g. narrowing an Optional after an upstream check, or asserting a JSON
+# payload deserialised to the expected shape), never as an
+# authentication/authorization check -- the same "assert() for type
+# narrowing" pattern this project's own mypy/type-ignore conventions rely
+# on. Every individual assert() call was reviewed during the T-074 audit;
+# none guard a security-relevant decision.
+#
+# Every other bandit finding (B105/B107 false-positive "hardcoded
+# password" matches on a cookie NAME constant, a sentinel default value
+# CHECKED AGAINST rather than used as a real secret, and an empty-string
+# function parameter default; B110 try/except/pass in idempotent cleanup
+# paths) was triaged individually with an inline `# nosec B1xx` comment
+# and a one-line reason at its exact location, not skipped globally.
+skips = ["B101"]
+exclude_dirs = ["backend/tests", "backend/migrations"]

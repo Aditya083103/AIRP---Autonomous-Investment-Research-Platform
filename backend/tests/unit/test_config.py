@@ -11,7 +11,11 @@ Tests validate that:
 """
 from __future__ import annotations
 
+import os
 from typing import Any
+
+from pydantic import ValidationError
+import pytest
 
 from backend.config import Settings
 
@@ -118,8 +122,134 @@ def test_feature_flags_default_true() -> None:
     assert s.feature_rate_limiting is True
 
 
+def test_rate_limit_requests_per_minute_default() -> None:
+    """T-074 audit findings C9/F9: rate_limit_requests_per_minute has a
+    sane default now that feature_rate_limiting is actually enforced."""
+    s = make_settings()
+    assert s.rate_limit_requests_per_minute == 60
+
+
+def test_max_concurrent_analyses_default() -> None:
+    s = make_settings()
+    assert s.max_concurrent_analyses == 3
+
+
+def test_clerk_fields_removed() -> None:
+    """T-074 audit findings C9/F9: clerk_secret_key / clerk_publishable_key
+    / clerk_jwt_issuer were dead since the self-hosted auth migration and
+    have been deleted outright, not just left unused."""
+    s = make_settings()
+    assert not hasattr(s, "clerk_secret_key")
+    assert not hasattr(s, "clerk_publishable_key")
+    assert not hasattr(s, "clerk_jwt_issuer")
+
+
 def test_environment_accepts_valid_values() -> None:
     """All valid ENVIRONMENT values are accepted without error."""
     for env_value in ["development", "test", "staging", "production"]:
         s = make_settings(environment=env_value)
         assert s.environment == env_value
+
+
+# ---------------------------------------------------------------------------
+# feature_rag_enabled (T-074 audit findings C4/C5)
+# ---------------------------------------------------------------------------
+#
+# make_settings() uses Settings.model_construct(), which -- unlike
+# Settings(**overrides) -- skips validation entirely, so the
+# _default_rag_off_in_production model_validator never runs. These tests
+# go through the real Settings(**overrides) constructor instead so the
+# validator (and model_fields_set tracking) actually fires, matching how
+# the app is constructed for real via get_settings().
+
+
+def _construct_settings(**overrides: Any) -> Settings:
+    # _env_file=None isolates this from whatever real .env happens to
+    # exist in the developer's working directory (e.g. a local SECRET_KEY
+    # placeholder) -- without it, tests asserting a field's actual Python
+    # default would silently assert against .env's value instead.
+    #
+    # That alone is NOT enough: pydantic-settings reads real OS
+    # environment variables regardless of _env_file, at a priority
+    # between the Python default and an explicit constructor kwarg. Any
+    # field NOT present in `overrides` below (e.g. secret_key in
+    # test_insecure_secret_key_allowed_outside_production, which is
+    # deliberately testing the untouched default) silently picks up
+    # whatever real SECRET_KEY happens to be exported in the calling
+    # process's environment instead -- true on a Windows dev host with
+    # no such var set, but false the moment these tests run inside the
+    # backend Docker container or CI, both of which export a real
+    # SECRET_KEY for the app's own runtime use. Popping every
+    # Settings field's env var that isn't part of this call's overrides
+    # (restored after, so no cross-test leakage in the other direction)
+    # makes the constructed instance's un-overridden fields reflect the
+    # actual Python defaults everywhere this helper runs, not just on
+    # machines that happen to have a clean environment.
+    defaults: dict[str, Any] = {
+        "anthropic_api_key": "sk-ant-test-key",
+        "database_url": "postgresql+asyncpg://airp:airp@localhost:5432/airp",
+        "database_test_url": "postgresql+asyncpg://airp:airp@localhost:5432/airp_test",
+    }
+    defaults.update(overrides)
+
+    env_keys_to_isolate = {
+        field_name.upper()
+        for field_name in Settings.model_fields
+        if field_name not in defaults
+    }
+    saved_env = {
+        key: os.environ.pop(key, None)
+        for key in env_keys_to_isolate
+        if key in os.environ
+    }
+    try:
+        return Settings(_env_file=None, **defaults)
+    finally:
+        for key, value in saved_env.items():
+            os.environ[key] = value
+
+
+def test_feature_rag_enabled_defaults_true_outside_production() -> None:
+    for env_value in ("development", "test", "staging"):
+        s = _construct_settings(environment=env_value)
+        assert s.feature_rag_enabled is True, env_value
+
+
+def test_feature_rag_enabled_defaults_false_in_production() -> None:
+    s = _construct_settings(environment="production", secret_key="x" * 32)
+    assert s.feature_rag_enabled is False
+
+
+def test_feature_rag_enabled_explicit_true_respected_in_production() -> None:
+    """An operator explicitly setting FEATURE_RAG_ENABLED=true in production
+    is respected, not silently overridden by the production default-off."""
+    s = _construct_settings(
+        environment="production", feature_rag_enabled=True, secret_key="x" * 32
+    )
+    assert s.feature_rag_enabled is True
+
+
+def test_feature_rag_enabled_explicit_false_respected_outside_production() -> None:
+    s = _construct_settings(environment="development", feature_rag_enabled=False)
+    assert s.feature_rag_enabled is False
+
+
+# ---------------------------------------------------------------------------
+# secret_key production guard (T-074 audit finding C11)
+# ---------------------------------------------------------------------------
+
+
+def test_insecure_secret_key_rejected_in_production() -> None:
+    with pytest.raises(ValidationError, match="SECRET_KEY"):
+        _construct_settings(environment="production")
+
+
+def test_insecure_secret_key_allowed_outside_production() -> None:
+    for env_value in ("development", "test", "staging"):
+        s = _construct_settings(environment=env_value)
+        assert s.secret_key == "insecure-default-change-in-production"
+
+
+def test_real_secret_key_accepted_in_production() -> None:
+    s = _construct_settings(environment="production", secret_key="x" * 32)
+    assert s.secret_key == "x" * 32

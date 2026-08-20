@@ -724,7 +724,7 @@ def run_contrarian_analysis(state: dict[str, Any]) -> dict[str, Any]:
         )
         return {
             "contrarian": result.model_dump(),
-            "debate_round_count": 0,
+            "debate_round_count": int(state.get("debate_round_count") or 0) + 1,
         }
 
     # Safely retrieve all agent output dicts (default to empty dict)

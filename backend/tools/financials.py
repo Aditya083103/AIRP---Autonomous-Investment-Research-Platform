@@ -27,7 +27,6 @@ Usage (inside an agent):
     result = fetch_financials.invoke({"ticker": "TCS.NS"})
     revenue_crores = result["income_statement"][0]["revenue_crores"]
 """
-from __future__ import annotations
 
 from datetime import datetime
 import logging

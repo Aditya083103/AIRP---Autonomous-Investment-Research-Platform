@@ -74,7 +74,6 @@ Public interface
   _format_agent_weights_table(...)           -> str
   _non_empty(...)                            -> str    fallback helper
 """
-from __future__ import annotations
 
 from datetime import datetime
 import logging

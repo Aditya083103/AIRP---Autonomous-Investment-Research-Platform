@@ -44,7 +44,6 @@ Usage (inside an agent):
     result = fetch_ratios.invoke({"ticker": "TCS.NS"})
     pe = result["pe_ratio"]
 """
-from __future__ import annotations
 
 from datetime import datetime
 import logging

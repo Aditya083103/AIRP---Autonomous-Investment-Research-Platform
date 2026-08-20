@@ -106,6 +106,7 @@ from typing import Any, Union
 from langgraph.graph import END
 from langgraph.types import Send
 
+from backend.config import settings
 from backend.graph.nodes import (
     NODE_FUNDAMENTAL,
     NODE_MACRO,
@@ -135,9 +136,14 @@ ROUTE_DEBATE_AGAIN = "debate_again"
 
 #: Maximum number of debate rounds the contrarian/debate_loop pair will run
 #: before being forced to proceed to Risk Officer regardless of conviction.
-#: T-040 acceptance criterion: "max 2 rounds".  Shared by route_after_contrarian
-#: and backend.graph.nodes.debate_loop_node so both enforce the identical cap.
-MAX_DEBATE_ROUNDS: int = 2
+#: T-040 acceptance criterion: "max 2 rounds" (default).  route_after_contrarian
+#: reads ``settings.debate_rounds`` directly at call time so the cap is
+#: genuinely operator-tunable via the ``DEBATE_ROUNDS`` env var; this module
+#: constant is kept only as a stable import target for tests/tooling and
+#: mirrors the settings default (T-074 audit finding F-B: previously this
+#: constant and ``settings.debate_rounds`` silently diverged since nothing
+#: ever read the settings field).
+MAX_DEBATE_ROUNDS: int = settings.debate_rounds
 
 # ---------------------------------------------------------------------------
 # Sentiment escalation constants (T-032)
@@ -349,12 +355,13 @@ def route_after_contrarian(state: InvestmentState) -> str:
     """
     contrarian_out: Any = state.get("contrarian")
     debate_count: int = state.get("debate_round_count", 0)
+    max_debate_rounds: int = settings.debate_rounds
 
-    if debate_count >= MAX_DEBATE_ROUNDS:
+    if debate_count >= max_debate_rounds:
         logger.info(
             "route_after_contrarian: max debate rounds (%d) reached "
             "-- proceeding to risk/valuation",
-            MAX_DEBATE_ROUNDS,
+            max_debate_rounds,
         )
         return ROUTE_PROCEED
 

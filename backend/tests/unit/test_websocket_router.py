@@ -70,6 +70,7 @@ from backend.services.ws_broadcaster import (
     _reset_for_testing,
     cast_event,
     publish_event,
+    subscribe,
 )
 
 # ---------------------------------------------------------------------------
@@ -270,9 +271,16 @@ class TestInitialSnapshot:
         assert event["status"] == "running"
         assert event["progress_percent"] == 50
 
-    def test_terminal_snapshot_closes_immediately_after_first_event(
+    def test_terminal_snapshot_closes_immediately_after_replay(
         self, client: TestClient, auth_token: str
     ) -> None:
+        """
+        BUGFIX regression test: a terminal snapshot with more than one
+        completed node now replays one event per node (so a client
+        connecting late/fresh can correctly derive every already-run
+        agent as "complete", not "skipped" -- see _snapshot_to_events's
+        own docstring) before the final event and close.
+        """
         job_id = uuid.uuid4()
         snapshot = _make_snapshot(
             job_id,
@@ -287,8 +295,14 @@ class TestInitialSnapshot:
             with client.websocket_connect(
                 f"/api/v1/analysis/{job_id}/stream?token={auth_token}"
             ) as ws:
-                event = ws.receive_json()
-                assert event["is_final"] is True
+                first_event = ws.receive_json()
+                assert first_event["agent"] == "planner"
+                assert first_event["is_final"] is False
+
+                final_event = ws.receive_json()
+                assert final_event["agent"] == "pdf_export"
+                assert final_event["is_final"] is True
+
                 # The server closes right after -- a further receive
                 # must raise WebSocketDisconnect(1000), not hang.
                 with pytest.raises(WebSocketDisconnect) as exc_info:
@@ -316,6 +330,181 @@ class TestInitialSnapshot:
         assert event["status"] == "failed"
         assert event["is_final"] is True
         assert "yfinance timed out" in event["output_preview"]
+
+
+class TestSnapshotReplayForLateConnect:
+    """
+    BUGFIX regression tests: a client connecting after the job has
+    already progressed past its first node -- reload, a dropped
+    connection that never reconnected, a link opened minutes later --
+    must see every already-completed node as complete, not "skipped".
+    Covers both the terminal (job finished) and non-terminal (job still
+    running, client just connected late) cases.
+    """
+
+    def test_running_job_replays_one_event_per_completed_node(
+        self, client: TestClient, auth_token: str
+    ) -> None:
+        job_id = uuid.uuid4()
+        snapshot = _make_snapshot(
+            job_id,
+            status="running",
+            completed_nodes=["planner", "research_join"],
+            progress_percent=22,
+        )
+        with patch(
+            "backend.routers.websocket.get_analysis_status",
+            new=AsyncMock(return_value=snapshot),
+        ):
+            with patch(
+                "backend.routers.websocket._forward_live_events",
+                new=AsyncMock(),
+            ):
+                with client.websocket_connect(
+                    f"/api/v1/analysis/{job_id}/stream?token={auth_token}"
+                ) as ws:
+                    # research_join expands into 5 events (the 4 research
+                    # agents it barriers on, then itself) -- see
+                    # _snapshot_to_events's own "SECOND BUGFIX" docstring.
+                    received = [ws.receive_json() for _ in range(6)]
+
+        assert [event["agent"] for event in received] == [
+            "planner",
+            "fundamental_analyst",
+            "technical_analyst",
+            "sentiment_analyst",
+            "macro_economist",
+            "research_join",
+        ]
+        # None of the replayed events are final -- the job is still
+        # running, so the connection stays open for _forward_live_events
+        # (mocked out above; a real connection would continue streaming).
+        assert [event["is_final"] for event in received] == [False] * 6
+        # Every REPLAYED node gets status="completed" except the last,
+        # which carries the job's real overall status ("running" here) --
+        # matching this function's pre-fix single-event contract for
+        # whichever node happens to be last.
+        assert [event["status"] for event in received] == ["completed"] * 5 + [
+            "running"
+        ]
+
+    def test_pending_job_with_no_completed_nodes_sends_one_placeholder_event(
+        self, client: TestClient, auth_token: str
+    ) -> None:
+        job_id = uuid.uuid4()
+        snapshot = _make_snapshot(
+            job_id,
+            status="pending",
+            completed_nodes=[],
+            progress_percent=0,
+        )
+        with patch(
+            "backend.routers.websocket.get_analysis_status",
+            new=AsyncMock(return_value=snapshot),
+        ):
+            with patch(
+                "backend.routers.websocket._forward_live_events",
+                new=AsyncMock(),
+            ):
+                with client.websocket_connect(
+                    f"/api/v1/analysis/{job_id}/stream?token={auth_token}"
+                ) as ws:
+                    event = ws.receive_json()
+        assert event["agent"] == "pipeline"
+        assert event["is_final"] is False
+
+    def test_terminal_job_with_many_completed_nodes_replays_all_of_them(
+        self, client: TestClient, auth_token: str
+    ) -> None:
+        job_id = uuid.uuid4()
+        canonical_nodes = [
+            "planner",
+            "research_join",
+            "contrarian_investor",
+            "debate_loop",
+            "risk_officer",
+            "valuation_agent",
+            "portfolio_manager",
+            "report_generator",
+            "pdf_export",
+        ]
+        # What the client should actually see: research_join expanded
+        # into the 4 research agents feeding it, then itself.
+        expected_agents = [
+            "planner",
+            "fundamental_analyst",
+            "technical_analyst",
+            "sentiment_analyst",
+            "macro_economist",
+            "research_join",
+            "contrarian_investor",
+            "debate_loop",
+            "risk_officer",
+            "valuation_agent",
+            "portfolio_manager",
+            "report_generator",
+            "pdf_export",
+        ]
+        snapshot = _make_snapshot(
+            job_id,
+            status="completed",
+            completed_nodes=canonical_nodes,
+            progress_percent=100,
+        )
+        with patch(
+            "backend.routers.websocket.get_analysis_status",
+            new=AsyncMock(return_value=snapshot),
+        ):
+            with client.websocket_connect(
+                f"/api/v1/analysis/{job_id}/stream?token={auth_token}"
+            ) as ws:
+                received = [ws.receive_json() for _ in expected_agents]
+
+        assert [event["agent"] for event in received] == expected_agents
+        assert [event["is_final"] for event in received] == [False] * 12 + [True]
+
+    def test_research_join_alone_expands_to_five_events(
+        self, client: TestClient, auth_token: str
+    ) -> None:
+        """
+        The exact bug this closes: a client connecting right after the
+        research phase (before this fix, ALWAYS the case for anyone who
+        reconnects/reloads mid-run or later) must see all 4 research
+        agents as complete, not "skipped" -- COMMITTEE_ROSTER in
+        frontend/src/lib/agentProgress.ts keys off the agent's own node
+        name, and CANONICAL_NODE_SEQUENCE never names them individually.
+        """
+        job_id = uuid.uuid4()
+        snapshot = _make_snapshot(
+            job_id,
+            status="running",
+            completed_nodes=["planner", "research_join"],
+            progress_percent=22,
+        )
+        with patch(
+            "backend.routers.websocket.get_analysis_status",
+            new=AsyncMock(return_value=snapshot),
+        ):
+            with patch(
+                "backend.routers.websocket._forward_live_events",
+                new=AsyncMock(),
+            ):
+                with client.websocket_connect(
+                    f"/api/v1/analysis/{job_id}/stream?token={auth_token}"
+                ) as ws:
+                    received = [ws.receive_json() for _ in range(6)]
+
+        research_agent_events = [e for e in received if e["agent"] != "planner"]
+        assert {e["agent"] for e in research_agent_events} == {
+            "fundamental_analyst",
+            "technical_analyst",
+            "sentiment_analyst",
+            "macro_economist",
+            "research_join",
+        }
+        assert all(
+            e["status"] in ("completed", "running") for e in research_agent_events
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -511,12 +700,27 @@ class TestHeartbeat:
         # the fake's one persistent receive() call finally resolves and
         # ends the loop.
         fake_ws = _FakeStreamWebSocket(disconnect_after_seconds=0.1)
+        queue = await subscribe(str(job_id))
 
         with (
             patch("backend.routers.websocket._QUEUE_POLL_INTERVAL_SECONDS", 0.01),
             patch("backend.routers.websocket._HEARTBEAT_AFTER_TICKS", 2),
+            # Every heartbeat tick now also re-checks PostgreSQL via
+            # _catch_up_if_already_terminal -- returning None here (job
+            # not found / not terminal) keeps this test's assertions
+            # about the ORIGINAL generic-heartbeat behaviour unaffected.
+            patch(
+                "backend.routers.websocket.get_analysis_status",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(
+                "backend.routers.websocket.AsyncSessionLocal",
+                new=_make_async_session_local_patch(AsyncMock()),
+            ),
         ):
-            await _forward_live_events(fake_ws, job_id)  # type: ignore[arg-type]
+            await _forward_live_events(  # type: ignore[arg-type]
+                fake_ws, job_id, queue, uuid.uuid4()
+            )
 
         heartbeats = [e for e in fake_ws.sent if e["agent"] == "pipeline"]
         assert heartbeats, "expected at least one heartbeat event"
@@ -529,6 +733,7 @@ class TestHeartbeat:
     async def test_no_heartbeat_when_real_events_keep_arriving(self) -> None:
         job_id = uuid.uuid4()
         fake_ws = _FakeStreamWebSocket(disconnect_after_seconds=None)
+        queue = await subscribe(str(job_id))
 
         async def _publish_soon() -> None:
             await asyncio.sleep(0.02)
@@ -547,7 +752,9 @@ class TestHeartbeat:
             patch("backend.routers.websocket._HEARTBEAT_AFTER_TICKS", 1000),
         ):
             await asyncio.gather(
-                _forward_live_events(fake_ws, job_id),  # type: ignore[arg-type]
+                _forward_live_events(  # type: ignore[arg-type]
+                    fake_ws, job_id, queue, uuid.uuid4()
+                ),
                 _publish_soon(),
             )
 

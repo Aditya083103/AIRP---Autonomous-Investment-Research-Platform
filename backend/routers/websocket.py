@@ -204,46 +204,178 @@ async def _authenticate(
 # ---------------------------------------------------------------------------
 
 
-def _snapshot_to_event(
+def _snapshot_to_events(
     job_id: uuid.UUID, snapshot: AnalysisStatusResult
-) -> AgentStreamEvent:
+) -> list[AgentStreamEvent]:
     """
-    Build the connect-time AgentStreamEvent from a GET /status snapshot.
+    Build the connect-time AgentStreamEvent(s) from a GET /status snapshot.
+
+    BUGFIX (found during live end-to-end verification): this used to
+    return a SINGLE event naming only ``completed_nodes[-1]`` (the most
+    recently finished node). A client connecting for the first time
+    after the job already progressed past node 1 -- the common case for
+    anyone who reloads the page, whose WebSocket drops and never
+    reconnects, or who opens a link to a job that finished minutes ago --
+    would then see only that one node as "complete" and every earlier
+    node (e.g. all 4 parallel research agents, if the last-completed
+    node is later in the pipeline) misrendered as "skipped"
+    (frontend/src/lib/agentProgress.ts's deriveAgentCards has no way to
+    know a node it never received an event for actually ran).
+
+    Fix: emit one event per entry in ``snapshot.completed_nodes``, in
+    pipeline order, exactly reconstructing what a client that had been
+    connected from the start would have received. Every entry gets
+    ``status="completed"`` and ``is_final=False`` EXCEPT the last, which
+    carries the snapshot's real ``status`` (so a failed run still shows
+    as failed, not completed) and ``is_final`` set from whether that
+    status is terminal -- unchanged from this function's original
+    single-event contract, just now preceded by the historical replay.
+
+    SECOND BUGFIX, same investigation: ``snapshot.completed_nodes`` comes
+    from ``backend.services.analysis.compute_progress``, which walks
+    ``CANONICAL_NODE_SEQUENCE`` -- a deliberately COLLAPSED view of the
+    graph that represents the 4 parallel research agents (fundamental
+    analyst, technical analyst, news sentiment, macro economist) as the
+    single ``research_join`` barrier node they all feed into, never by
+    their own names (see that module's own CANONICAL_NODE_SEQUENCE
+    docstring). Replaying events using those names verbatim therefore
+    NEVER produces an event for any of those 4 agents individually --
+    frontend/src/lib/agentProgress.ts's COMMITTEE_ROSTER expects an event
+    per agent, so all 4 permanently rendered "skipped" even on a
+    perfectly successful run, every single time a client connected after
+    the fact rather than from the very start. Fixed by expanding
+    ``research_join`` into 5 replayed events (the 4 agents, in the same
+    order backend.graph.graph.build_graph's Send-API fan-out lists them,
+    then research_join itself) whenever it appears in completed_nodes --
+    research_join is a LangGraph join/barrier node, so its presence in
+    completed_nodes already guarantees all 4 fed into it have finished.
+
+    A job with no completed_nodes yet (status='pending') still gets
+    exactly one event, naming a 'pipeline' placeholder agent, matching
+    the pre-fix behaviour for that case exactly.
 
     Reuses backend.services.analysis.AnalysisStatusResult (the exact
     same computation T-048 performs) rather than introducing a second
-    way to describe "where is this job right now" -- the initial event
-    a client receives immediately on connect and the response a client
+    way to describe "where is this job right now" -- the events a
+    client receives immediately on connect and the response a client
     would get from a plain GET /status at that same instant are
-    therefore always identical in substance, just delivered over a
-    different transport.
-
-    The ``agent`` field uses ``completed_nodes[-1]`` (the most
-    recently finished node) when available, falling back to a
-    'pipeline' placeholder for a job that has not started yet
-    (completed_nodes is empty while status='pending') -- there is no
-    real "agent" to attribute the snapshot to until the planner's first
-    checkpoint exists.
+    therefore always consistent, just delivered over a different
+    transport.
 
     Args:
         job_id:   UUID of the analysis job.
         snapshot: Result of get_analysis_status for this job_id.
 
     Returns:
-        An AgentStreamEvent summarising the job's current state.
+        A non-empty list of AgentStreamEvent, in pipeline order, ending
+        with one that summarises the job's current overall state.
     """
-    agent = snapshot.completed_nodes[-1] if snapshot.completed_nodes else "pipeline"
-    is_final = snapshot.status in TERMINAL_STATUSES
-    output_preview = snapshot.error_message or snapshot.current_phase
+    if not snapshot.completed_nodes:
+        return [
+            cast_event(
+                job_id=str(job_id),
+                agent="pipeline",
+                status=snapshot.status,
+                output_preview=snapshot.error_message or snapshot.current_phase,
+                progress_percent=snapshot.progress_percent,
+                is_final=snapshot.status in TERMINAL_STATUSES,
+            )
+        ]
 
-    return cast_event(
-        job_id=str(job_id),
-        agent=agent,
-        status=snapshot.status,
-        output_preview=output_preview,
-        progress_percent=snapshot.progress_percent,
-        is_final=is_final,
+    # Lazy import -- backend.graph.nodes transitively pulls in every agent
+    # module (LLM factory, langchain, ...); nothing else in this router
+    # needs that weight paid at app-startup import time, so it is deferred
+    # to first use here, matching backend.graph.nodes._run_broadcast's own
+    # established lazy-import pattern for the identical reason.
+    from backend.graph.nodes import (
+        NODE_FUNDAMENTAL,
+        NODE_MACRO,
+        NODE_RESEARCH_JOIN,
+        NODE_SENTIMENT,
+        NODE_TECHNICAL,
     )
+
+    replay_nodes: list[str] = []
+    for node_name in snapshot.completed_nodes:
+        if node_name == NODE_RESEARCH_JOIN:
+            # research_join is a LangGraph join/barrier node -- it only
+            # ever completes after all 4 parallel research agents have,
+            # even though compute_progress's CANONICAL_NODE_SEQUENCE
+            # names only the barrier itself, never the 4 agents feeding
+            # into it (see this function's own docstring).
+            replay_nodes.extend(
+                [NODE_FUNDAMENTAL, NODE_TECHNICAL, NODE_SENTIMENT, NODE_MACRO]
+            )
+        replay_nodes.append(node_name)
+
+    events: list[AgentStreamEvent] = [
+        cast_event(
+            job_id=str(job_id),
+            agent=node_name,
+            status="completed",
+            output_preview=snapshot.current_phase,
+            progress_percent=snapshot.progress_percent,
+            is_final=False,
+        )
+        for node_name in replay_nodes[:-1]
+    ]
+
+    last_node = replay_nodes[-1]
+    is_final = snapshot.status in TERMINAL_STATUSES
+    events.append(
+        cast_event(
+            job_id=str(job_id),
+            agent=last_node,
+            status=snapshot.status,
+            output_preview=snapshot.error_message or snapshot.current_phase,
+            progress_percent=snapshot.progress_percent,
+            is_final=is_final,
+        )
+    )
+    return events
+
+
+def _replayed_node_names(snapshot: AnalysisStatusResult) -> set[str]:
+    """
+    The set of node names ``_snapshot_to_events`` above already covers
+    for ``snapshot``, including the ``research_join`` -> 4-agent
+    expansion.
+
+    Used only by ``stream_analysis_progress`` to filter the small burst
+    of live events that can race in through the broadcaster queue
+    between ``subscribe()`` and the replay actually being sent (see the
+    BUGFIX note on that call site) -- without this, a node that
+    completes in that narrow window would be shown twice: once via
+    ``_snapshot_to_events``'s replay and again via the live forward
+    loop picking up the exact same completion from the queue.
+
+    Args:
+        snapshot: The same AnalysisStatusResult passed to
+            ``_snapshot_to_events``.
+
+    Returns:
+        Node names already represented in that function's replay --
+        empty for a job with no completed_nodes yet.
+    """
+    if not snapshot.completed_nodes:
+        return set()
+
+    from backend.graph.nodes import (
+        NODE_FUNDAMENTAL,
+        NODE_MACRO,
+        NODE_RESEARCH_JOIN,
+        NODE_SENTIMENT,
+        NODE_TECHNICAL,
+    )
+
+    covered: set[str] = set()
+    for node_name in snapshot.completed_nodes:
+        if node_name == NODE_RESEARCH_JOIN:
+            covered.update(
+                {NODE_FUNDAMENTAL, NODE_TECHNICAL, NODE_SENTIMENT, NODE_MACRO}
+            )
+        covered.add(node_name)
+    return covered
 
 
 # ---------------------------------------------------------------------------
@@ -297,9 +429,34 @@ async def stream_analysis_progress(
 
     await websocket.accept()
 
+    # BUGFIX (found during live end-to-end verification): subscribing to
+    # the broadcaster used to happen only once _forward_live_events was
+    # entered, AFTER the DB round-trip for auth/snapshot below and AFTER
+    # every replay event had already been sent over the wire -- both real
+    # I/O, not instantaneous. Any node that completed and published in
+    # that window was lost forever: too late for the replay (built from
+    # an already-fetched, now-stale snapshot) and too early for the live
+    # subscription (not registered yet). Invisible when each node takes
+    # several real seconds (the common case), but a fast-degrading run
+    # (e.g. every LLM call failing instantly on a Groq rate limit, so
+    # several nodes complete within milliseconds of each other) could
+    # lose multiple consecutive nodes' events this way -- observed live
+    # as the Risk Officer/Contrarian Investor/Valuation Agent seats
+    # showing "Skipped -- did not run" even though the completed
+    # Investment Memo clearly included all three agents' real output.
+    # Fix: subscribe FIRST, before any DB work or replay I/O, so there is
+    # no window at all in which a published event has nowhere to land.
+    # This can now race the OTHER way instead -- a node finishing between
+    # subscribe() and the snapshot fetch would appear in BOTH the replay
+    # (once the snapshot catches up to it) and the live queue -- so
+    # _drain_already_replayed below discards exactly that overlap before
+    # entering the main forward loop.
+    queue = await subscribe(str(job_id))
+
     async with AsyncSessionLocal() as session:
         user = await _authenticate(token, session, settings) if token else None
         if user is None:
+            await unsubscribe(str(job_id), queue)
             await websocket.close(code=_CLOSE_UNAUTHORIZED)
             return
 
@@ -310,33 +467,133 @@ async def stream_analysis_progress(
         )
 
     if snapshot is None:
+        await unsubscribe(str(job_id), queue)
         await websocket.close(code=_CLOSE_NOT_FOUND)
         return
 
     try:
-        await websocket.send_json(_snapshot_to_event(job_id, snapshot))
+        for event in _snapshot_to_events(job_id, snapshot):
+            await websocket.send_json(event)
     except Exception:
-        # Client disconnected before the very first send could land --
-        # nothing left to clean up (no subscriber was ever registered).
+        # Client disconnected before the very first send could land.
+        await unsubscribe(str(job_id), queue)
         return
 
     if snapshot.status in TERMINAL_STATUSES:
+        await unsubscribe(str(job_id), queue)
         await websocket.close(code=1000)
         return
 
-    await _forward_live_events(websocket, job_id)
+    _drain_already_replayed(queue, _replayed_node_names(snapshot))
+
+    await _forward_live_events(websocket, job_id, queue, user.id)
 
 
-async def _forward_live_events(websocket: WebSocket, job_id: uuid.UUID) -> None:
+def _drain_already_replayed(
+    queue: "asyncio.Queue[AgentStreamEvent]", covered: set[str]
+) -> None:
     """
-    Subscribe to the broadcaster and forward events until the final one.
+    Discard any already-replayed node's event sitting in ``queue``.
 
-    Extracted from ``stream_analysis_progress`` so the subscribe/
-    unsubscribe pairing has a single, narrow ``try``/``finally`` --
-    once subscribed, this function guarantees ``unsubscribe`` runs on
-    every exit path (normal completion, client disconnect, or any other
-    exception), so a job_id can never accumulate a leaked subscriber
-    for the lifetime of the process.
+    Called once, right before entering ``_forward_live_events``'s main
+    loop, to resolve the (harmless, opposite-direction) race the
+    subscribe-before-fetch ordering in ``stream_analysis_progress``
+    introduces: a node that completes between ``subscribe()`` and the
+    snapshot fetch publishes into the queue AND is captured by that same
+    snapshot's replay, so without this it would be shown to the client
+    twice. Non-blocking -- ``asyncio.Queue.get_nowait()`` never awaits,
+    so this cannot itself introduce a new window for a live event to be
+    missed. Any event whose ``agent`` is NOT in ``covered`` (a node that
+    raced ahead even further than the snapshot captured) is kept, in
+    original order, so genuinely new progress is never discarded.
+
+    Args:
+        queue:   This connection's broadcaster subscriber queue.
+        covered: Node names already represented in the replay just sent
+            (``_replayed_node_names(snapshot)``).
+    """
+    kept: list[AgentStreamEvent] = []
+    while not queue.empty():
+        try:
+            event = queue.get_nowait()
+        except asyncio.QueueEmpty:
+            break
+        if event["agent"] not in covered:
+            kept.append(event)
+    for event in kept:
+        queue.put_nowait(event)
+
+
+async def _catch_up_if_already_terminal(
+    job_id: uuid.UUID, user_id: uuid.UUID
+) -> "AgentStreamEvent | None":
+    """
+    Re-check PostgreSQL for a terminal status the live stream never
+    reported, and build the correct terminal event if so.
+
+    Called from ``_forward_live_events``'s heartbeat path -- see that
+    call site's BUGFIX note for why this exists: a live client can, in
+    rare cases, never receive the one broadcast event that would have
+    told it the job finished, leaving it stuck indefinitely even though
+    the job genuinely completed. This is the self-healing half of that
+    fix -- a fresh, narrowly-scoped DB read (mirroring
+    ``stream_analysis_progress``'s own initial snapshot fetch and
+    ownership check) run once per heartbeat interval, cheap enough to
+    not matter at that cadence (default every 10s, only while otherwise
+    idle) and never a source of truth divergence, since it reads the
+    exact same ``get_analysis_status`` every other status surface in
+    this codebase does.
+
+    Args:
+        job_id:  UUID of the analysis job.
+        user_id: The authenticated caller's id, for the same ownership
+            scoping every other lookup in this router applies.
+
+    Returns:
+        None if the job is not (yet) terminal, or no longer exists for
+        this user (both treated as "nothing to catch up on" -- an
+        ownership change mid-stream is not this function's concern).
+        Otherwise the same terminal ``AgentStreamEvent``
+        ``_snapshot_to_events`` would have produced as its last replayed
+        event for this snapshot.
+    """
+    async with AsyncSessionLocal() as session:
+        snapshot = await get_analysis_status(session, job_id=job_id, user_id=user_id)
+
+    if snapshot is None or snapshot.status not in TERMINAL_STATUSES:
+        return None
+
+    last_node = "pipeline"
+    if snapshot.completed_nodes:
+        last_node = snapshot.completed_nodes[-1]
+
+    return cast_event(
+        job_id=str(job_id),
+        agent=last_node,
+        status=snapshot.status,
+        output_preview=snapshot.error_message or snapshot.current_phase,
+        progress_percent=snapshot.progress_percent,
+        is_final=True,
+    )
+
+
+async def _forward_live_events(
+    websocket: WebSocket,
+    job_id: uuid.UUID,
+    queue: "asyncio.Queue[AgentStreamEvent]",
+    user_id: uuid.UUID,
+) -> None:
+    """
+    Forward events from ``queue`` until the final one, then unsubscribe.
+
+    ``queue`` is created by ``stream_analysis_progress`` via
+    ``subscribe()`` BEFORE the DB round-trip and replay send (see that
+    call site's BUGFIX note on why the subscribe timing moved) -- this
+    function no longer subscribes itself, but still owns the pairing's
+    other half: it guarantees ``unsubscribe`` runs on every exit path
+    (normal completion, client disconnect, or any other exception) via
+    the same ``try``/``finally`` as before, so a job_id can never
+    accumulate a leaked subscriber for the lifetime of the process.
 
     Also pushes a lightweight heartbeat event (see
     ``_HEARTBEAT_AFTER_TICKS``) whenever real node-completion events
@@ -373,8 +630,15 @@ async def _forward_live_events(websocket: WebSocket, job_id: uuid.UUID) -> None:
     Args:
         websocket: The accepted, already-authenticated connection.
         job_id:    UUID of the analysis job to stream.
+        queue:     This connection's already-registered subscriber
+                   queue, from ``subscribe(str(job_id))``.
+        user_id:   The authenticated caller's id -- threaded through
+                   only so the heartbeat's catch-up check
+                   (``_catch_up_if_already_terminal``) can re-run the
+                   same ownership-scoped status lookup
+                   ``stream_analysis_progress`` already did once, rather
+                   than a second, unscoped query.
     """
-    queue = await subscribe(str(job_id))
     idle_ticks = 0
     last_progress_percent = 0
 
@@ -415,6 +679,48 @@ async def _forward_live_events(websocket: WebSocket, job_id: uuid.UUID) -> None:
                 idle_ticks += 1
                 if idle_ticks >= _HEARTBEAT_AFTER_TICKS:
                     idle_ticks = 0
+
+                    # BUGFIX (found during live end-to-end verification):
+                    # a genuine analysis run that completed exactly the
+                    # normal way -- every node's own _run_broadcast fired,
+                    # no exception anywhere -- was still observed to leave
+                    # a live client stuck well short of 100%, forever,
+                    # even though PostgreSQL already showed
+                    # status='completed'. The broadcaster mechanism
+                    # itself is sound in isolation (verified directly:
+                    # publish/subscribe/deliver all work correctly once
+                    # the event loop gets a tick to run the
+                    # call_soon_threadsafe callback), so this is most
+                    # likely a single lost/delayed delivery for
+                    # whichever event happened to be in flight -- an
+                    # inherent risk of a fire-and-forget, at-most-once
+                    # broadcast with no redelivery, not something a
+                    # targeted timing fix can fully rule out. Rather than
+                    # keep chasing the exact trigger, this closes the
+                    # failure mode itself: every heartbeat tick (already
+                    # the mechanism that keeps an idle-but-healthy
+                    # connection alive) now also re-checks the job's real
+                    # PostgreSQL status. If it is already terminal but
+                    # this connection never got told (the exact symptom
+                    # above), send the correct terminal event now instead
+                    # of another generic "still working" placeholder, and
+                    # close -- capping the worst case UI staleness at one
+                    # heartbeat interval (_HEARTBEAT_AFTER_TICKS *
+                    # _QUEUE_POLL_INTERVAL_SECONDS) instead of forever.
+                    catch_up_event = await _catch_up_if_already_terminal(
+                        job_id, user_id
+                    )
+                    if catch_up_event is not None:
+                        try:
+                            await websocket.send_json(catch_up_event)
+                        except Exception:
+                            return
+                        if catch_up_event["is_final"]:
+                            await websocket.close(code=1000)
+                            return
+                        last_progress_percent = catch_up_event["progress_percent"]
+                        continue
+
                     heartbeat = cast_event(
                         job_id=str(job_id),
                         agent="pipeline",

@@ -45,8 +45,6 @@ Usage (background task / agent):
         await session.commit()
 """
 
-from __future__ import annotations
-
 from collections.abc import AsyncGenerator
 import os
 import re

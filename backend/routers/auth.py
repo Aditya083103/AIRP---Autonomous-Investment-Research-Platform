@@ -58,7 +58,7 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 #: ready for a future task to wire consumption of it into
 #: get_current_user without any change to this constant or the cookie
 #: itself.
-ACCESS_TOKEN_COOKIE_NAME = "airp_access_token"
+ACCESS_TOKEN_COOKIE_NAME = "airp_access_token"  # nosec B105 -- name, not a password
 
 
 def _set_access_token_cookie(
@@ -75,17 +75,26 @@ def _set_access_token_cookie(
     marked Secure (HTTPS-only) in production and left un-secured in
     local/test HTTP development, matching how ``Settings.is_production``
     already gates other environment-specific behaviour elsewhere in the
-    backend. ``samesite="lax"`` allows the cookie on top-level
-    navigations (e.g. a redirect back from an OAuth-style flow, if one
-    is ever added) while still blocking it on cross-site POST/fetch
-    requests, the standard CSRF-mitigating default.
+    backend.
+
+    ``samesite`` is also environment-conditional (T-074 audit finding
+    C7): ``"lax"`` in local/test development, where the frontend and
+    backend share an origin behind the Vite dev proxy (see
+    ``frontend/vite.config.ts``) or Docker Compose's nginx image, and
+    ``"none"`` in production, where the actual deploy target is a
+    cross-SITE split (Vercel frontend, Render backend) -- a browser never
+    attaches a ``SameSite=Lax`` cookie to a cross-site XHR/fetch at all,
+    which would make this cookie permanently inert in exactly the
+    deployment shape it needs to work in. Per the Set-Cookie spec,
+    ``SameSite=None`` requires ``Secure`` -- already true here since
+    ``secure`` is tied to the same ``is_production`` check.
     """
     response.set_cookie(
         key=ACCESS_TOKEN_COOKIE_NAME,
         value=access_token,
         httponly=True,
         secure=settings.is_production,
-        samesite="lax",
+        samesite="none" if settings.is_production else "lax",
         max_age=expires_in_minutes * 60,
         path="/",
     )

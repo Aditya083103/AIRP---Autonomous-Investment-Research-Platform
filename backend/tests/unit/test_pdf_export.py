@@ -377,6 +377,52 @@ class TestBuildBrandedHtmlDocument:
         ):
             assert heading in result
 
+    def test_very_long_company_name_does_not_raise(self) -> None:
+        """T-074 audit (Part B6): a very long company name must not crash
+        HTML generation -- WeasyPrint wraps/clips visually, it never errors,
+        but our own string-building code must not raise either."""
+        long_name = "Very " * 60 + "Long Company Name Limited"
+        result = build_branded_html_document("# Title", long_name, "17 Jun 2026")
+        assert long_name in result
+
+    def test_non_ascii_rupee_symbol_renders_without_exception(self) -> None:
+        """Company names / memo bodies may legitimately contain the Rupee
+        sign (U+20B9) -- confirm it survives HTML generation untouched
+        (html.escape does not mangle non-ASCII characters) and the document
+        declares UTF-8 so WeasyPrint decodes it correctly."""
+        result = build_branded_html_document(
+            "# Title\n\nTarget price: ₹1,234.50 (undervalued).",
+            "₹upee Industries Ltd",
+            "17 Jun 2026",
+        )
+        assert "₹upee Industries Ltd" in result
+        assert "₹1,234.50" in result
+        assert 'charset="utf-8"' in result.lower()
+
+    def test_en_dash_and_em_dash_render_without_exception(self) -> None:
+        """En-dashes (–) and em-dashes (—) are common in generated
+        narrative text (e.g. "2023–24", "risk — flagged"); confirm
+        they pass through HTML generation unescaped and undamaged."""
+        result = build_branded_html_document(
+            "# Title\n\nFY2023–FY2024 performance — strong growth.",
+            "Test Corp – Holdings",
+            "17 Jun 2026",
+        )
+        assert "FY2023–FY2024" in result
+        assert "— strong growth" in result
+        assert "Test Corp – Holdings" in result
+
+    def test_missing_sections_and_none_like_placeholders_do_not_raise(self) -> None:
+        """A memo body with an entirely absent section (as memo_generator's
+        own _non_empty() fallbacks would produce) must still build a valid
+        document, not raise."""
+        sparse_markdown = "# Title\n\n## 1. Executive Summary\n\nNot available.\n"
+        result = build_branded_html_document(
+            sparse_markdown, "Test Corp", "17 Jun 2026"
+        )
+        assert "Not available." in result
+        assert result.startswith("<!DOCTYPE html>")
+
 
 # ---------------------------------------------------------------------------
 # Tests: resolve_memo_output_dir / resolve_memo_pdf_path
@@ -538,6 +584,27 @@ class TestRenderMemoPdf:
                 )
         assert result is not None
         assert nested_dir.exists()
+
+    def test_render_succeeds_with_long_non_ascii_company_name(
+        self, tmp_path: Path
+    ) -> None:
+        """T-074 audit (Part B6): end-to-end render_memo_pdf must not raise
+        for a long, non-ASCII company name (Rupee sign, en-dash)."""
+        fake_settings = MagicMock()
+        fake_settings.feature_pdf_enabled = True
+        fake_settings.memo_output_dir = str(tmp_path)
+        fake_weasyprint = _make_fake_weasyprint_module()
+        long_non_ascii_name = "₹upee Industries " + "Holdings " * 20 + "– Ltd"
+        with patch("backend.services.pdf_export.settings", fake_settings):
+            with patch.dict(sys.modules, {"weasyprint": fake_weasyprint}):
+                result = render_memo_pdf(
+                    "# Memo\n\nTarget: ₹1,234 — FY2023–24 growth.",
+                    long_non_ascii_name,
+                    "17 Jun 2026",
+                    "job-non-ascii",
+                )
+        assert result is not None
+        assert result.exists()
 
     def test_pdf_size_under_acceptance_threshold(self, tmp_path: Path) -> None:
         """

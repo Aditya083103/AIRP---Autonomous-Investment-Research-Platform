@@ -244,6 +244,7 @@ Design decisions
 """
 
 import asyncio
+from collections.abc import MutableMapping
 import json
 import logging
 from typing import Any, Optional, TypedDict
@@ -345,7 +346,7 @@ class ChatStreamEvent(TypedDict):
     error: Optional[str]
 
 
-def _cast_stream_event(
+def _cast_stream_event(  # nosec B107 -- "token" is a stream chunk, not a password
     session_id: uuid.UUID,
     event_type: str,
     token: str = "",
@@ -465,11 +466,17 @@ class _InboundReader:
 
     def __init__(self, websocket: WebSocket) -> None:
         self._websocket = websocket
-        self.task: "asyncio.Task[dict[str, Any]]" = asyncio.ensure_future(
+        # T-074 audit finding (mypy warn_unused_ignores pass, C15):
+        # WebSocket.receive() is typed to return starlette.types.Message,
+        # which IS MutableMapping[str, Any], not dict[str, Any] -- the
+        # annotation below now matches that exactly instead of narrowing
+        # it to dict, which is what made asyncio.ensure_future's inferred
+        # Awaitable[dict[str, Any]] mismatch the coroutine's real type.
+        self.task: "asyncio.Task[MutableMapping[str, Any]]" = asyncio.ensure_future(
             websocket.receive()
         )
 
-    def advance(self) -> dict[str, Any]:
+    def advance(self) -> MutableMapping[str, Any]:
         """
         Consume the just-completed message and start listening for the
         next one. Only valid to call once ``self.task.done()`` is True
@@ -818,7 +825,7 @@ async def _run_one_turn(
                     session_id, event_type="error", error=str(exc), is_final=True
                 )
             )
-        except Exception:
+        except Exception:  # nosec B110 -- best-effort notify on a failing connection
             pass
         if collected:
             await _persist_interrupted_reply(session_id, collected)

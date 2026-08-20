@@ -41,8 +41,6 @@ Usage (inside FastAPI routes / services):
         await session.commit()
 """
 
-from __future__ import annotations
-
 from datetime import datetime
 from typing import Optional
 import uuid
@@ -223,17 +221,27 @@ class User(Base):
     )
 
     # Relationships
-    analyses: Mapped[list[Analysis]] = relationship(
+    # T-074 audit finding C8: quoted forward references ("Analysis" etc.)
+    # -- these classes are defined further down this file, and without
+    # `from __future__ import annotations` (removed here per the project's
+    # own "no postponed annotations" rule) Python evaluates Mapped[...]
+    # subscripts eagerly at class-body execution time. A bare (unquoted)
+    # Analysis/ChatSession/UserPreferences name would raise NameError since
+    # those classes don't exist yet at this point in the file -- quoting
+    # keeps the annotation a string, which SQLAlchemy's Mapped[] machinery
+    # (and mypy, via the sqlalchemy2-stubs/pydantic.mypy plugin) resolves
+    # lazily once the whole module has finished executing.
+    analyses: Mapped[list["Analysis"]] = relationship(
         "Analysis",
         back_populates="requested_by_user",
         cascade="all, delete-orphan",
     )
-    chat_sessions: Mapped[list[ChatSession]] = relationship(
+    chat_sessions: Mapped[list["ChatSession"]] = relationship(
         "ChatSession",
         back_populates="user",
         cascade="all, delete-orphan",
     )
-    preferences: Mapped[Optional[UserPreferences]] = relationship(
+    preferences: Mapped[Optional["UserPreferences"]] = relationship(
         "UserPreferences",
         back_populates="user",
         uselist=False,
@@ -307,7 +315,8 @@ class Company(Base):
     )
 
     # Relationships
-    analyses: Mapped[list[Analysis]] = relationship(
+    # Quoted forward reference -- see User.analyses's comment above for why.
+    analyses: Mapped[list["Analysis"]] = relationship(
         "Analysis",
         back_populates="company",
         cascade="all, delete-orphan",
@@ -410,31 +419,37 @@ class Analysis(Base):
     )
 
     # Relationships
-    company: Mapped[Company] = relationship(
+    # Company/User are quoted for consistency and were already defined
+    # above this point in the file; AgentOutput/InvestmentMemo/
+    # VerdictOutcome/ChatSession are genuine forward references (defined
+    # later in this file) -- see User.analyses's comment above for why
+    # they must be quoted now that `from __future__ import annotations`
+    # is gone (T-074 audit finding C8).
+    company: Mapped["Company"] = relationship(
         "Company",
         back_populates="analyses",
     )
-    requested_by_user: Mapped[User] = relationship(
+    requested_by_user: Mapped["User"] = relationship(
         "User",
         back_populates="analyses",
     )
-    agent_outputs: Mapped[list[AgentOutput]] = relationship(
+    agent_outputs: Mapped[list["AgentOutput"]] = relationship(
         "AgentOutput",
         back_populates="analysis",
         cascade="all, delete-orphan",
     )
-    investment_memo: Mapped[Optional[InvestmentMemo]] = relationship(
+    investment_memo: Mapped[Optional["InvestmentMemo"]] = relationship(
         "InvestmentMemo",
         back_populates="analysis",
         uselist=False,
         cascade="all, delete-orphan",
     )
-    verdict_outcomes: Mapped[list[VerdictOutcome]] = relationship(
+    verdict_outcomes: Mapped[list["VerdictOutcome"]] = relationship(
         "VerdictOutcome",
         back_populates="analysis",
         cascade="all, delete-orphan",
     )
-    chat_sessions: Mapped[list[ChatSession]] = relationship(
+    chat_sessions: Mapped[list["ChatSession"]] = relationship(
         "ChatSession",
         back_populates="analysis",
         cascade="all, delete-orphan",
@@ -876,7 +891,9 @@ class ChatSession(Base):
         "Analysis",
         back_populates="chat_sessions",
     )
-    messages: Mapped[list[ChatMessage]] = relationship(
+    # Quoted forward reference -- ChatMessage is defined later in this
+    # file (see User.analyses's comment above for why this is required).
+    messages: Mapped[list["ChatMessage"]] = relationship(
         "ChatMessage",
         back_populates="session",
         cascade="all, delete-orphan",

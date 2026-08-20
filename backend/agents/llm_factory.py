@@ -17,8 +17,6 @@ Usage:
     llm = get_llm()
 """
 
-from __future__ import annotations
-
 from typing import Any
 
 from backend.agents.tracing import configure_tracing

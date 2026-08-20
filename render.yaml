@@ -1,0 +1,167 @@
+# render.yaml
+# AIRP -- Render Blueprint for the backend web service (T-074, T-074/T-079
+# acceptance criteria: "ensure all env vars documented").
+#
+# Deploy: connect this repo in the Render dashboard as a Blueprint, or run
+# `render blueprint launch` from the repo root. Render reads this file and
+# creates/updates the service(s) declared below.
+#
+# dockerContext MUST be the repo root ("."), not "backend/" -- every
+# backend module imports with the "backend." package prefix (see
+# backend/Dockerfile's own header comment), which only resolves when the
+# build context is the repo root with backend/Dockerfile addressed via
+# dockerfilePath, exactly as docker-compose.yml already does locally.
+#
+# Every environment variable below is cross-checked field-by-field against
+# backend/config.py's Settings class. `sync: false` marks a secret Render
+# will prompt for in the dashboard and never store in this file; a plain
+# `value:` is safe to commit (a real default, or a placeholder the
+# operator is expected to override for staging/production).
+
+services:
+  - type: web
+    name: airp-backend
+    runtime: docker
+    dockerfilePath: backend/Dockerfile
+    dockerContext: .
+    plan: starter
+    region: oregon
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      # -- 1. Application -----------------------------------------------
+      - key: ENVIRONMENT
+        value: production
+      - key: LOG_LEVEL
+        value: INFO
+      - key: CORS_ORIGINS
+        # Set to the exact deployed Vercel origin (T-075) once known --
+        # a wildcard "*" is invalid combined with allow_credentials=True
+        # (backend/main.py's CORSMiddleware) and browsers will reject it.
+        sync: false
+      - key: SECRET_KEY
+        # Real random value REQUIRED -- backend/config.py's
+        # _reject_insecure_secret_key_in_production validator refuses to
+        # start the app in production with the checked-in placeholder.
+        # generateValue lets Render mint a strong random value for you.
+        generateValue: true
+      - key: ACCESS_TOKEN_EXPIRE_MINUTES
+        value: "60"
+
+      # -- 2. LLM Provider ------------------------------------------------
+      - key: LLM_PROVIDER
+        value: anthropic
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: ANTHROPIC_MODEL
+        value: claude-haiku-4-5-20251001
+      - key: ANTHROPIC_MAX_TOKENS
+        value: "4096"
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        value: openai/gpt-oss-120b
+
+      # -- 3. Observability -------------------------------------------------
+      - key: LANGSMITH_API_KEY
+        # Optional -- leave unset (empty) to run with tracing disabled;
+        # tracing_enabled requires both this key AND LANGCHAIN_TRACING_V2.
+        sync: false
+      - key: LANGCHAIN_TRACING_V2
+        value: "true"
+      - key: LANGCHAIN_PROJECT
+        value: airp-production
+      - key: LANGCHAIN_ENDPOINT
+        value: https://api.smith.langchain.com
+
+      # -- 4. Database ------------------------------------------------------
+      - key: DATABASE_URL
+        # Neon Postgres connection string (asyncpg driver,
+        # postgresql+asyncpg://...?sslmode=require) -- see
+        # backend/db/session.py's own Neon-specific SSL handling.
+        sync: false
+      - key: DB_POOL_SIZE
+        value: "5"
+      - key: DB_MAX_OVERFLOW
+        value: "10"
+
+      # -- 5. Cache -----------------------------------------------------------
+      - key: REDIS_URL
+        # Upstash Redis connection string.
+        sync: false
+      - key: REDIS_TOKEN
+        # Only needed for Upstash's REST/TLS token auth.
+        sync: false
+      - key: CACHE_TTL_STOCK
+        value: "900"
+      - key: CACHE_TTL_NEWS
+        value: "3600"
+      - key: CACHE_TTL_MACRO
+        value: "86400"
+      - key: CACHE_TTL_FUNDAMENTALS
+        value: "3600"
+
+      # -- 6. Vector Store (RAG) ----------------------------------------------
+      # FEATURE_RAG_ENABLED already defaults to false in production
+      # (backend/config.py's _default_rag_off_in_production validator, T-074
+      # audit findings C4/C5) since ChromaDB has no managed backing service
+      # on this deploy target -- these are set explicitly anyway so the
+      # decision is visible here, not just implicit in code.
+      - key: FEATURE_RAG_ENABLED
+        value: "false"
+      - key: CHROMA_HOST
+        value: localhost
+      - key: CHROMA_PORT
+        value: "8001"
+      - key: CHROMA_COLLECTION
+        value: airp_documents
+      - key: EMBEDDING_MODEL
+        value: all-MiniLM-L6-v2
+      - key: CHROMA_PERSIST_DIR
+        value: ""
+
+      # -- 7. Authentication ----------------------------------------------
+      - key: ACCURACY_SERVICE_TOKEN
+        # Required for the scheduled evaluate-verdicts.yml GitHub Actions
+        # workflow to call POST /api/v1/accuracy/run -- empty disables the
+        # endpoint entirely (fails closed by design, not a startup error).
+        sync: false
+
+      # -- 8. External Data APIs --------------------------------------------
+      - key: NEWS_API_KEY
+        sync: false
+      - key: ALPHA_VANTAGE_KEY
+        sync: false
+      - key: SCREENER_BASE_URL
+        value: https://www.screener.in
+      - key: RBI_BASE_URL
+        value: https://www.rbi.org.in
+
+      # -- 9. Feature Flags -------------------------------------------------
+      - key: FEATURE_DEBATE_ENABLED
+        value: "true"
+      - key: DEBATE_ROUNDS
+        value: "2"
+      - key: FEATURE_PDF_ENABLED
+        value: "true"
+      - key: MEMO_OUTPUT_DIR
+        # Render's filesystem is ephemeral across deploys/restarts --
+        # generated PDFs under this path do not persist. Acceptable for
+        # T-074/T-075 (memo generation is re-run per analysis, not
+        # archived server-side long-term), but worth knowing going in.
+        value: data/memos
+      - key: FEATURE_RATE_LIMITING
+        value: "true"
+      - key: RATE_LIMIT_REQUESTS_PER_MINUTE
+        value: "60"
+      - key: MAX_CONCURRENT_ANALYSES
+        # Conservative default for Render's starter-tier memory ceiling --
+        # see backend/services/analysis.py's reserve_analysis_slot.
+        value: "3"
+      - key: MAX_UPLOAD_SIZE_MB
+        value: "20"
+
+      # -- Render platform ---------------------------------------------------
+      # $PORT is injected by Render itself -- backend/Dockerfile's shell-form
+      # CMD (T-074 audit finding C2) reads it via ${PORT:-8000}; no env var
+      # needs to be declared here for it.

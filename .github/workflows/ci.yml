@@ -77,6 +77,14 @@ jobs:
       - name: "Type check — mypy"
         run: mypy backend/
 
+      # ── Security scan (T-074 audit finding C16 / T-079 acceptance criterion) ─
+      # Config in pyproject.toml's [tool.bandit] -- skips B101 (assert used
+      # for internal invariant narrowing, not security checks) project-wide;
+      # every other finding is individually triaged with an inline
+      # `# nosec B1xx` comment, so this step should stay at zero findings.
+      - name: "Security scan — bandit"
+        run: bandit -r backend/ -c pyproject.toml
+
       # ── Tests with coverage ───────────────────────────────────────────────
       # Phase 0 has no test files yet — pytest exits 0 on empty testpaths
       # once conftest.py exists. Coverage threshold kicks in from Phase 1.
@@ -161,7 +169,47 @@ jobs:
         run: npm run build
 
   # ───────────────────────────────────────────────────────────────────────────
-  # JOB 3 — CI summary (required status check for branch protection)
+  # JOB 3 — Docker: build both production images (T-074 audit finding C14)
+  # Neither Dockerfile was ever exercised by CI before this job existed --
+  # a base-image drift or an apt package rename (the exact class of failure
+  # backend/Dockerfile's own header comment documents having hit twice
+  # already) only ever surfaced on an actual Render/manual deploy. This job
+  # builds both images (no push) on every push/PR, using GitHub Actions'
+  # own cache backend (type=gha) so repeat builds reuse unchanged layers
+  # instead of re-downloading apt packages and re-installing pip/npm deps
+  # every run.
+  # ───────────────────────────────────────────────────────────────────────────
+  docker:
+    name: "Docker — build backend & frontend images"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build backend image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: backend/Dockerfile
+          push: false
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+
+      - name: Build frontend image
+        uses: docker/build-push-action@v5
+        with:
+          context: frontend
+          file: frontend/Dockerfile
+          push: false
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # JOB 4 — CI summary (required status check for branch protection)
   # Both backend and frontend must pass before this job succeeds.
   # Set THIS job as the required check in GitHub branch protection settings
   # — avoids updating branch protection every time jobs are added/renamed.
@@ -169,8 +217,9 @@ jobs:
   ci-pass:
     name: "CI — all checks passed"
     runs-on: ubuntu-latest
-    # As of T-053 both backend and frontend are hard gates.
-    needs: [backend, frontend]
+    # As of T-053 both backend and frontend are hard gates; T-074 adds
+    # docker as a third hard gate (see JOB 3 above).
+    needs: [backend, frontend, docker]
     if: always()
 
     steps:
@@ -180,12 +229,21 @@ jobs:
             echo "❌ Backend CI failed."
             echo "  backend  : ${{ needs.backend.result }}"
             echo "  frontend : ${{ needs.frontend.result }}"
+            echo "  docker   : ${{ needs.docker.result }}"
             exit 1
           fi
           if [[ "${{ needs.frontend.result }}" != "success" ]]; then
             echo "❌ Frontend CI failed."
             echo "  backend  : ${{ needs.backend.result }}"
             echo "  frontend : ${{ needs.frontend.result }}"
+            echo "  docker   : ${{ needs.docker.result }}"
             exit 1
           fi
-          echo "✅ All CI checks passed (backend + frontend)."
+          if [[ "${{ needs.docker.result }}" != "success" ]]; then
+            echo "❌ Docker build failed."
+            echo "  backend  : ${{ needs.backend.result }}"
+            echo "  frontend : ${{ needs.frontend.result }}"
+            echo "  docker   : ${{ needs.docker.result }}"
+            exit 1
+          fi
+          echo "✅ All CI checks passed (backend + frontend + docker)."

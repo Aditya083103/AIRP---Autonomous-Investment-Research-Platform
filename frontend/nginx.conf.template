@@ -60,4 +60,22 @@ server {
         proxy_set_header Host $host;
         proxy_read_timeout 300s;
     }
+
+    # WebSocket — WS /api/v1/chat/{session_id}/stream (backend/routers/
+    # chat_stream.py, T-104). T-074 audit finding F-E: this location was
+    # missing entirely, so chat WebSocket connections fell through to the
+    # general /api/ block above, which has no Upgrade/Connection headers --
+    # the handshake would never actually upgrade, silently breaking chat
+    # streaming through this nginx image (Docker Compose / on-prem
+    # deployments) even after the frontend itself is pointed at the right
+    # origin. Mirrors the /api/v1/analysis/ block above; a long-lived
+    # connection with many turns needs a generous read timeout too.
+    location /api/v1/chat/ {
+        proxy_pass ${BACKEND_UPSTREAM};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_read_timeout 300s;
+    }
 }

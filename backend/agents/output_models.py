@@ -122,7 +122,7 @@ class FundamentalAnalysis(AgentOutput):
 
     agent_name: str = Field(default="fundamental_analyst", frozen=True)
 
-    # ── Scores ────────────────────────────────────────────────────────────
+    # --- Scores ---
     score: Optional[int] = Field(
         default=None,
         ge=1,
@@ -157,7 +157,7 @@ class FundamentalAnalysis(AgentOutput):
         ),
     )
 
-    # ── Revenue ───────────────────────────────────────────────────────────
+    # --- Revenue ---
     revenue_growth_pct: Optional[float] = Field(
         default=None,
         description="YoY revenue growth rate (%) for the most recent fiscal year",
@@ -167,7 +167,7 @@ class FundamentalAnalysis(AgentOutput):
         description="3-year compound annual revenue growth rate (%)",
     )
 
-    # ── Margins ───────────────────────────────────────────────────────────
+    # --- Margins ---
     gross_margin_pct: Optional[float] = Field(
         default=None,
         description="Gross profit margin (%) = gross profit / revenue × 100",
@@ -181,7 +181,7 @@ class FundamentalAnalysis(AgentOutput):
         description="Net profit margin (%) = net income / revenue × 100",
     )
 
-    # ── Cash flow ─────────────────────────────────────────────────────────
+    # --- Cash flow ---
     free_cash_flow_cr: Optional[float] = Field(
         default=None,
         description="Free cash flow in ₹ crore (TTM)",
@@ -191,7 +191,7 @@ class FundamentalAnalysis(AgentOutput):
         description="FCF yield (%) = FCF / market cap × 100",
     )
 
-    # ── Balance sheet ─────────────────────────────────────────────────────
+    # --- Balance sheet ---
     debt_to_equity: Optional[float] = Field(
         default=None,
         description="Total debt / total shareholders' equity ratio",
@@ -205,7 +205,7 @@ class FundamentalAnalysis(AgentOutput):
         description="EBIT / interest expense (debt service safety margin)",
     )
 
-    # ── Return metrics ────────────────────────────────────────────────────
+    # --- Return metrics ---
     roe_pct: Optional[float] = Field(
         default=None,
         description="Return on equity (%) = net income / shareholders' equity × 100",
@@ -215,7 +215,7 @@ class FundamentalAnalysis(AgentOutput):
         description="Return on capital employed (%)",
     )
 
-    # ── Qualitative synthesis ─────────────────────────────────────────────
+    # --- Qualitative synthesis ---
     strengths: list[str] = Field(
         default_factory=list,
         description="Top 3–5 fundamental strengths identified by the agent",
@@ -251,7 +251,7 @@ class TechnicalAnalysis(AgentOutput):
 
     agent_name: str = Field(default="technical_analyst", frozen=True)
 
-    # ── Signal ────────────────────────────────────────────────────────────
+    # --- Signal ---
     signal: str = Field(
         description=(
             "Directional signal from technical analysis: "
@@ -267,7 +267,7 @@ class TechnicalAnalysis(AgentOutput):
         ),
     )
 
-    # ── Price levels ──────────────────────────────────────────────────────
+    # --- Price levels ---
     current_price: Optional[float] = Field(
         default=None,
         description="Most recent closing price in ₹",
@@ -285,7 +285,7 @@ class TechnicalAnalysis(AgentOutput):
         description="Current price as % of 52-week high (100 = at high, <100 = below)",
     )
 
-    # ── Moving averages ───────────────────────────────────────────────────
+    # --- Moving averages ---
     ma_50d: Optional[float] = Field(
         default=None,
         description="50-day simple moving average of closing price in ₹",
@@ -310,7 +310,7 @@ class TechnicalAnalysis(AgentOutput):
         ),
     )
 
-    # ── Momentum ──────────────────────────────────────────────────────────
+    # --- Momentum ---
     rsi_14: Optional[float] = Field(
         default=None,
         description=(
@@ -335,7 +335,7 @@ class TechnicalAnalysis(AgentOutput):
         description="1-year price return (%)",
     )
 
-    # ── Volume ────────────────────────────────────────────────────────────
+    # --- Volume ---
     avg_volume_30d: Optional[float] = Field(
         default=None,
         description="Average daily trading volume over the last 30 days",
@@ -348,7 +348,7 @@ class TechnicalAnalysis(AgentOutput):
         ),
     )
 
-    # ── Qualitative synthesis ─────────────────────────────────────────────
+    # --- Qualitative synthesis ---
     support_levels: list[float] = Field(
         default_factory=list,
         description="Key price support levels identified from the chart (in ₹)",
@@ -383,7 +383,7 @@ class SentimentAnalysis(AgentOutput):
 
     agent_name: str = Field(default="news_sentiment", frozen=True)
 
-    # ── Scores ────────────────────────────────────────────────────────────
+    # --- Scores ---
     sentiment_score: float = Field(
         ge=-1.0,
         le=1.0,
@@ -399,7 +399,7 @@ class SentimentAnalysis(AgentOutput):
         )
     )
 
-    # ── Article statistics ────────────────────────────────────────────────
+    # --- Article statistics ---
     articles_analysed: int = Field(
         ge=0,
         description="Number of news articles analysed in this run",
@@ -417,7 +417,7 @@ class SentimentAnalysis(AgentOutput):
         description="Count of articles scored as neutral (-0.1 ≤ score ≤ 0.1)",
     )
 
-    # ── Red flags ─────────────────────────────────────────────────────────
+    # --- Red flags ---
     red_flags: list[str] = Field(
         default_factory=list,
         description=(
@@ -432,7 +432,7 @@ class SentimentAnalysis(AgentOutput):
         description="Total number of distinct red flags detected",
     )
 
-    # ── Top stories ───────────────────────────────────────────────────────
+    # --- Top stories ---
     top_positive_headlines: list[str] = Field(
         default_factory=list,
         description="Up to 3 most positive headlines from the analysis period",
@@ -442,7 +442,7 @@ class SentimentAnalysis(AgentOutput):
         description="Up to 3 most negative headlines from the analysis period",
     )
 
-    # ── Topics ────────────────────────────────────────────────────────────
+    # --- Topics ---
     dominant_topics: list[str] = Field(
         default_factory=list,
         description=(
@@ -451,7 +451,7 @@ class SentimentAnalysis(AgentOutput):
         ),
     )
 
-    # ── Qualitative synthesis ─────────────────────────────────────────────
+    # --- Qualitative synthesis ---
     summary: str = Field(
         default="",
         description=(
@@ -478,7 +478,7 @@ class MacroAnalysis(AgentOutput):
 
     agent_name: str = Field(default="macro_economist", frozen=True)
 
-    # ── Macro environment classification ──────────────────────────────────
+    # --- Macro environment classification ---
     macro_environment: str = Field(
         description=(
             "Overall macro environment: 'favourable', 'neutral', or 'unfavourable' "
@@ -492,7 +492,7 @@ class MacroAnalysis(AgentOutput):
         )
     )
 
-    # ── RBI & interest rates ──────────────────────────────────────────────
+    # --- RBI & interest rates ---
     rbi_repo_rate_pct: Optional[float] = Field(
         default=None,
         description="Current RBI repo rate (%)",
@@ -509,7 +509,7 @@ class MacroAnalysis(AgentOutput):
         description=("Expected near-term direction: 'cutting', 'holding', or 'hiking'"),
     )
 
-    # ── Inflation ─────────────────────────────────────────────────────────
+    # --- Inflation ---
     cpi_inflation_pct: Optional[float] = Field(
         default=None,
         description="Latest CPI inflation reading (%)",
@@ -523,7 +523,7 @@ class MacroAnalysis(AgentOutput):
         description=("Inflation trend direction: 'rising', 'stable', or 'falling'"),
     )
 
-    # ── Growth ────────────────────────────────────────────────────────────
+    # --- Growth ---
     gdp_growth_pct: Optional[float] = Field(
         default=None,
         description="India's latest GDP growth rate (%)",
@@ -533,7 +533,7 @@ class MacroAnalysis(AgentOutput):
         description="IMF / World Bank GDP growth forecast for current fiscal year (%)",
     )
 
-    # ── Sector-specific factors ───────────────────────────────────────────
+    # --- Sector-specific factors ---
     tailwinds: list[str] = Field(
         default_factory=list,
         description=(
@@ -549,7 +549,7 @@ class MacroAnalysis(AgentOutput):
         ),
     )
 
-    # ── Currency ──────────────────────────────────────────────────────────
+    # --- Currency ---
     usd_inr_rate: Optional[float] = Field(
         default=None,
         description="Current USD/INR exchange rate",
@@ -559,7 +559,7 @@ class MacroAnalysis(AgentOutput):
         description="INR trend vs USD: 'appreciating', 'stable', or 'depreciating'",
     )
 
-    # ── Qualitative synthesis ─────────────────────────────────────────────
+    # --- Qualitative synthesis ---
     summary: str = Field(
         default="",
         description=(
@@ -587,7 +587,7 @@ class RiskAnalysis(AgentOutput):
 
     agent_name: str = Field(default="risk_officer", frozen=True)
 
-    # ── Risk scores ───────────────────────────────────────────────────────
+    # --- Risk scores ---
     risk_score: int = Field(
         ge=1,
         le=10,
@@ -626,7 +626,7 @@ class RiskAnalysis(AgentOutput):
         ),
     )
 
-    # ── Risk flags ────────────────────────────────────────────────────────
+    # --- Risk flags ---
     risk_flags: list[str] = Field(
         default_factory=list,
         description=(
@@ -645,7 +645,7 @@ class RiskAnalysis(AgentOutput):
         ),
     )
 
-    # ── Qualitative synthesis ─────────────────────────────────────────────
+    # --- Qualitative synthesis ---
     risk_recommendation: str = Field(
         default="",
         description=(
@@ -682,7 +682,7 @@ class ContrarianReport(AgentOutput):
 
     agent_name: str = Field(default="contrarian_investor", frozen=True)
 
-    # ── Counter-arguments ─────────────────────────────────────────────────
+    # --- Counter-arguments ---
     counter_arguments: list[str] = Field(
         default_factory=list,
         description=(
@@ -700,7 +700,7 @@ class ContrarianReport(AgentOutput):
         ),
     )
 
-    # ── Overlooked risks ──────────────────────────────────────────────────
+    # --- Overlooked risks ---
     overlooked_risks: list[str] = Field(
         default_factory=list,
         description=(
@@ -709,7 +709,7 @@ class ContrarianReport(AgentOutput):
         ),
     )
 
-    # ── Contrarian conviction ─────────────────────────────────────────────
+    # --- Contrarian conviction ---
     bear_conviction: int = Field(
         ge=1,
         le=10,
@@ -720,7 +720,7 @@ class ContrarianReport(AgentOutput):
         ),
     )
 
-    # ── Qualitative synthesis ─────────────────────────────────────────────
+    # --- Qualitative synthesis ---
     strongest_argument: str = Field(
         default="",
         description=(
@@ -754,7 +754,7 @@ class ValuationOutput(AgentOutput):
 
     agent_name: str = Field(default="valuation_agent", frozen=True)
 
-    # ── Intrinsic value ───────────────────────────────────────────────────
+    # --- Intrinsic value ---
     intrinsic_value_per_share: Optional[float] = Field(
         default=None,
         description="DCF-derived intrinsic value per share in ₹",
@@ -776,7 +776,7 @@ class ValuationOutput(AgentOutput):
         )
     )
 
-    # ── DCF assumptions ───────────────────────────────────────────────────
+    # --- DCF assumptions ---
     dcf_wacc_pct: Optional[float] = Field(
         default=None,
         description="Weighted average cost of capital used in DCF model (%)",
@@ -798,7 +798,7 @@ class ValuationOutput(AgentOutput):
         ),
     )
 
-    # ── Relative valuation (multiples vs peers) ───────────────────────────
+    # --- Relative valuation (multiples vs peers) ---
     pe_ratio: Optional[float] = Field(
         default=None,
         description="Current trailing P/E ratio",
@@ -824,7 +824,7 @@ class ValuationOutput(AgentOutput):
         description="Sector average EV/EBITDA for peer comparison",
     )
 
-    # ── Peer comparison ───────────────────────────────────────────────────
+    # --- Peer comparison ---
     peer_tickers: list[str] = Field(
         default_factory=list,
         description="Yahoo Finance tickers of peer companies used in comparison",
@@ -837,7 +837,7 @@ class ValuationOutput(AgentOutput):
         ),
     )
 
-    # ── Qualitative synthesis ─────────────────────────────────────────────
+    # --- Qualitative synthesis ---
     margin_of_safety: Optional[str] = Field(
         default=None,
         description=(
@@ -874,7 +874,7 @@ class InvestmentDecision(AgentOutput):
 
     agent_name: str = Field(default="portfolio_manager", frozen=True)
 
-    # ── Verdict ───────────────────────────────────────────────────────────
+    # --- Verdict ---
     verdict: str = Field(
         description="Final investment recommendation: 'BUY', 'HOLD', or 'SELL'"
     )
@@ -903,7 +903,7 @@ class InvestmentDecision(AgentOutput):
         ),
     )
 
-    # ── Investment Memo sections ──────────────────────────────────────────
+    # --- Investment Memo sections ---
     executive_summary: str = Field(
         default="",
         description=(
@@ -947,7 +947,7 @@ class InvestmentDecision(AgentOutput):
         ),
     )
 
-    # ── Structured memo inputs (T-041, consumed by T-042 memo generator) ──
+    # --- Structured memo inputs (T-041, consumed by T-042 memo generator) ---
     key_risks: list[str] = Field(
         default_factory=list,
         description=(
@@ -966,7 +966,7 @@ class InvestmentDecision(AgentOutput):
         ),
     )
 
-    # ── Debate resolution ─────────────────────────────────────────────────
+    # --- Debate resolution ---
     contrarian_response: str = Field(
         default="",
         description=(
@@ -980,7 +980,7 @@ class InvestmentDecision(AgentOutput):
         description="Number of debate rounds that occurred before this decision",
     )
 
-    # ── Agent weight summary ──────────────────────────────────────────────
+    # --- Agent weight summary ---
     agent_weights: dict[str, float] = Field(
         default_factory=dict,
         description=(
@@ -989,7 +989,7 @@ class InvestmentDecision(AgentOutput):
         ),
     )
 
-    # ── Qualitative synthesis ─────────────────────────────────────────────
+    # --- Qualitative synthesis ---
     summary: str = Field(
         default="",
         description=(
