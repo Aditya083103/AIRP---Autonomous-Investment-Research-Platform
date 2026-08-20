@@ -77,6 +77,29 @@ def _reset_shared_ticker_cache() -> Generator[None, None, None]:
     reset_shared_ticker_cache()
 
 
+@pytest.fixture(autouse=True)
+def _reset_in_flight_analyses_counter() -> Generator[None, None, None]:
+    """
+    Reset backend.services.analysis's module-level concurrency counter
+    (T-074 audit findings C9/F9) before and after every test.
+
+    Without this, any test that calls POST /api/v1/analysis/start (real or
+    via TestClient) reserves a slot via reserve_analysis_slot() -- and if
+    that test mocks out run_analysis_pipeline entirely (common in router
+    tests asserting it was scheduled with the right args), the matching
+    release_analysis_slot() call inside the real run_analysis_pipeline
+    never fires. The counter would then silently accumulate across every
+    test in the whole suite until settings.max_concurrent_analyses is
+    permanently exceeded, turning every later /start call into a 503
+    regardless of what that test is actually about.
+    """
+    import backend.services.analysis as analysis_module
+
+    analysis_module._in_flight_analyses = 0
+    yield
+    analysis_module._in_flight_analyses = 0
+
+
 # ── Settings Fixture ──────────────────────────────────────────────────────────
 
 
@@ -128,9 +151,6 @@ def test_settings() -> Settings:
         chroma_collection="airp_test_documents",
         embedding_model="all-MiniLM-L6-v2",
         # Auth — not validated in unit tests
-        clerk_secret_key="sk_test_placeholder",
-        clerk_publishable_key="pk_test_placeholder",
-        clerk_jwt_issuer="https://test.clerk.accounts.dev",
         secret_key="a" * 32,  # minimum 32 chars required by Field validator
         access_token_expire_minutes=60,
         accuracy_service_token="test-accuracy-service-token",

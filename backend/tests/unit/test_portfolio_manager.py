@@ -1255,6 +1255,25 @@ class TestRunPortfolioManagerDecisionNode:
         assert result["final_verdict"] == "HOLD"
         assert result["conviction_score"] == 1
 
+    @patch("backend.agents.portfolio_manager._run_portfolio_manager_core")
+    def test_unhandled_core_exception_degrades_to_hold(
+        self, mock_core: MagicMock
+    ) -> None:
+        """
+        Regression test for the "never raises" contract (T-074 audit finding
+        F-A): a bug inside _run_portfolio_manager_core (e.g. a Pydantic
+        construction error) must never propagate out of the LangGraph node --
+        it must degrade to a HOLD/conviction=1 InvestmentDecision, matching
+        every other agent's node-entry-point exception guard.
+        """
+        mock_core.side_effect = ValueError("boom: simulated core failure")
+        result = run_portfolio_manager_decision(self._make_state())
+        assert "decision" in result
+        assert result["decision"].get("error") is not None
+        assert "boom" in result["decision"]["error"]
+        assert result["final_verdict"] == "HOLD"
+        assert result["conviction_score"] == 1
+
     @patch("backend.agents.portfolio_manager.get_llm")
     def test_none_research_dicts_handled(self, mock_get_llm: MagicMock) -> None:
         mock_get_llm.return_value = _make_llm()

@@ -39,6 +39,8 @@
 
 import { useEffect, useRef, useState } from "react";
 
+import { env } from "@/config/env";
+
 /**
  * A node has just begun executing -- published before any of its real
  * work runs (backend.graph.nodes._run_broadcast_started, T-095).
@@ -124,6 +126,14 @@ export interface UseAnalysisStreamResult {
 }
 
 function defaultWebSocketBaseUrl(): string {
+  // T-074 audit finding C1/F1: prefer env.wsBaseUrl (VITE_WS_BASE_URL, or
+  // derived from an absolute VITE_API_BASE_URL) so split-origin deployments
+  // (e.g. Vercel frontend + Render backend) dial the right host. Only when
+  // neither is configured do we fall back to window.location, which is
+  // correct only when the frontend and backend share an origin.
+  if (env.wsBaseUrl) {
+    return env.wsBaseUrl;
+  }
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   return `${protocol}//${window.location.host}`;
 }
@@ -173,10 +183,30 @@ export function useAnalysisStream(options: UseAnalysisStreamOptions): UseAnalysi
   const [error, setError] = useState<string | null>(null);
 
   // Guards against state updates from a socket that belonged to a PRIOR
-  // render's effect (e.g. jobId changed mid-flight) -- without this, a
-  // slow-to-arrive message from the old socket could land after the new
-  // one has already started receiving events, corrupting ordering.
-  const isCurrentEffectRef = useRef(true);
+  // effect run (e.g. jobId changed mid-flight, or React 18 StrictMode's
+  // deliberate development-only mount -> cleanup -> mount double-invoke)
+  // -- without this, a slow-to-arrive event from the old socket could
+  // land after the new one has already started receiving events,
+  // corrupting ordering.
+  //
+  // BUGFIX (found during live end-to-end verification): this used to be
+  // a single shared `useRef(true)` boolean, set true at the top of every
+  // effect run and false in that same run's cleanup. Under StrictMode's
+  // double-invoke, effect run #1 opens socket A, its cleanup sets the
+  // shared flag false and calls A.close() (A is still CONNECTING at that
+  // point) -- then effect run #2 immediately opens socket B and sets the
+  // SAME shared flag back to true. Socket A's onerror/onclose fire
+  // ASYNCHRONOUSLY after that point, by which time the shared flag reads
+  // true again (set by run #2, not run #1) -- so A's stale, belated
+  // "connection failed" close event was incorrectly treated as current
+  // and overwrote the real, successfully-connected socket B's state with
+  // a phantom "Connection closed unexpectedly" error. A ref holding the
+  // CURRENT effect run's own socket instance (compared by reference, not
+  // a shared boolean) makes every handler's staleness check specific to
+  // the exact socket it was attached to, immune to a later effect
+  // resetting a shared flag out from under an earlier one's in-flight
+  // callbacks.
+  const currentSocketRef = useRef<WebSocket | null>(null);
 
   // Tracks whether an event with is_final: true has already been
   // received, independent of React's render cycle. onclose needs this
@@ -200,7 +230,6 @@ export function useAnalysisStream(options: UseAnalysisStreamOptions): UseAnalysi
   const receivedFinalEventRef = useRef(false);
 
   useEffect(() => {
-    isCurrentEffectRef.current = true;
     receivedFinalEventRef.current = false;
 
     if (!enabled || jobId === "" || token === "") {
@@ -217,14 +246,15 @@ export function useAnalysisStream(options: UseAnalysisStreamOptions): UseAnalysi
     )}`;
 
     const socket = new WebSocket(url);
+    currentSocketRef.current = socket;
 
     socket.onopen = (): void => {
-      if (!isCurrentEffectRef.current) return;
+      if (currentSocketRef.current !== socket) return;
       setConnectionStatus("open");
     };
 
     socket.onmessage = (messageEvent: MessageEvent<string>): void => {
-      if (!isCurrentEffectRef.current) return;
+      if (currentSocketRef.current !== socket) return;
 
       let parsed: unknown;
       try {
@@ -250,13 +280,13 @@ export function useAnalysisStream(options: UseAnalysisStreamOptions): UseAnalysi
     };
 
     socket.onerror = (): void => {
-      if (!isCurrentEffectRef.current) return;
+      if (currentSocketRef.current !== socket) return;
       setConnectionStatus("error");
       setError("WebSocket connection error.");
     };
 
     socket.onclose = (closeEvent: CloseEvent): void => {
-      if (!isCurrentEffectRef.current) return;
+      if (currentSocketRef.current !== socket) return;
       setConnectionStatus("closed");
       // 1000 = normal closure (backend.routers.websocket's happy path);
       // 4401/4404 are the two application-specific codes that module
@@ -277,7 +307,9 @@ export function useAnalysisStream(options: UseAnalysisStreamOptions): UseAnalysi
     };
 
     return (): void => {
-      isCurrentEffectRef.current = false;
+      if (currentSocketRef.current === socket) {
+        currentSocketRef.current = null;
+      }
       socket.close();
     };
     // baseUrl is intentionally excluded from the dependency array below:

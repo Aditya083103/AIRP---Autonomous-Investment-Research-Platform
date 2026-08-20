@@ -43,7 +43,6 @@ Usage (inside an agent):
     cpi = result["cpi_inflation"]       # float | None  (e.g. 5.1)
     gdp = result["gdp_growth"]          # float | None  (e.g. 7.0)
 """
-from __future__ import annotations
 
 from datetime import datetime, timezone
 import logging

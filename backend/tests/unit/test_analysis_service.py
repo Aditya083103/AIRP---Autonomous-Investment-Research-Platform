@@ -71,6 +71,8 @@ from backend.services.analysis import (
     create_analysis_job,
     get_analysis_status,
     get_or_create_company,
+    release_analysis_slot,
+    reserve_analysis_slot,
     resolve_company,
     run_analysis_pipeline,
 )
@@ -423,6 +425,94 @@ class TestRunAnalysisPipelineFailure:
                 requested_by="user-123",
             )
 
+    @pytest.mark.asyncio
+    async def test_broadcasts_a_final_failed_event_when_graph_raises(self) -> None:
+        """
+        BUGFIX (found during live end-to-end verification): a bug in a
+        node that escapes every agent's own "never raises" contract used
+        to update PostgreSQL via mark_failed but never tell any live
+        WebSocket subscriber -- a client watching in real time would
+        just hang waiting for an is_final event that was never coming,
+        surfacing eventually as an unexplained "Connection closed
+        unexpectedly" once the connection timed out for an unrelated
+        reason. This is the regression test for the fix: the except
+        block must also publish a terminal AgentStreamEvent
+        (is_final=True, status="failed") via
+        backend.services.ws_broadcaster.publish_event, the same
+        broadcaster backend.graph.nodes._run_broadcast uses for every
+        normal node completion.
+        """
+        job_id = uuid.uuid4()
+        mock_session_local = MagicMock()
+        mock_session_local.return_value.__aenter__ = AsyncMock(return_value=AsyncMock())
+        mock_session_local.return_value.__aexit__ = AsyncMock(return_value=None)
+
+        with (
+            patch(
+                "backend.services.analysis._invoke_graph_sync",
+                side_effect=RuntimeError("boom"),
+            ),
+            patch("backend.db.session.AsyncSessionLocal", mock_session_local),
+            patch(
+                "backend.services.state_persistence.StatePersistenceService"
+            ) as mock_svc_cls,
+            patch("backend.services.ws_broadcaster.publish_event") as mock_publish,
+        ):
+            mock_svc_cls.return_value.mark_failed = AsyncMock()
+
+            await run_analysis_pipeline(
+                job_id=job_id,
+                company_name="TCS",
+                ticker="TCS.NS",
+                exchange="NSE",
+                requested_by="user-123",
+            )
+
+            mock_publish.assert_called_once()
+            _, kwargs = mock_publish.call_args
+            assert kwargs["job_id"] == str(job_id)
+            event = kwargs["event"]
+            assert event["is_final"] is True
+            assert event["status"] == "failed"
+            assert "boom" in event["output_preview"]
+
+    @pytest.mark.asyncio
+    async def test_never_raises_when_broadcast_itself_raises(self) -> None:
+        """A broadcaster bug in the failure path must not itself crash
+        the background task -- mirrors
+        test_never_raises_when_mark_failed_itself_raises above, for the
+        newly-added broadcast call instead of the DB write."""
+        job_id = uuid.uuid4()
+        mock_session_local = MagicMock()
+        mock_session_local.return_value.__aenter__ = AsyncMock(return_value=AsyncMock())
+        mock_session_local.return_value.__aexit__ = AsyncMock(return_value=None)
+
+        with (
+            patch(
+                "backend.services.analysis._invoke_graph_sync",
+                side_effect=RuntimeError("boom"),
+            ),
+            patch("backend.db.session.AsyncSessionLocal", mock_session_local),
+            patch(
+                "backend.services.state_persistence.StatePersistenceService"
+            ) as mock_svc_cls,
+            patch(
+                "backend.services.ws_broadcaster.publish_event",
+                side_effect=RuntimeError("broadcaster also exploded"),
+            ),
+        ):
+            mock_svc_cls.return_value.mark_failed = AsyncMock()
+
+            # Must complete without raising -- this call itself is the
+            # assertion; pytest fails the test if an exception escapes.
+            await run_analysis_pipeline(
+                job_id=job_id,
+                company_name="TCS",
+                ticker="TCS.NS",
+                exchange="NSE",
+                requested_by="user-123",
+            )
+
 
 class TestRunAnalysisPipelineAccuracyTrackerWiring:
     """T-088: run_analysis_pipeline calls record_pending_evaluations."""
@@ -524,6 +614,114 @@ class TestRunAnalysisPipelineAccuracyTrackerWiring:
             # failure must never be reported as a pipeline failure via
             # StatePersistenceService.mark_failed.
             mock_svc_cls.return_value.mark_failed.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# reserve_analysis_slot / release_analysis_slot -- T-074 audit findings C9/F9
+# ---------------------------------------------------------------------------
+#
+# backend/tests/conftest.py's _reset_in_flight_analyses_counter (autouse,
+# global) already resets the shared counter before/after every test in the
+# suite, so no local fixture is needed here.
+
+
+class TestReserveAndReleaseAnalysisSlot:
+    @pytest.mark.asyncio
+    async def test_reserve_succeeds_under_the_limit(self) -> None:
+        with patch("backend.services.analysis.settings") as mock_settings:
+            mock_settings.max_concurrent_analyses = 3
+            assert await reserve_analysis_slot() is True
+
+    @pytest.mark.asyncio
+    async def test_reserve_fails_at_the_limit(self) -> None:
+        with patch("backend.services.analysis.settings") as mock_settings:
+            mock_settings.max_concurrent_analyses = 2
+            assert await reserve_analysis_slot() is True
+            assert await reserve_analysis_slot() is True
+            assert await reserve_analysis_slot() is False
+
+    @pytest.mark.asyncio
+    async def test_release_frees_a_slot_for_reuse(self) -> None:
+        with patch("backend.services.analysis.settings") as mock_settings:
+            mock_settings.max_concurrent_analyses = 1
+            assert await reserve_analysis_slot() is True
+            assert await reserve_analysis_slot() is False
+            await release_analysis_slot()
+            assert await reserve_analysis_slot() is True
+
+    @pytest.mark.asyncio
+    async def test_release_never_goes_negative(self) -> None:
+        """Releasing more times than reserved must not corrupt the counter
+        into a negative value that would then let unlimited reservations
+        through."""
+        await release_analysis_slot()
+        await release_analysis_slot()
+        with patch("backend.services.analysis.settings") as mock_settings:
+            mock_settings.max_concurrent_analyses = 1
+            assert await reserve_analysis_slot() is True
+            assert await reserve_analysis_slot() is False
+
+    @pytest.mark.asyncio
+    async def test_run_analysis_pipeline_releases_slot_on_success(self) -> None:
+        job_id = uuid.uuid4()
+        with patch("backend.services.analysis.settings") as mock_settings:
+            mock_settings.max_concurrent_analyses = 1
+            mock_settings.environment = "test"
+            assert await reserve_analysis_slot() is True
+
+            with (
+                patch(
+                    "backend.services.analysis._invoke_graph_sync",
+                    return_value={"status": "completed"},
+                ),
+                patch("backend.services.state_persistence.StatePersistenceService"),
+                patch(
+                    "backend.services.accuracy_tracker.record_pending_evaluations",
+                    new=AsyncMock(),
+                ),
+            ):
+                await run_analysis_pipeline(
+                    job_id=job_id,
+                    company_name="Tata Consultancy Services",
+                    ticker="TCS.NS",
+                    exchange="NSE",
+                    requested_by="user-123",
+                )
+
+            # The slot run_analysis_pipeline released must be reusable.
+            assert await reserve_analysis_slot() is True
+
+    @pytest.mark.asyncio
+    async def test_run_analysis_pipeline_releases_slot_on_failure(self) -> None:
+        job_id = uuid.uuid4()
+        mock_session_local = MagicMock()
+        mock_session_local.return_value.__aenter__ = AsyncMock(return_value=AsyncMock())
+        mock_session_local.return_value.__aexit__ = AsyncMock(return_value=None)
+
+        with patch("backend.services.analysis.settings") as mock_settings:
+            mock_settings.max_concurrent_analyses = 1
+            mock_settings.environment = "test"
+            assert await reserve_analysis_slot() is True
+
+            with (
+                patch(
+                    "backend.services.analysis._invoke_graph_sync",
+                    side_effect=RuntimeError("graph blew up"),
+                ),
+                patch("backend.db.session.AsyncSessionLocal", mock_session_local),
+                patch("backend.services.state_persistence.StatePersistenceService"),
+            ):
+                # Must not raise -- run_analysis_pipeline's own "never
+                # raises" contract -- and must still release the slot.
+                await run_analysis_pipeline(
+                    job_id=job_id,
+                    company_name="Tata Consultancy Services",
+                    ticker="TCS.NS",
+                    exchange="NSE",
+                    requested_by="user-123",
+                )
+
+            assert await reserve_analysis_slot() is True
 
 
 # ---------------------------------------------------------------------------

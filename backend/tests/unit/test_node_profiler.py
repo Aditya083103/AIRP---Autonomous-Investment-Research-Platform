@@ -34,6 +34,7 @@ so tests don't accidentally race against the 30-second limit.
 
 import logging
 import os
+import threading
 from typing import Any, Literal
 from unittest.mock import MagicMock, patch
 
@@ -47,7 +48,11 @@ from backend.graph.node_profiler import (  # noqa: E402
     PROFILER_LOG_PREFIX,
     NodeTimeoutError,
     _log_latency,
+    _make_timeout_ctx,
+    _NoOpTimeout,
+    _SigAlrmTimeout,
     _store_latency_in_state,
+    _ThreadTimeout,
     profile_node,
 )
 
@@ -322,6 +327,89 @@ class TestProfileNodeTimeout:
 
     def test_node_timeout_s_constant_is_30(self) -> None:
         assert NODE_TIMEOUT_S == 30.0
+
+
+# ---------------------------------------------------------------------------
+# 4b. _make_timeout_ctx -- thread-safety regression (found during live
+#     end-to-end verification, T-074 follow-up)
+# ---------------------------------------------------------------------------
+#
+# BUG: _make_timeout_ctx previously chose _SigAlrmTimeout purely from
+# platform.system() != "Windows", with no check on which thread it was
+# actually called from. signal.signal()/signal.alarm() raise
+# "ValueError: signal only works in main thread of the main interpreter"
+# when called from anywhere but the interpreter's main thread --  and
+# backend.services.analysis.run_analysis_pipeline invokes the entire
+# compiled graph via asyncio.to_thread(_invoke_graph_sync, ...), i.e. a
+# worker thread. On Linux/Docker/Render (the real deploy target) this
+# crashed literally every analysis at the very first profiled node,
+# before the fix that made _make_timeout_ctx also check
+# threading.current_thread() is threading.main_thread().
+
+
+class TestMakeTimeoutCtxThreadSafety:
+    def test_returns_sig_alrm_timeout_on_posix_main_thread(self) -> None:
+        with (
+            patch("backend.graph.node_profiler._IS_POSIX", True),
+            patch(
+                "backend.graph.node_profiler.threading.current_thread",
+                return_value=threading.main_thread(),
+            ),
+        ):
+            ctx = _make_timeout_ctx(5.0, "planner")
+        assert isinstance(ctx, _SigAlrmTimeout)
+
+    def test_returns_thread_timeout_on_posix_worker_thread(self) -> None:
+        """The exact bug: POSIX + a non-main thread (e.g. inside
+        asyncio.to_thread) must NOT select _SigAlrmTimeout."""
+        result: dict[str, Any] = {}
+
+        def _capture() -> None:
+            with patch("backend.graph.node_profiler._IS_POSIX", True):
+                result["ctx"] = _make_timeout_ctx(5.0, "planner")
+
+        worker = threading.Thread(target=_capture)
+        worker.start()
+        worker.join()
+        assert isinstance(result["ctx"], _ThreadTimeout)
+
+    def test_worker_thread_timeout_ctx_does_not_raise_signal_valueerror(self) -> None:
+        """End-to-end regression: entering/exiting the selected context
+        manager from a worker thread must never raise the
+        'signal only works in main thread' ValueError this bug produced."""
+        errors: list[Exception] = []
+
+        def _run_in_worker_thread() -> None:
+            try:
+                with patch("backend.graph.node_profiler._IS_POSIX", True):
+                    ctx = _make_timeout_ctx(5.0, "planner")
+                    with ctx:
+                        pass
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        worker = threading.Thread(target=_run_in_worker_thread)
+        worker.start()
+        worker.join()
+        assert errors == [], f"Unexpected exception(s) in worker thread: {errors}"
+
+    def test_returns_thread_timeout_on_windows_regardless_of_thread(self) -> None:
+        with patch("backend.graph.node_profiler._IS_POSIX", False):
+            ctx = _make_timeout_ctx(5.0, "planner")
+        assert isinstance(ctx, _ThreadTimeout)
+
+    def test_returns_noop_timeout_for_infinite_seconds_even_off_main_thread(
+        self,
+    ) -> None:
+        result: dict[str, Any] = {}
+
+        def _capture() -> None:
+            result["ctx"] = _make_timeout_ctx(float("inf"), "planner")
+
+        worker = threading.Thread(target=_capture)
+        worker.start()
+        worker.join()
+        assert isinstance(result["ctx"], _NoOpTimeout)
 
 
 # ---------------------------------------------------------------------------

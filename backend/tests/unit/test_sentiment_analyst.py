@@ -579,6 +579,34 @@ class TestRunSentimentAnalysisCore:
         assert isinstance(result, SentimentAnalysis)
         assert result.error is None
 
+    def test_rag_disabled_skips_chroma_calls_entirely(self) -> None:
+        """T-074 audit findings C4/C5: when settings.feature_rag_enabled is
+        False (the production default), semantic_search and
+        ingest_news_articles must never be called at all -- not just have
+        their failures swallowed -- so the RAG code path (and its
+        sentence-transformers/torch import cost) is never touched."""
+        mock_llm = _mock_llm()
+        with (
+            patch("backend.agents.sentiment_analyst.fetch_news") as mock_news,
+            patch("backend.agents.sentiment_analyst.settings") as mock_settings,
+            patch("backend.agents.sentiment_analyst.semantic_search") as mock_search,
+            patch(
+                "backend.agents.sentiment_analyst.ingest_news_articles"
+            ) as mock_ingest,
+            patch(
+                "backend.agents.sentiment_analyst.get_llm",
+                return_value=mock_llm,
+            ),
+        ):
+            mock_settings.environment = "production"
+            mock_settings.feature_rag_enabled = False
+            mock_news.invoke.return_value = _NEWS_RESULT_GOOD
+            result = _run_sentiment_analysis_core("x", "TCS", "TCS.NS")
+        assert isinstance(result, SentimentAnalysis)
+        assert result.error is None
+        mock_search.assert_not_called()
+        mock_ingest.assert_not_called()
+
     def test_llm_failure_uses_fallback_summary(self) -> None:
         mock_llm = MagicMock()
         mock_llm.invoke.side_effect = RuntimeError("Groq timeout")

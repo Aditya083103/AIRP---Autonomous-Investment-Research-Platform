@@ -626,6 +626,32 @@ class TestRouteAfterContrarianUnchanged:
         """Acceptance criterion: max 2 rounds."""
         assert MAX_DEBATE_ROUNDS == 2
 
+    def test_termination_is_driven_by_settings_debate_rounds(self) -> None:
+        """
+        Regression test for T-074 audit finding F-B: route_after_contrarian
+        previously compared against a hardcoded module constant that was
+        completely disconnected from settings.debate_rounds, so the
+        DEBATE_ROUNDS env var had zero effect on pipeline behaviour. This
+        test proves settings.debate_rounds is now the actual source of
+        truth by monkeypatching it directly and observing the cap move.
+        """
+        from backend.config import settings
+        from backend.graph import routing
+
+        original = settings.debate_rounds
+        try:
+            settings.debate_rounds = 1
+            state = _make_state()
+            state["contrarian"] = {"bear_conviction": 10}
+            state["debate_round_count"] = 1
+            assert routing.route_after_contrarian(state) == ROUTE_PROCEED
+
+            settings.debate_rounds = 3
+            state["debate_round_count"] = 2
+            assert routing.route_after_contrarian(state) == ROUTE_DEBATE_AGAIN
+        finally:
+            settings.debate_rounds = original
+
 
 # ---------------------------------------------------------------------------
 # 7 & 9. Multi-round integration via the compiled graph -- no infinite loop

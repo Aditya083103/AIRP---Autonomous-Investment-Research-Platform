@@ -1066,8 +1066,18 @@ class TestWebSocketAcrossSession:
         with ws_test_client.websocket_connect(
             f"/api/v1/analysis/{job_id}/stream?token={token}"
         ) as ws:
-            first_event = ws.receive_json()
-            assert first_event["is_final"] is True
+            # backend.routers.websocket._snapshot_to_events replays one
+            # event per completed node for a terminal job (expanding
+            # research_join into its 4 constituent research agents plus
+            # itself -- see that function's own docstring), ending with
+            # exactly one is_final: True event. Only the LAST replayed
+            # event is final, matching test_websocket_router.py's own
+            # TestSnapshotReplayForLateConnect assertions for the
+            # identical replay path.
+            events = [ws.receive_json()]
+            while not events[-1]["is_final"]:
+                events.append(ws.receive_json())
+            assert events[-1]["is_final"] is True
             # The server closes right after the terminal snapshot -- a
             # further receive must raise WebSocketDisconnect(1000), not
             # hang. Mirrors test_websocket_router.py's identical check.

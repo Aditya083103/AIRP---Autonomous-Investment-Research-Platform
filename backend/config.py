@@ -19,8 +19,12 @@ Never import os.getenv() directly in application code — always use settings.
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, computed_field, field_validator
+from pydantic import Field, computed_field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+#: Placeholder secret_key value -- fine for local dev, never safe in
+#: production (see Settings._reject_insecure_secret_key_in_production).
+_INSECURE_DEFAULT_SECRET_KEY = "insecure-default-change-in-production"  # nosec B105
 
 
 class Settings(BaseSettings):
@@ -39,18 +43,18 @@ class Settings(BaseSettings):
         extra="ignore",  # ignore unknown env vars (don't crash on extras)
     )
 
-    # ── 1. Application ────────────────────────────────────────────────────
+    # --- 1. Application ---
     environment: Literal["development", "test", "staging", "production"] = "development"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     cors_origins: str = "http://localhost:3000"
     secret_key: str = Field(
-        default="insecure-default-change-in-production",
+        default=_INSECURE_DEFAULT_SECRET_KEY,
         min_length=32,
         description="JWT signing secret — must be 32+ chars in production",
     )
     access_token_expire_minutes: int = 60
 
-    # ── 2. LLM Provider ───────────────────────────────────────────────────
+    # --- 2. LLM Provider ---
     # Switch between providers by changing LLM_PROVIDER in .env.
     # groq      = free tier, used for all development (22 weeks)
     # anthropic = Claude API, used for final demo only
@@ -69,9 +73,17 @@ class Settings(BaseSettings):
         default="",
         description="Groq API key — used when LLM_PROVIDER=groq (free tier)",
     )
-    groq_model: str = "llama-3.3-70b-versatile"
+    # Live end-to-end verification (2026-08-19) found llama-3.3-70b-versatile
+    # -- and llama-3.1-8b-instant -- both fully retired from Groq's catalog;
+    # every LLM call in the pipeline 404'd with model_not_found. Confirmed
+    # against GET https://api.groq.com/openai/v1/models with a real key that
+    # no llama-3.x model remains available at all; openai/gpt-oss-120b is
+    # the closest capability-tier replacement (120B open-weight, currently
+    # active). If this 404s again in the future, check that endpoint first
+    # -- Groq's free-tier model catalog changes without notice.
+    groq_model: str = "openai/gpt-oss-120b"
 
-    # ── 3. Observability ──────────────────────────────────────────────────
+    # --- 3. Observability ---
     langsmith_api_key: str = Field(
         default="",
         description="LangSmith API key — tracing disabled if empty",
@@ -80,7 +92,7 @@ class Settings(BaseSettings):
     langchain_project: str = "airp-dev"
     langchain_endpoint: str = "https://api.smith.langchain.com"
 
-    # ── 4. Database ───────────────────────────────────────────────────────
+    # --- 4. Database ---
     database_url: str = Field(
         description="PostgreSQL async connection string (asyncpg driver)"
     )
@@ -91,7 +103,7 @@ class Settings(BaseSettings):
     db_pool_size: int = 5
     db_max_overflow: int = 10
 
-    # ── 5. Cache ──────────────────────────────────────────────────────────
+    # --- 5. Cache ---
     redis_url: str = "redis://localhost:6379"
     redis_token: str = ""  # only for Upstash cloud
     cache_ttl_stock: int = 900
@@ -99,7 +111,7 @@ class Settings(BaseSettings):
     cache_ttl_macro: int = 86400
     cache_ttl_fundamentals: int = 3600
 
-    # ── 6. Vector Store ───────────────────────────────────────────────────
+    # --- 6. Vector Store ---
     chroma_host: str = "localhost"
     chroma_port: int = 8001
     chroma_collection: str = "airp_documents"
@@ -116,19 +128,13 @@ class Settings(BaseSettings):
         ),
     )
 
-    # ── 7. Authentication ─────────────────────────────────────────────────
-    clerk_secret_key: str = Field(
-        default="",
-        description="Clerk secret key — required in Phase 5 (FastAPI auth)",
-    )
-    clerk_publishable_key: str = Field(
-        default="",
-        description="Clerk publishable key — required in Phase 6 (React auth)",
-    )
-    clerk_jwt_issuer: str = Field(
-        default="",
-        description="Clerk JWT issuer URL — required in Phase 5",
-    )
+    # --- 7. Authentication ---
+    # T-074 audit findings C9/F9: clerk_secret_key / clerk_publishable_key /
+    # clerk_jwt_issuer were removed here -- dead since the self-hosted auth
+    # migration (20260624_..._migrate_users_to_self_hosted_auth). Clerk is
+    # not imported or referenced anywhere in backend/ runtime code; keeping
+    # unenforced auth-adjacent config fields around is worse than not
+    # having them.
     accuracy_service_token: str = Field(
         default="",
         description=(
@@ -140,7 +146,7 @@ class Settings(BaseSettings):
         ),
     )
 
-    # ── 8. External Data APIs ─────────────────────────────────────────────
+    # --- 8. External Data APIs ---
     news_api_key: str = Field(
         default="",
         description="NewsAPI key — required for News Sentiment Agent (Phase 2)",
@@ -152,10 +158,22 @@ class Settings(BaseSettings):
     screener_base_url: str = "https://www.screener.in"
     rbi_base_url: str = "https://www.rbi.org.in"
 
-    # ── 9. Feature Flags ──────────────────────────────────────────────────
+    # --- 9. Feature Flags ---
     feature_debate_enabled: bool = True
     debate_rounds: int = 2
     feature_pdf_enabled: bool = True
+    feature_rag_enabled: bool = Field(
+        default=True,
+        description=(
+            "Enable ChromaDB-backed RAG (News Sentiment agent's semantic "
+            "search over ingested articles). Defaults to True everywhere "
+            "except production, where it defaults to False unless "
+            "FEATURE_RAG_ENABLED is set explicitly -- ChromaDB has no "
+            "managed backing service on the free-tier deploy target "
+            "(T-074 audit findings C4/C5), and the News Sentiment agent "
+            "degrades cleanly to non-RAG scoring when this is off."
+        ),
+    )
     memo_output_dir: str = Field(
         default="data/memos",
         description=(
@@ -166,6 +184,15 @@ class Settings(BaseSettings):
         ),
     )
     feature_rate_limiting: bool = True
+    rate_limit_requests_per_minute: int = Field(
+        default=60,
+        description=(
+            "Maximum requests per client (by IP) per rolling 60-second "
+            "window when FEATURE_RATE_LIMITING is on. Requests over this "
+            "limit get 429 Too Many Requests. In-process only (T-074 "
+            "audit findings C9/F9) -- see backend.services.rate_limiter."
+        ),
+    )
     max_concurrent_analyses: int = 3
     max_upload_size_mb: int = Field(
         default=20,
@@ -176,7 +203,7 @@ class Settings(BaseSettings):
         ),
     )
 
-    # ── Input normalizers ─────────────────────────────────────────────────
+    # --- Input normalizers ---
     # Run BEFORE the Literal check so a stray trailing space (a classic
     # Windows `set VAR=value ` artefact) or wrong casing can't fail startup.
     @field_validator("environment", "llm_provider", mode="before")
@@ -195,7 +222,54 @@ class Settings(BaseSettings):
             return value.strip().upper()
         return value
 
-    # ── Computed properties ───────────────────────────────────────────────
+    @model_validator(mode="after")
+    def _default_rag_off_in_production(self) -> "Settings":
+        """
+        FEATURE_RAG_ENABLED defaults to True everywhere except production,
+        where it defaults to False unless the operator sets it explicitly
+        (T-074 audit findings C4/C5 -- ChromaDB has no managed backing
+        service on the free-tier deploy target). Checking
+        ``model_fields_set`` rather than just overwriting the field means an
+        operator who explicitly sets ``FEATURE_RAG_ENABLED=true`` in a
+        production .env is respected, not silently overridden.
+        """
+        if (
+            self.environment == "production"
+            and "feature_rag_enabled" not in self.model_fields_set
+        ):
+            self.feature_rag_enabled = False
+        return self
+
+    @model_validator(mode="after")
+    def _reject_insecure_secret_key_in_production(self) -> "Settings":
+        """
+        Fail startup outright when ENVIRONMENT=production and SECRET_KEY
+        is still the checked-into-source-control placeholder (T-074 audit
+        finding C11). Before this validator, the app would boot
+        successfully and silently sign every user's JWT with a
+        publicly-known string, letting anyone forge a valid token for any
+        user_id -- unlike ACCURACY_SERVICE_TOKEN (backend.dependencies.
+        auth.verify_service_token), which already fails closed when unset.
+        A deliberate decision, not an oversight: ACCURACY_SERVICE_TOKEN is
+        NOT given the same hard-fail treatment here, because an empty
+        value there disables one internal cron-triggered endpoint (a pure
+        availability concern for the scheduled evaluate-verdicts.yml
+        workflow), whereas an insecure SECRET_KEY is a live authentication
+        bypass for every user of the running service.
+        """
+        if (
+            self.environment == "production"
+            and self.secret_key == _INSECURE_DEFAULT_SECRET_KEY
+        ):
+            raise ValueError(
+                "SECRET_KEY must be set to a real random value when "
+                "ENVIRONMENT=production -- refusing to start with the "
+                "insecure default, which is checked into source control "
+                "and would let anyone forge a valid JWT for any user."
+            )
+        return self
+
+    # --- Computed properties ---
     @computed_field  # type: ignore[misc]
     @property
     def cors_origins_list(self) -> list[str]:
@@ -241,7 +315,7 @@ class Settings(BaseSettings):
         return self.anthropic_model
 
 
-# ── get_settings must be OUTSIDE the class ────────────────────────────────────
+# --- get_settings must be OUTSIDE the class ---
 @lru_cache
 def get_settings() -> Settings:
     """

@@ -39,7 +39,6 @@ Usage (from an agent):
     for r in results:
         print(r["title"], r["distance"])
 """
-from __future__ import annotations
 
 from enum import Enum
 import hashlib
@@ -50,7 +49,6 @@ from typing import Any
 
 import chromadb
 from chromadb.config import Settings as ChromaSettings
-from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 
 try:
     from backend.config import settings as _settings
@@ -157,7 +155,21 @@ def get_embedding_function(
     Returns:
         A callable that accepts ``list[str]`` and returns
         ``list[list[float]]`` of dimension EMBEDDING_DIMENSION.
+
+    T-074 audit finding C4: ``SentenceTransformerEmbeddingFunction`` (and,
+    transitively, ``sentence-transformers``/``torch``, ~2GB installed) is
+    imported HERE, inside the function, rather than at module scope. This
+    module is imported transitively by ``services/documents.py`` ->
+    ``routers/documents.py`` -> ``main.py``, so a module-level import would
+    pay that cost on every process cold start regardless of whether RAG is
+    ever used -- a real problem on a memory-constrained deploy target. With
+    the lazy import, the cost is only paid the first time an embedding
+    function is actually requested (i.e. never at all when
+    ``settings.feature_rag_enabled`` is False -- see
+    ``backend.agents.sentiment_analyst``'s call sites).
     """
+    from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
+
     logger.debug("Loading sentence-transformer model: %s", model_name)
     return SentenceTransformerEmbeddingFunction(model_name=model_name, device="cpu")
 
@@ -303,7 +315,7 @@ class ChromaClient:
         """
         try:
             self._client.delete_collection(name=name)
-        except Exception:  # collection may not exist yet
+        except Exception:  # nosec B110 -- collection may not exist yet
             pass
         self._cache.pop(name, None)
         self.get_or_create_collection(name)

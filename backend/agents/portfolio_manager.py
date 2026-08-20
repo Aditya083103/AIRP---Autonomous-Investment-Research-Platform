@@ -62,7 +62,6 @@ docs/week-11/T-041-portfolio-manager.md for the full design rationale,
 including why conviction tracks quality-of-analysis rather than signal
 direction, and why two hard gates exist ahead of the weighted tally.
 """
-from __future__ import annotations
 
 import json
 import logging
@@ -900,21 +899,32 @@ def run_portfolio_manager_decision(state: dict[str, Any]) -> dict[str, Any]:
             "price_target": decision.price_target,
         }
 
-    decision = _run_portfolio_manager_core(
-        analysis_id=job_id,
-        company_name=company_name,
-        ticker=ticker,
-        fundamental=state.get("fundamental"),
-        technical=state.get("technical"),
-        sentiment=state.get("sentiment"),
-        macro=state.get("macro"),
-        risk=state.get("risk"),
-        contrarian=state.get("contrarian"),
-        valuation=state.get("valuation"),
-        debate_rounds=state.get("debate_rounds"),
-        debate_round_count=state.get("debate_round_count", 0),
-        critical_flags=state.get("critical_flags"),
-    )
+    try:
+        decision = _run_portfolio_manager_core(
+            analysis_id=job_id,
+            company_name=company_name,
+            ticker=ticker,
+            fundamental=state.get("fundamental"),
+            technical=state.get("technical"),
+            sentiment=state.get("sentiment"),
+            macro=state.get("macro"),
+            risk=state.get("risk"),
+            contrarian=state.get("contrarian"),
+            valuation=state.get("valuation"),
+            debate_rounds=state.get("debate_rounds"),
+            debate_round_count=state.get("debate_round_count", 0),
+            critical_flags=state.get("critical_flags"),
+        )
+    except Exception as exc:
+        logger.exception("Unhandled error in Portfolio Manager node: ticker=%s", ticker)
+        decision = InvestmentDecision(
+            analysis_id=job_id,
+            company_name=company_name,
+            ticker=ticker,
+            verdict="HOLD",
+            conviction_score=1,
+            error=f"Unhandled agent error: {exc}",
+        )
 
     return {
         "decision": decision.model_dump(),

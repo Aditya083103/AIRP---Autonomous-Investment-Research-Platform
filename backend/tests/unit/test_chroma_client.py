@@ -373,9 +373,15 @@ class TestGetChromaClient:
 
 
 class TestGetEmbeddingFunction:
+    # T-074 audit finding C4: SentenceTransformerEmbeddingFunction is now
+    # imported lazily INSIDE get_embedding_function (not at module scope),
+    # so it can no longer be patched via "backend.db.chroma_client.
+    # SentenceTransformerEmbeddingFunction" -- that name doesn't exist in
+    # the module namespace at all until the function runs. Patch it at its
+    # real source instead.
     def test_calls_sentence_transformer_with_model_name(self) -> None:
         with patch(
-            "backend.db.chroma_client.SentenceTransformerEmbeddingFunction"
+            "chromadb.utils.embedding_functions.SentenceTransformerEmbeddingFunction"
         ) as mock_cls:
             mock_cls.return_value = _MockEF()
             get_embedding_function("all-MiniLM-L6-v2")
@@ -383,13 +389,22 @@ class TestGetEmbeddingFunction:
 
     def test_uses_default_model_when_no_arg(self) -> None:
         with patch(
-            "backend.db.chroma_client.SentenceTransformerEmbeddingFunction"
+            "chromadb.utils.embedding_functions.SentenceTransformerEmbeddingFunction"
         ) as mock_cls:
             mock_cls.return_value = _MockEF()
             get_embedding_function()
         mock_cls.assert_called_once_with(
             model_name=EMBEDDING_MODEL_DEFAULT, device="cpu"
         )
+
+    def test_import_is_lazy_not_at_module_scope(self) -> None:
+        """T-074 audit finding C4: importing backend.db.chroma_client must
+        not require sentence-transformers/torch to already be resolved at
+        module scope -- confirmed by the module simply having no
+        SentenceTransformerEmbeddingFunction attribute of its own."""
+        import backend.db.chroma_client as chroma_client_module
+
+        assert not hasattr(chroma_client_module, "SentenceTransformerEmbeddingFunction")
 
 
 # ---------------------------------------------------------------------------

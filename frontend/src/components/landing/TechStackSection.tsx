@@ -15,7 +15,13 @@ const STACK: readonly string[] = [
   "PostgreSQL",
   "ChromaDB",
   "Redis",
-  "Groq Llama 3.3",
+  // Deliberately just "Groq" (the provider), not a specific model name --
+  // backend.config.py's groq_model default has already changed once
+  // (llama-3.3-70b-versatile -> openai/gpt-oss-120b) after Groq retired
+  // the prior model outright, and free-tier model availability can shift
+  // again without notice. A provider-level chip never goes stale from
+  // that; a model-specific one already did.
+  "Groq",
 ];
 
 /** A row of technology wordmark chips: what the system is actually built with. */

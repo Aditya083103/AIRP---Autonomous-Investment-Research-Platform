@@ -33,6 +33,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { env } from "@/config/env";
+
 /** One push payload received over WS /api/v1/chat/{session_id}/stream. See backend/routers/chat_stream.py's ChatStreamEvent for the authoritative field meanings. */
 export interface ChatStreamEvent {
   session_id: string;
@@ -84,6 +86,13 @@ export interface UseChatStreamResult {
 const LOCAL_ID_PREFIX = "local-";
 
 function defaultWebSocketBaseUrl(): string {
+  // T-074 audit finding C1/F1: see useAnalysisStream.ts's identical helper
+  // for the full rationale -- prefer env.wsBaseUrl so split-origin
+  // deployments dial the right host, falling back to window.location only
+  // when neither VITE_WS_BASE_URL nor an absolute VITE_API_BASE_URL is set.
+  if (env.wsBaseUrl) {
+    return env.wsBaseUrl;
+  }
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   return `${protocol}//${window.location.host}`;
 }

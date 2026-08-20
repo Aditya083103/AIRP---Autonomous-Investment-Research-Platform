@@ -1207,7 +1207,7 @@ def run_valuation_analysis(state: dict[str, Any]) -> dict[str, Any]:
         from backend.config import settings as _cfg  # noqa: PLC0415
 
         screener_base_url = _cfg.screener_base_url
-    except Exception:
+    except Exception:  # nosec B110 -- keeps the hardcoded fallback above
         pass
 
     try:

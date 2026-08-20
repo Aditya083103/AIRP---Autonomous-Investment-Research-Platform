@@ -510,7 +510,7 @@ def _run_sentiment_analysis_core(
     # logged on every single analysis, regardless of ticker). Ingesting
     # here means each analysis both queries *and* grows the corpus, so
     # semantic_search has something to find on this and future runs.
-    if articles and settings.environment != "test":
+    if articles and settings.environment != "test" and settings.feature_rag_enabled:
         try:
             ingest_news_articles(
                 articles=articles,
@@ -552,19 +552,25 @@ def _run_sentiment_analysis_core(
     # --- Step 4: Deterministic red flag detection
     keyword_flags = _detect_red_flags(article_texts)
 
-    # --- Step 5: ChromaDB semantic search (non-fatal on failure)
+    # --- Step 5: ChromaDB semantic search (non-fatal on failure; skipped
+    # entirely when FEATURE_RAG_ENABLED is off -- T-074 audit findings
+    # C4/C5. News Sentiment's score is already fully determined by Step 2's
+    # deterministic per-article scoring above; chroma_snippets only ever
+    # add narrative colour for the LLM synthesis step below, so skipping
+    # them is a clean degradation, not a partial-failure state.)
     chroma_snippets: list[dict[str, Any]] = []
-    try:
-        chroma_snippets = semantic_search(
-            query=f"{company_name} news sentiment risk",
-            collection_name=COLLECTION_NEWS,
-            n_results=CHROMA_N_RESULTS,
-            company_filter=company_name,
-        )
-    except Exception as exc:
-        logger.warning(
-            "ChromaDB search failed for %s (non-fatal): %s", company_name, exc
-        )
+    if settings.feature_rag_enabled:
+        try:
+            chroma_snippets = semantic_search(
+                query=f"{company_name} news sentiment risk",
+                collection_name=COLLECTION_NEWS,
+                n_results=CHROMA_N_RESULTS,
+                company_filter=company_name,
+            )
+        except Exception as exc:
+            logger.warning(
+                "ChromaDB search failed for %s (non-fatal): %s", company_name, exc
+            )
 
     # --- Step 6: LLM call for narrative synthesis
     logger.info(

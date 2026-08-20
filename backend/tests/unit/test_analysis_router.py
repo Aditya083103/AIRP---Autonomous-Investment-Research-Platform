@@ -201,11 +201,22 @@ def patched_pipeline(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
     forget it and accidentally trigger a real LangGraph invocation.
     Individual tests retrieve this same mock via the fixture argument to
     assert on how it was called.
+
+    Also patches reserve_analysis_slot to always succeed (T-074 audit
+    findings C9/F9). With the REAL run_analysis_pipeline mocked out above,
+    its own release_analysis_slot() call in `finally` never fires, so a
+    test that calls POST /start more than settings.max_concurrent_analyses
+    times would otherwise hit an unrelated 503 that has nothing to do with
+    whatever that test is actually asserting. TestConcurrencyLimit below
+    tests the real reservation behaviour directly instead.
     """
     import backend.routers.analysis as analysis_router_module
 
     mock = AsyncMock()
     monkeypatch.setattr(analysis_router_module, "run_analysis_pipeline", mock)
+    monkeypatch.setattr(
+        analysis_router_module, "reserve_analysis_slot", AsyncMock(return_value=True)
+    )
     return mock
 
 
@@ -516,6 +527,80 @@ class TestBackgroundScheduling:
             json={"company_name": "   "},
         )
         patched_pipeline.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Concurrency limiting -- T-074 audit findings C9/F9
+# ---------------------------------------------------------------------------
+
+
+class TestConcurrencyLimit:
+    @pytest.mark.asyncio
+    async def test_returns_503_when_at_capacity(
+        self,
+        client: httpx.AsyncClient,
+        patched_pipeline: AsyncMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """
+        Overrides the autouse patched_pipeline fixture's always-succeeds
+        reserve_analysis_slot mock with one that reports capacity reached,
+        so this test exercises the router's real 503 branch.
+        """
+        import backend.routers.analysis as analysis_router_module
+
+        monkeypatch.setattr(
+            analysis_router_module,
+            "reserve_analysis_slot",
+            AsyncMock(return_value=False),
+        )
+
+        response = await client.post(
+            "/api/v1/analysis/start",
+            json={"company_name": "TCS"},
+        )
+
+        assert response.status_code == 503
+        assert "try again" in response.json()["detail"].lower()
+        patched_pipeline.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_slot_released_when_job_creation_fails_after_reservation(
+        self,
+        client: httpx.AsyncClient,
+        fake_session: _FakeAnalysisSession,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """
+        If a slot is reserved but create_analysis_job then raises (e.g. a
+        transient DB error), the reserved slot must be released -- not
+        leaked -- so it doesn't permanently consume one of
+        max_concurrent_analyses's slots for a job that will never run.
+        """
+        import backend.routers.analysis as analysis_router_module
+
+        reserve_mock = AsyncMock(return_value=True)
+        release_mock = AsyncMock()
+        monkeypatch.setattr(
+            analysis_router_module, "reserve_analysis_slot", reserve_mock
+        )
+        monkeypatch.setattr(
+            analysis_router_module, "release_analysis_slot", release_mock
+        )
+        monkeypatch.setattr(
+            analysis_router_module,
+            "create_analysis_job",
+            AsyncMock(side_effect=RuntimeError("DB write failed")),
+        )
+
+        with pytest.raises(RuntimeError):
+            await client.post(
+                "/api/v1/analysis/start",
+                json={"company_name": "TCS"},
+            )
+
+        reserve_mock.assert_awaited_once()
+        release_mock.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_pipeline_not_scheduled_without_authentication(

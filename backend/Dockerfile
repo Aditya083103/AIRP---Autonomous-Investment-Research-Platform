@@ -125,11 +125,23 @@ EXPOSE 8000
 # dependency checks by design — see backend/routers/health.py's own
 # docstring for why). python -c avoids adding curl/wget as a runtime
 # dependency just for this one check.
+#
+# T-074 audit finding C2: shell-form CMD (below) — HEALTHCHECK's CMD is
+# already shell form (no JSON array), so $PORT expands here the same way
+# it does in CMD; hardcoding 8000 in both would silently diverge from
+# whatever port uvicorn actually bound once PORT is set (Render's
+# convention — see CMD below).
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)" || exit 1
+    CMD python -c "import os, urllib.request; urllib.request.urlopen('http://localhost:' + os.environ.get('PORT', '8000') + '/health', timeout=3)" || exit 1
 
 ENTRYPOINT ["docker-entrypoint.sh"]
 
-# Production default. docker-compose.yml overrides this CMD with
-# --reload for local dev — the ENTRYPOINT (migrations) runs either way.
-CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# T-074 audit finding C2 (BLOCKER): shell form, not exec-form JSON array.
+# Render (and most PaaS hosts) inject a $PORT env var and health-check
+# THAT port, not a fixed one — exec-form CMD (a JSON array) never runs
+# through a shell, so "--port", "8000" would be a hardcoded literal that
+# never picks up $PORT and the service would never come up on Render.
+# Shell form runs through /bin/sh -c, so ${PORT:-8000} expands at
+# container start, keeping 8000 as the local/Docker Compose default (that
+# file already sets PORT explicitly where it needs a specific one).
+CMD uvicorn backend.main:app --host 0.0.0.0 --port ${PORT:-8000}

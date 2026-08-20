@@ -16,7 +16,7 @@ describe("TechStackSection", () => {
 
   it("renders a chip for each technology", () => {
     render(<TechStackSection />);
-    for (const tech of ["React 18", "FastAPI", "LangGraph", "PostgreSQL", "Groq Llama 3.3"]) {
+    for (const tech of ["React 18", "FastAPI", "LangGraph", "PostgreSQL", "Groq"]) {
       expect(screen.getByText(tech)).toBeInTheDocument();
     }
   });

@@ -104,6 +104,7 @@ import os
 import platform
 import signal
 import sys
+import threading
 import time
 from typing import Any, Callable, Literal
 
@@ -320,8 +321,25 @@ def _make_timeout_ctx(seconds: float, node_name: str) -> Any:
       Returning _NoOpTimeout here is the permanent fix for the recurring
       ``OverflowError: cannot convert float infinity to integer`` that
       previously crashed every CI run in test mode.
-    - POSIX (Linux/macOS) with finite seconds -> ``_SigAlrmTimeout``.
-    - Windows with finite seconds -> ``_ThreadTimeout``.
+    - POSIX (Linux/macOS) AND running on the main thread, with finite
+      seconds -> ``_SigAlrmTimeout``.
+    - Everything else (Windows, OR POSIX but NOT the main thread) with
+      finite seconds -> ``_ThreadTimeout``.
+
+    BUGFIX (found during live end-to-end verification): the platform check
+    alone is not sufficient. ``signal.signal()``/``signal.alarm()`` raise
+    ``ValueError: signal only works in main thread of the main interpreter``
+    when called from any thread other than the interpreter's main one --
+    and ``backend.services.analysis.run_analysis_pipeline`` invokes the
+    entire compiled graph via ``asyncio.to_thread(_invoke_graph_sync, ...)``,
+    which runs on a worker thread, not the main thread. Every single node
+    on Linux/Docker/Render (this project's actual deploy target) crashed
+    with that ValueError the instant it entered ``profile_node``'s timeout
+    context, killing every analysis at the very first node -- before this
+    fix, ``_IS_POSIX`` alone always selected ``_SigAlrmTimeout`` in that
+    worker thread. ``_ThreadTimeout`` has no such restriction (it just
+    times a plain function call), so it is the correct choice whenever we
+    are not provably on the main thread, regardless of OS.
 
     Args:
         seconds:   Timeout threshold in seconds.  May be float('inf').
@@ -337,7 +355,7 @@ def _make_timeout_ctx(seconds: float, node_name: str) -> Any:
     if not math.isfinite(seconds):
         return _NoOpTimeout()
 
-    if _IS_POSIX:
+    if _IS_POSIX and threading.current_thread() is threading.main_thread():
         return _SigAlrmTimeout(seconds=seconds, node_name=node_name)
     return _ThreadTimeout(seconds=seconds, node_name=node_name)
 

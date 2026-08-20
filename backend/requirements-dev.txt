@@ -27,6 +27,10 @@ flake8-comprehensions==3.14.0    # Enforces cleaner list/dict comprehensions
 flake8-docstrings==1.7.0         # Enforces docstrings on public functions
 
 
+# ── Security Scanning (T-074 audit finding C16 / T-079 acceptance criterion) ──
+bandit==1.7.9                    # Static security scan -- `bandit -r backend/`
+
+
 # ── Type Checking ─────────────────────────────────────────────────────────────
 mypy==1.10.0
 pydantic[mypy]==2.7.4            # Ships pydantic.mypy plugin for strict checks
