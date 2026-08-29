@@ -197,10 +197,8 @@ def _construct_settings(**overrides: Any) -> Settings:
         for field_name in Settings.model_fields
         if field_name not in defaults
     }
-    saved_env = {
-        key: os.environ.pop(key, None)
-        for key in env_keys_to_isolate
-        if key in os.environ
+    saved_env: dict[str, str] = {
+        key: os.environ.pop(key) for key in env_keys_to_isolate if key in os.environ
     }
     try:
         return Settings(_env_file=None, **defaults)

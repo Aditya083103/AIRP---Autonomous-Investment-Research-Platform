@@ -718,8 +718,8 @@ class TestHeartbeat:
                 new=_make_async_session_local_patch(AsyncMock()),
             ),
         ):
-            await _forward_live_events(  # type: ignore[arg-type]
-                fake_ws, job_id, queue, uuid.uuid4()
+            await _forward_live_events(
+                fake_ws, job_id, queue, uuid.uuid4()  # type: ignore[arg-type]
             )
 
         heartbeats = [e for e in fake_ws.sent if e["agent"] == "pipeline"]
@@ -752,8 +752,8 @@ class TestHeartbeat:
             patch("backend.routers.websocket._HEARTBEAT_AFTER_TICKS", 1000),
         ):
             await asyncio.gather(
-                _forward_live_events(  # type: ignore[arg-type]
-                    fake_ws, job_id, queue, uuid.uuid4()
+                _forward_live_events(
+                    fake_ws, job_id, queue, uuid.uuid4()  # type: ignore[arg-type]
                 ),
                 _publish_soon(),
             )
