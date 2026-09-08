@@ -62,17 +62,19 @@ def teardown_function() -> None:
 
 
 class TestTTLReExports:
+    # Values raised from the original dev defaults to protect free-tier API
+    # quotas under public demo traffic (see backend/db/redis_client.py).
     def test_stock_ttl(self) -> None:
-        assert STOCK_TTL == 900
+        assert STOCK_TTL == 21_600
 
     def test_news_ttl(self) -> None:
-        assert NEWS_TTL == 3_600
+        assert NEWS_TTL == 43_200
 
     def test_ratios_ttl(self) -> None:
-        assert RATIOS_TTL == 3_600
+        assert RATIOS_TTL == 86_400
 
     def test_macro_ttl(self) -> None:
-        assert MACRO_TTL == 86_400
+        assert MACRO_TTL == 604_800
 
 
 # ---------------------------------------------------------------------------

@@ -29,10 +29,18 @@ Tests that need to exercise the connection path call
 teardown — no patching of os.environ required.
 
 TTL constants (seconds) — match config.py cache_ttl_* fields:
-    STOCK_TTL   =  900   (15 min)
-    NEWS_TTL    = 3 600  ( 1 h)
-    RATIOS_TTL  = 3 600  ( 1 h)
-    MACRO_TTL   = 86 400 (24 h)
+    STOCK_TTL   =  21 600 ( 6 h)
+    NEWS_TTL    =  43 200 (12 h)
+    RATIOS_TTL  =  86 400 (24 h)
+    MACRO_TTL   = 604 800 ( 7 d)
+
+Raised from the original dev values (15 min / 1 h / 1 h / 24 h) to protect
+the free-tier API quotas (Alpha Vantage 25 req/day, NewsAPI 100 req/day)
+under real public traffic on the deployed demo. Company fundamentals,
+ratios, and macro data barely move intraday, so a long shared TTL is safe
+and turns "ten users analyse TCS" into a single upstream call instead of
+ten. The cache is keyed on ticker / company only (see the @cached templates
+in backend/tools/*.py), so every user shares the same cached result.
 """
 
 import logging
@@ -56,10 +64,10 @@ logger = logging.getLogger(__name__)
 # TTL constants (seconds) — single source of truth for all tool caches
 # ---------------------------------------------------------------------------
 
-STOCK_TTL: int = 900  # 15 minutes
-NEWS_TTL: int = 3_600  # 1 hour
-RATIOS_TTL: int = 3_600  # 1 hour
-MACRO_TTL: int = 86_400  # 24 hours
+STOCK_TTL: int = 21_600  # 6 hours (raised from 15 min for free-tier demo)
+NEWS_TTL: int = 43_200  # 12 hours (raised from 1 h; NewsAPI 100 req/day)
+RATIOS_TTL: int = 86_400  # 24 hours (raised from 1 h; Alpha Vantage 25 req/day)
+MACRO_TTL: int = 604_800  # 7 days (raised from 24 h; macro data is slow-moving)
 
 # Connection timeouts — keep short so a dead Redis fails fast.
 _SOCKET_TIMEOUT: int = 3

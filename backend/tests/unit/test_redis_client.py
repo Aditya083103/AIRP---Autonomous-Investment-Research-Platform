@@ -110,17 +110,20 @@ def _patch_connection(
 
 
 class TestTTLConstants:
-    def test_stock_ttl_is_15_minutes(self) -> None:
-        assert STOCK_TTL == 900
+    # Values raised from the original dev defaults (15 min / 1 h / 1 h / 24 h)
+    # to protect free-tier API quotas under public demo traffic. See the TTL
+    # block in backend/db/redis_client.py for the rationale.
+    def test_stock_ttl_is_6_hours(self) -> None:
+        assert STOCK_TTL == 21_600
 
-    def test_news_ttl_is_1_hour(self) -> None:
-        assert NEWS_TTL == 3_600
+    def test_news_ttl_is_12_hours(self) -> None:
+        assert NEWS_TTL == 43_200
 
-    def test_ratios_ttl_is_1_hour(self) -> None:
-        assert RATIOS_TTL == 3_600
+    def test_ratios_ttl_is_24_hours(self) -> None:
+        assert RATIOS_TTL == 86_400
 
-    def test_macro_ttl_is_24_hours(self) -> None:
-        assert MACRO_TTL == 86_400
+    def test_macro_ttl_is_7_days(self) -> None:
+        assert MACRO_TTL == 604_800
 
 
 # ---------------------------------------------------------------------------

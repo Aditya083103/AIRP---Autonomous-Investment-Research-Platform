@@ -49,8 +49,15 @@ services:
         value: "60"
 
       # -- 2. LLM Provider ------------------------------------------------
+      # groq (free tier) for the public demo so open registrations run on
+      # Groq's Llama backbone, NOT on metered Anthropic credits. Only ONE
+      # provider is ever active -- backend/agents/llm_factory.py reads this
+      # single var and ignores the other provider's key entirely; setting
+      # both keys does not load-balance or fall back between them. Switch
+      # back to `anthropic` only for a controlled, gated demo where you
+      # accept the per-analysis Claude cost.
       - key: LLM_PROVIDER
-        value: anthropic
+        value: groq
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: ANTHROPIC_MODEL
@@ -92,14 +99,22 @@ services:
       - key: REDIS_TOKEN
         # Only needed for Upstash's REST/TLS token auth.
         sync: false
+      # Cache TTLs raised from dev defaults to protect free-tier API quotas
+      # (Alpha Vantage 25 req/day, NewsAPI 100 req/day) under public traffic.
+      # These env vars drive the settings-based caches (macro, earnings/news
+      # via cache_ttl_news, fundamentals); the @cached stock/ratios tools read
+      # the STOCK_TTL/RATIOS_TTL constants in backend/db/redis_client.py, which
+      # are raised to match. Cache keys are ticker/company-only, so all users
+      # share one cached result per company. Financial data barely moves
+      # intraday, so long TTLs are safe for a demo.
       - key: CACHE_TTL_STOCK
-        value: "900"
+        value: "21600" # 6 h (was 900 = 15 min)
       - key: CACHE_TTL_NEWS
-        value: "3600"
+        value: "43200" # 12 h (was 3600 = 1 h)
       - key: CACHE_TTL_MACRO
-        value: "86400"
+        value: "604800" # 7 d (was 86400 = 24 h)
       - key: CACHE_TTL_FUNDAMENTALS
-        value: "3600"
+        value: "86400" # 24 h (was 3600 = 1 h)
 
       # -- 6. Vector Store (RAG) ----------------------------------------------
       # FEATURE_RAG_ENABLED already defaults to false in production
