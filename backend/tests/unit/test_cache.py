@@ -381,10 +381,10 @@ class TestCachedDecoratorTTL:
     @pytest.mark.parametrize(
         "ttl_constant,expected_ttl",
         [
-            (STOCK_TTL, 900),
-            (NEWS_TTL, 3_600),
-            (RATIOS_TTL, 3_600),
-            (MACRO_TTL, 86_400),
+            (STOCK_TTL, 21_600),  # Changed from 900
+            (NEWS_TTL, 43_200),  # Changed from 3_600
+            (RATIOS_TTL, 86_400),  # Changed from 3_600
+            (MACRO_TTL, 604_800),  # Changed from 86_400
         ],
     )
     def test_ttl_forwarded_correctly(
