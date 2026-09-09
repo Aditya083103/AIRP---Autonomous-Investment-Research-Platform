@@ -1,8 +1,20 @@
 // frontend/src/test/AnalysisPage.test.tsx
-// Tests for AnalysisPage (T-058). Wraps a fake AuthContext (accessToken
-// present, matching ProtectedRoute already gating this page in
-// AppRoutes.tsx) + MemoryRouter, and mocks global.fetch the same way
-// every other API-calling test in this suite does.
+// Tests for AnalysisPage (T-058, B5). Wraps a fake AuthContext
+// (accessToken present, matching ProtectedRoute already gating this
+// page in AppRoutes.tsx) + MemoryRouter, and mocks global.fetch the
+// same way every other API-calling test in this suite does.
+//
+// B5: CompanyAutocomplete now searches GET /api/v1/companies/search
+// over the network (rather than filtering an in-memory array), so
+// selecting "Infosys" via selectInfosys() below ALSO calls fetch().
+// routedFetchMock routes that one URL to a canned company-search
+// response and everything else to whatever response each test cares
+// about -- and every "was fetch called N times / what was call #K"
+// assertion below is written against nonAnalysisCalls (the SAME mock's
+// calls filtered to exclude the company-search ones), so a change in
+// how many times CompanyAutocomplete happens to search (e.g. one call
+// on open plus one debounced call per distinct query) never makes an
+// assertion about the ANALYSIS request flaky.
 
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -18,6 +30,39 @@ function jsonResponse(status: number, body: unknown): Response {
     status,
     headers: { "Content-Type": "application/json" },
   });
+}
+
+const COMPANY_SEARCH_RESPONSE = {
+  items: [{ name: "Infosys", ticker: "INFY.NS", exchange: "NSE" }],
+  total_count: 1,
+  limit: 30,
+  offset: 0,
+  has_more: false,
+};
+
+/**
+ * Wraps `nonSearchImpl` (whatever a test wants the ANALYSIS-related
+ * calls -- /documents/upload, /analysis/start -- to do) with routing
+ * that intercepts GET /api/v1/companies/search separately, always
+ * returning COMPANY_SEARCH_RESPONSE (Infosys is all these tests ever
+ * need to select). See this file's own module docstring.
+ */
+function routedFetchMock(
+  nonSearchImpl: (url: string, init?: RequestInit) => Response | Promise<Response>,
+) {
+  return vi.fn((url: string, init?: RequestInit) => {
+    if (url.includes("/companies/search")) {
+      return Promise.resolve(jsonResponse(200, COMPANY_SEARCH_RESPONSE));
+    }
+    return nonSearchImpl(url, init);
+  });
+}
+
+/** fetchMock.mock.calls filtered to exclude company-search requests -- see this file's own module docstring for why assertions use this instead of raw call indices/counts. */
+function nonSearchCalls(fetchMock: { mock: { calls: unknown[][] } }): [string, RequestInit][] {
+  return (fetchMock.mock.calls as [string, RequestInit][]).filter(
+    ([url]) => !url.includes("/companies/search"),
+  );
 }
 
 const AUTH_VALUE: AuthContextValue = {
@@ -78,7 +123,7 @@ describe("AnalysisPage", () => {
   });
 
   it("starts the analysis and navigates to the result page on success", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(202, START_RESPONSE));
+    const fetchMock = routedFetchMock(() => jsonResponse(202, START_RESPONSE));
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
     renderAnalysisPage();
@@ -87,7 +132,7 @@ describe("AnalysisPage", () => {
     await user.click(screen.getByRole("button", { name: /start analysis/i }));
 
     await waitFor(() => expect(screen.getByText("Result page")).toBeInTheDocument());
-    const [url, options] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [url, options] = nonSearchCalls(fetchMock)[0] as [string, RequestInit];
     expect(url).toContain("/analysis/start");
     const body = JSON.parse(options.body as string) as Record<string, unknown>;
     // T-085: period is always sent, defaulting to "1y" when the
@@ -101,7 +146,7 @@ describe("AnalysisPage", () => {
   });
 
   it("sends the selected analysis horizon (T-085)", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(202, START_RESPONSE));
+    const fetchMock = routedFetchMock(() => jsonResponse(202, START_RESPONSE));
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
     renderAnalysisPage();
@@ -111,7 +156,7 @@ describe("AnalysisPage", () => {
     await user.click(screen.getByRole("button", { name: /start analysis/i }));
 
     await waitFor(() => expect(screen.getByText("Result page")).toBeInTheDocument());
-    const [, options] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [, options] = nonSearchCalls(fetchMock)[0] as [string, RequestInit];
     const body = JSON.parse(options.body as string) as Record<string, unknown>;
     expect(body.period).toBe("5y");
   });
@@ -119,7 +164,7 @@ describe("AnalysisPage", () => {
   it("shows the backend's error message when starting the analysis fails", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(jsonResponse(500, { detail: "Pipeline is overloaded" })),
+      routedFetchMock(() => jsonResponse(500, { detail: "Pipeline is overloaded" })),
     );
     const user = userEvent.setup();
     renderAnalysisPage();
@@ -148,19 +193,21 @@ describe("AnalysisPage", () => {
   });
 
   it("uploads the PDF before starting the analysis when one is attached", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(
-        jsonResponse(201, {
+    let nonSearchCallCount = 0;
+    const fetchMock = routedFetchMock(() => {
+      nonSearchCallCount += 1;
+      if (nonSearchCallCount === 1) {
+        return jsonResponse(201, {
           company_name: "Infosys",
           ticker: "INFY.NS",
           exchange: "NSE",
           source_filename: "annual-report.pdf",
           doc_type: "annual_report",
           chunks_ingested: 5,
-        }),
-      )
-      .mockResolvedValueOnce(jsonResponse(202, START_RESPONSE));
+        });
+      }
+      return jsonResponse(202, START_RESPONSE);
+    });
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
     const { container } = renderAnalysisPage();
@@ -173,17 +220,16 @@ describe("AnalysisPage", () => {
     await user.click(screen.getByRole("button", { name: /start analysis/i }));
 
     await waitFor(() => expect(screen.getByText("Result page")).toBeInTheDocument());
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    const [firstUrl] = fetchMock.mock.calls[0] as [string, RequestInit];
-    const [secondUrl] = fetchMock.mock.calls[1] as [string, RequestInit];
+    const calls = nonSearchCalls(fetchMock);
+    expect(calls).toHaveLength(2);
+    const [firstUrl] = calls[0] as [string, RequestInit];
+    const [secondUrl] = calls[1] as [string, RequestInit];
     expect(firstUrl).toContain("/documents/upload");
     expect(secondUrl).toContain("/analysis/start");
   });
 
   it("does not start the analysis when the PDF upload fails", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue(jsonResponse(413, { detail: "upload is too large" }));
+    const fetchMock = routedFetchMock(() => jsonResponse(413, { detail: "upload is too large" }));
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
     const { container } = renderAnalysisPage();
@@ -195,6 +241,6 @@ describe("AnalysisPage", () => {
     await user.click(screen.getByRole("button", { name: /start analysis/i }));
 
     expect(await screen.findByText("upload is too large")).toBeInTheDocument();
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(nonSearchCalls(fetchMock)).toHaveLength(1);
   });
 });

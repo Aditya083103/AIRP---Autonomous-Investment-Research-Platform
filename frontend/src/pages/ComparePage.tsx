@@ -141,6 +141,7 @@ export function ComparePage(): JSX.Element {
           <CompareInputForm
             onSubmit={(companyA, companyB) => void handleSubmit(companyA, companyB)}
             isSubmitting={isStarting}
+            accessToken={accessToken}
             {...(formError ? { formError } : {})}
           />
         </div>

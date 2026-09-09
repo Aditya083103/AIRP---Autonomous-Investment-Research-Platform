@@ -24,7 +24,7 @@ async function selectCompany(
 describe("CompareInputForm", () => {
   it("shows validation errors when submitted with nothing selected", async () => {
     const user = userEvent.setup();
-    render(<CompareInputForm onSubmit={vi.fn()} isSubmitting={false} />);
+    render(<CompareInputForm onSubmit={vi.fn()} isSubmitting={false} accessToken={null} />);
 
     await user.click(screen.getByRole("button", { name: /compare companies/i }));
 
@@ -34,7 +34,7 @@ describe("CompareInputForm", () => {
 
   it("rejects selecting the same company for both sides", async () => {
     const user = userEvent.setup();
-    render(<CompareInputForm onSubmit={vi.fn()} isSubmitting={false} />);
+    render(<CompareInputForm onSubmit={vi.fn()} isSubmitting={false} accessToken={null} />);
 
     await selectCompany(user, "Company A", "Infosys", /infosys/i);
     await selectCompany(user, "Company B", "Infosys", /infosys/i);
@@ -48,7 +48,7 @@ describe("CompareInputForm", () => {
   it("calls onSubmit with both companies once two distinct companies are selected", async () => {
     const onSubmit = vi.fn();
     const user = userEvent.setup();
-    render(<CompareInputForm onSubmit={onSubmit} isSubmitting={false} />);
+    render(<CompareInputForm onSubmit={onSubmit} isSubmitting={false} accessToken={null} />);
 
     await selectCompany(user, "Company A", "TCS", /tcs/i);
     await selectCompany(user, "Company B", "Infosys", /infosys/i);
@@ -62,14 +62,19 @@ describe("CompareInputForm", () => {
 
   it("shows an external form error when provided", () => {
     render(
-      <CompareInputForm onSubmit={vi.fn()} isSubmitting={false} formError="Could not start." />,
+      <CompareInputForm
+        onSubmit={vi.fn()}
+        isSubmitting={false}
+        accessToken={null}
+        formError="Could not start."
+      />,
     );
 
     expect(screen.getByRole("alert")).toHaveTextContent("Could not start.");
   });
 
   it("disables the submit button and shows a spinner while submitting", () => {
-    render(<CompareInputForm onSubmit={vi.fn()} isSubmitting={true} />);
+    render(<CompareInputForm onSubmit={vi.fn()} isSubmitting={true} accessToken={null} />);
 
     expect(screen.getByRole("button", { name: /compare companies/i })).toBeDisabled();
   });

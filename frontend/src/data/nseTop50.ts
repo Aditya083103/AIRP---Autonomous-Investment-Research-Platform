@@ -1,27 +1,38 @@
 // frontend/src/data/nseTop50.ts
-// AIRP -- Top-50 NSE companies for the analysis-input autocomplete (T-058)
+// AIRP -- Top-50 NSE companies (T-058, reduced role in B5)
 //
 // A fixed, hand-maintained list of 50 large, well-known NSE-listed
 // companies -- NOT a live market-cap ranking pulled from a screener API.
-// There is no free, key-less "list all NSE tickers by market cap" API
-// this project's stack already integrates with (see
-// AIRP_Project_Overview_Updated.docx section 6's API list -- yFinance
-// gives price/financials for a SYMBOL you already know, not a
-// searchable directory of symbols), so a static dataset is the
-// pragmatic, zero-cost way to satisfy "autocomplete works for top 50
-// NSE stocks" today. If this list needs to move or reorder as market
-// caps shift, edit this file directly -- there is deliberately no
-// dynamic fetch/caching layer here to keep in sync.
+//
+// Through T-058, this was CompanyAutocomplete.tsx's ONLY data source
+// (the whole dropdown, filtered client-side). As of B5, it is
+// CompanyAutocomplete's OFFLINE / FIRST-PAINT / SEARCH-FAILURE
+// FALLBACK ONLY -- the primary source is now
+// GET /api/v1/companies/search (backend.data.nse_company_universe,
+// ~270 companies), which is what actually fixed bug #5 ("dropdown
+// only shows ~50 companies"). This file still exists and is still
+// used because the fallback needs SOME always-available local list for
+// the moment before `accessToken` is ready, or whenever the search
+// request itself fails -- see CompanyAutocomplete.tsx's own module
+// docstring for exactly when each case applies. There is no free,
+// key-less "list all NSE tickers by market cap" API this project's
+// stack already integrates with (see AIRP_Project_Overview_Updated.docx
+// section 6's API list -- yFinance gives price/financials for a SYMBOL
+// you already know, not a searchable directory of symbols), so both
+// this file and its larger backend sibling are static, hand-maintained
+// datasets rather than a live pull -- see
+// backend/data/nse_company_universe.py's own docstring for the
+// identical reasoning at that larger scale.
 //
 // `ticker` is the exact Yahoo Finance symbol (with the .NS suffix)
 // backend.services.analysis.resolve_company expects when a caller
 // supplies AnalysisStartRequest.ticker directly (see that schema's
 // docstring: "optional overrides for callers, e.g. a future
 // autocomplete-driven frontend, that already know the exact Yahoo
-// Finance symbol") -- selecting an option here sends `ticker` and
-// `exchange` explicitly, skipping backend.services.analysis's
-// name-resolution table entirely (which only covers ~15 names) rather
-// than depending on it covering all 50.
+// Finance symbol") -- selecting an option (from either this file or
+// the search endpoint) sends `ticker` and `exchange` explicitly,
+// skipping backend.services.analysis's name-resolution table entirely
+// (which only covers ~15 names).
 
 export interface NseCompany {
   name: string;
