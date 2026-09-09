@@ -1,5 +1,5 @@
 // frontend/src/components/compare/CompareInputForm.tsx
-// AIRP -- Compare input form (T-064)
+// AIRP -- Compare input form (T-064, B5)
 //
 // Two CompanyAutocomplete instances (reused as-is from T-058, no
 // compare-specific fork) plus a single submit button. Deliberately
@@ -11,18 +11,27 @@
 //
 // Validation lives in src/lib/validation/compareSchemas.ts -- both
 // fields required, and the same ticker cannot be selected twice.
+//
+// Why selectedCompanyA/B are their own state, not re-derived from
+// NSE_TOP_50 by ticker (B5) -- see AnalysisPage.tsx's identical note:
+// CompanyAutocomplete now searches a ~270-company backend universe
+// (GET /api/v1/companies/search), so most selections are not in the
+// 51-entry NSE_TOP_50 fallback list a by-ticker lookup would need.
 
 import { zodResolver } from "@hookform/resolvers/zod";
+import { useState } from "react";
 import { Controller, useForm } from "react-hook-form";
 
 import { CompanyAutocomplete } from "@/components/analysis/CompanyAutocomplete";
 import { Button } from "@/components/ui";
-import { NSE_TOP_50, type NseCompany } from "@/data/nseTop50";
+import { type NseCompany } from "@/data/nseTop50";
 import { compareInputSchema, type CompareInputFormValues } from "@/lib/validation/compareSchemas";
 
 export interface CompareInputFormProps {
   onSubmit: (companyA: NseCompany, companyB: NseCompany) => void;
   isSubmitting: boolean;
+  /** Bearer token, forwarded to both CompanyAutocomplete instances -- see that component's own module docstring. */
+  accessToken: string | null;
   formError?: string;
 }
 
@@ -30,6 +39,7 @@ export interface CompareInputFormProps {
 export function CompareInputForm({
   onSubmit,
   isSubmitting,
+  accessToken,
   formError,
 }: CompareInputFormProps): JSX.Element {
   const {
@@ -40,17 +50,19 @@ export function CompareInputForm({
     resolver: zodResolver(compareInputSchema),
     defaultValues: { companyTickerA: "", companyTickerB: "" },
   });
+  const [selectedCompanyA, setSelectedCompanyA] = useState<NseCompany | null>(null);
+  const [selectedCompanyB, setSelectedCompanyB] = useState<NseCompany | null>(null);
 
   function submit(values: CompareInputFormValues): void {
-    const companyA = NSE_TOP_50.find((candidate) => candidate.ticker === values.companyTickerA);
-    const companyB = NSE_TOP_50.find((candidate) => candidate.ticker === values.companyTickerB);
-    if (!companyA || !companyB) {
-      // Unreachable in practice -- see AnalysisPage.tsx's identical guard
-      // for why: zod already required both tickers, and
-      // CompanyAutocomplete only ever writes a ticker from this list.
+    if (
+      !selectedCompanyA ||
+      !selectedCompanyB ||
+      selectedCompanyA.ticker !== values.companyTickerA ||
+      selectedCompanyB.ticker !== values.companyTickerB
+    ) {
       return;
     }
-    onSubmit(companyA, companyB);
+    onSubmit(selectedCompanyA, selectedCompanyB);
   }
 
   return (
@@ -64,41 +76,37 @@ export function CompareInputForm({
         <Controller
           control={control}
           name="companyTickerA"
-          render={({ field }) => {
-            const selected = NSE_TOP_50.find((company) => company.ticker === field.value) ?? null;
-            return (
-              <CompanyAutocomplete
-                label="Company A"
-                value={selected}
-                onChange={(company) => field.onChange(company ? company.ticker : "")}
-                options={NSE_TOP_50}
-                hint="e.g. 'TCS'"
-                {...(errors.companyTickerA?.message
-                  ? { error: errors.companyTickerA.message }
-                  : {})}
-              />
-            );
-          }}
+          render={({ field }) => (
+            <CompanyAutocomplete
+              label="Company A"
+              value={selectedCompanyA}
+              onChange={(company) => {
+                setSelectedCompanyA(company);
+                field.onChange(company ? company.ticker : "");
+              }}
+              accessToken={accessToken}
+              hint="e.g. 'TCS'"
+              {...(errors.companyTickerA?.message ? { error: errors.companyTickerA.message } : {})}
+            />
+          )}
         />
 
         <Controller
           control={control}
           name="companyTickerB"
-          render={({ field }) => {
-            const selected = NSE_TOP_50.find((company) => company.ticker === field.value) ?? null;
-            return (
-              <CompanyAutocomplete
-                label="Company B"
-                value={selected}
-                onChange={(company) => field.onChange(company ? company.ticker : "")}
-                options={NSE_TOP_50}
-                hint="e.g. 'Infosys'"
-                {...(errors.companyTickerB?.message
-                  ? { error: errors.companyTickerB.message }
-                  : {})}
-              />
-            );
-          }}
+          render={({ field }) => (
+            <CompanyAutocomplete
+              label="Company B"
+              value={selectedCompanyB}
+              onChange={(company) => {
+                setSelectedCompanyB(company);
+                field.onChange(company ? company.ticker : "");
+              }}
+              accessToken={accessToken}
+              hint="e.g. 'Infosys'"
+              {...(errors.companyTickerB?.message ? { error: errors.companyTickerB.message } : {})}
+            />
+          )}
         />
       </div>
 

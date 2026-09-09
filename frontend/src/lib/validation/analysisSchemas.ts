@@ -10,9 +10,14 @@
 // field correctly, which surfaced as `defaultValues: { company: null }`
 // failing to type-check against the zodResolver-inferred field type,
 // and a second, harder-to-read error on `handleSubmit`. A plain string
-// field has none of that trouble -- AnalysisPage.tsx looks the full
-// NseCompany back up from src/data/nseTop50.ts by ticker when it needs
-// the display name for the API calls.
+// field has none of that trouble -- AnalysisPage.tsx keeps the full
+// selected NseCompany in its own separate `selectedCompany` state
+// (set directly by CompanyAutocomplete's onChange, see that file's own
+// module docstring for why -- B5 rewired the autocomplete to search a
+// large backend universe, so a company can no longer be re-derived
+// from the small static frontend/src/data/nseTop50.ts list by ticker
+// the way it could through T-058) for the display name/exchange the
+// API calls need.
 //
 // The optional PDF is validated separately in AnalysisPage.tsx via
 // plain functions (isPdfFile / isPdfWithinSizeLimit), not folded into

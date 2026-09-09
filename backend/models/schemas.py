@@ -60,6 +60,8 @@ __all__ = [
     "ChatMessageResponse",
     "ChatMessagesResponse",
     "ChatMessagesTruncateResponse",
+    "CompanySearchResultResponse",
+    "CompanySearchResponse",
 ]
 
 # ---------------------------------------------------------------------------
@@ -1182,4 +1184,36 @@ class ChatMessagesTruncateResponse(BaseModel):
     deleted_count: int = Field(
         ge=1,
         description="Number of chat_messages rows deleted, including message_id itself",
+    )
+
+
+class CompanySearchResultResponse(BaseModel):
+    """One ranked row of GET /api/v1/companies/search (B5)."""
+
+    name: str = Field(description="Company display name")
+    ticker: str = Field(
+        description="Yahoo Finance ticker, including exchange suffix (e.g. 'TCS.NS')"
+    )
+    exchange: str = Field(description="'NSE' or 'BSE'")
+
+
+class CompanySearchResponse(BaseModel):
+    """
+    Body returned by GET /api/v1/companies/search (B5).
+
+    Same limit/offset/has_more pagination shape as every other
+    paginated list in this module, ranked by relevance to the search
+    query (best match first) -- see
+    backend.services.company_search.search_companies's own docstring
+    for the ranking rules.
+    """
+
+    items: list[CompanySearchResultResponse] = Field(
+        description="This page's results, best match first"
+    )
+    total_count: int = Field(ge=0, description="Total number of matching companies")
+    limit: int = Field(description="Page size used for this request")
+    offset: int = Field(ge=0, description="Number of rows skipped before this page")
+    has_more: bool = Field(
+        description="True when at least one further row exists beyond this page"
     )

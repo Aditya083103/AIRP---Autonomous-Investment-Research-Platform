@@ -55,6 +55,7 @@ from backend.routers import (
     auth,
     chat,
     chat_stream,
+    companies,
     documents,
     health,
     websocket,
@@ -173,6 +174,7 @@ def create_app(settings_override: Settings | None = None) -> FastAPI:
     application.include_router(accuracy.router)
     application.include_router(chat.router)
     application.include_router(chat_stream.router)
+    application.include_router(companies.router)
 
     return application
 
