@@ -46,12 +46,17 @@ import pytest  # noqa: E402
 
 from backend.agents.output_models import InvestmentDecision  # noqa: E402
 from backend.agents.portfolio_manager import (  # noqa: E402
+    _ADVERSARIAL_AGENTS,
+    _BASE_AGENT_WEIGHTS,
+    _MAX_ADVERSARIAL_WEIGHT_MULTIPLIER,
     SYSTEM_PROMPT,
     _build_key_catalysts,
     _build_key_risks,
     _build_portfolio_manager_prompt,
     _build_price_target,
+    _build_relative_price_target,
     _compute_agent_weights,
+    _data_completeness,
     _determine_time_horizon,
     _determine_verdict,
     _extract_debate_highlights,
@@ -220,6 +225,22 @@ _VALUATION_FAIR: dict[str, Any] = {
     "valuation_verdict": "fairly_valued",
     "margin_of_safety": "low",
     "summary": "Stock trades close to intrinsic value with limited margin.",
+}
+
+# B2: no DCF intrinsic value (e.g. insufficient FCF history), but peer PE
+# data is present -- shaped like a real ValuationOutput.model_dump() with
+# intrinsic_value_per_share=None.
+_VALUATION_NO_DCF_WITH_PEERS: dict[str, Any] = {
+    "intrinsic_value_per_share": None,
+    "current_price": 3800.0,
+    "upside_downside_pct": None,
+    "valuation_verdict": "fairly_valued",
+    "margin_of_safety": None,
+    "pe_ratio": 22.0,
+    "sector_avg_pe": 26.0,
+    "pb_ratio": 4.0,
+    "sector_avg_pb": 4.5,
+    "summary": "DCF unavailable; relative valuation vs. peers used instead.",
 }
 
 _DEBATE_ROUNDS_ONE: list[dict[str, Any]] = [
@@ -420,6 +441,111 @@ class TestComputeAgentWeights:
 
 
 # ---------------------------------------------------------------------------
+# Tests: _compute_agent_weights -- adversarial weight cap (bug #9, T-087)
+#
+# Reproduces the "evidence weighting" screenshot from the refinement work
+# order: Fundamental 0%, Technical 0%, News/Macro 0%, and Risk + Contrarian
+# combining to a majority share purely because the bullish research agents
+# lacked data on a cold run -- not because Risk/Contrarian said anything
+# more convincing than usual.
+# ---------------------------------------------------------------------------
+
+
+class TestComputeAgentWeightsAdversarialCap:
+    def test_adversarial_seats_capped_when_only_they_and_valuation_are_usable(
+        self,
+    ) -> None:
+        """
+        Before the fix: with fundamental/technical/macro/news all dropped
+        out, redistributing their combined 0.50 base weight over
+        {risk: 0.15, contrarian: 0.15, valuation: 0.20} (total 0.50)
+        pushes risk_officer and contrarian_investor to 0.30 each (60%
+        combined) -- a bearish-looking committee purely from data
+        dropout. After the fix, each adversarial seat is capped at
+        0.15 * 1.5 = 0.225, and the 0.15 combined excess flows to
+        valuation_agent instead.
+        """
+        weights = _compute_agent_weights(
+            fundamental={},
+            technical={},
+            sentiment={},
+            macro={},
+            risk={"risk_score": 6},
+            contrarian={"bear_conviction": 5},
+            valuation=_VALUATION_FAIR,
+        )
+        risk_cap = (
+            _BASE_AGENT_WEIGHTS["risk_officer"] * _MAX_ADVERSARIAL_WEIGHT_MULTIPLIER
+        )
+        contrarian_cap = (
+            _BASE_AGENT_WEIGHTS["contrarian_investor"]
+            * _MAX_ADVERSARIAL_WEIGHT_MULTIPLIER
+        )
+        assert weights["risk_officer"] <= risk_cap + 1e-9
+        assert weights["contrarian_investor"] <= contrarian_cap + 1e-9
+        assert weights["valuation_agent"] > weights["risk_officer"]
+        assert weights["valuation_agent"] > weights["contrarian_investor"]
+        assert sum(weights.values()) == pytest.approx(1.0, abs=1e-3)
+
+    def test_combined_adversarial_share_no_longer_majority(self) -> None:
+        """Direct regression for the observed bug: Risk + Contrarian must
+        no longer combine to a majority (>50%) of the committee weight
+        purely because the bullish agents lacked data."""
+        weights = _compute_agent_weights(
+            fundamental={},
+            technical={},
+            sentiment={},
+            macro={},
+            risk={"risk_score": 6},
+            contrarian={"bear_conviction": 5},
+            valuation=_VALUATION_FAIR,
+        )
+        combined_adversarial = sum(weights[name] for name in _ADVERSARIAL_AGENTS)
+        assert combined_adversarial < 0.5
+
+    def test_cap_not_applied_when_no_non_adversarial_agent_is_usable(self) -> None:
+        """
+        Edge case: if Risk and Contrarian are the ONLY usable agents, there
+        is nowhere to redistribute the excess without violating
+        sum(weights) == 1.0, so the cap is intentionally not enforced —
+        each still gets exactly half.
+        """
+        weights = _compute_agent_weights(
+            fundamental={},
+            technical={},
+            sentiment={},
+            macro={},
+            risk={"risk_score": 6},
+            contrarian={"bear_conviction": 5},
+            valuation={},
+        )
+        assert weights["risk_officer"] == pytest.approx(0.5, abs=1e-6)
+        assert weights["contrarian_investor"] == pytest.approx(0.5, abs=1e-6)
+        assert sum(weights.values()) == pytest.approx(1.0, abs=1e-6)
+
+    def test_cap_does_not_trigger_when_all_agents_usable(self) -> None:
+        """Sanity check: the common, healthy-data-availability case must be
+        completely unaffected by the cap (already covered by
+        TestComputeAgentWeights, restated here as an explicit cap-specific
+        regression)."""
+        weights = _compute_agent_weights(
+            _FUNDAMENTAL_STRONG,
+            _TECHNICAL_BUY_STRONG,
+            _SENTIMENT_POSITIVE,
+            _MACRO_FAVOURABLE,
+            _RISK_LOW,
+            _CONTRARIAN_MILD,
+            _VALUATION_UNDERVALUED,
+        )
+        assert weights["risk_officer"] == pytest.approx(
+            _BASE_AGENT_WEIGHTS["risk_officer"], abs=1e-6
+        )
+        assert weights["contrarian_investor"] == pytest.approx(
+            _BASE_AGENT_WEIGHTS["contrarian_investor"], abs=1e-6
+        )
+
+
+# ---------------------------------------------------------------------------
 # Tests: _determine_verdict
 # ---------------------------------------------------------------------------
 
@@ -562,6 +688,126 @@ class TestDetermineVerdict:
                 fund, tech, sent, risk, contra, val, critical_flags=[]
             )
             assert verdict in ("BUY", "HOLD", "SELL")
+
+
+# ---------------------------------------------------------------------------
+# Tests: _data_completeness / _determine_verdict data-completeness scaling
+# (bug #12, T-087) -- Section A's regression requirement: "a company with
+# genuinely strong fundamentals + undervalued + positive sentiment + low
+# risk produces BUY" AND missing research-agent data must not manufacture
+# a structurally bearish verdict via an ungrounded Risk/Contrarian penalty.
+# ---------------------------------------------------------------------------
+
+
+class TestDataCompleteness:
+    def test_full_data_is_complete(self) -> None:
+        assert _data_completeness(
+            _FUNDAMENTAL_STRONG, _TECHNICAL_BUY_STRONG, _VALUATION_UNDERVALUED
+        ) == pytest.approx(1.0)
+
+    def test_all_three_missing_is_zero(self) -> None:
+        assert _data_completeness({}, {}, {}) == pytest.approx(0.0)
+
+    def test_errored_agent_counts_as_incomplete(self) -> None:
+        errored = {**_FUNDAMENTAL_STRONG, "error": "rate limited"}
+        assert _data_completeness(
+            errored, _TECHNICAL_BUY_STRONG, _VALUATION_UNDERVALUED
+        ) == pytest.approx(2.0 / 3.0)
+
+    def test_one_of_three_present_is_one_third(self) -> None:
+        assert _data_completeness(_FUNDAMENTAL_STRONG, {}, {}) == pytest.approx(
+            1.0 / 3.0
+        )
+
+
+class TestDetermineVerdictBuyReachability:
+    def test_genuinely_strong_profile_produces_buy(self) -> None:
+        """
+        Section A's explicit regression requirement: strong fundamentals +
+        undervalued + positive sentiment + low risk must produce BUY when
+        the underlying data is actually present and genuinely bullish.
+        """
+        verdict = _determine_verdict(
+            fundamental=_FUNDAMENTAL_STRONG,
+            technical=_TECHNICAL_BUY_STRONG,
+            sentiment=_SENTIMENT_POSITIVE,
+            risk=_RISK_LOW,
+            contrarian=_CONTRARIAN_MILD,
+            valuation=_VALUATION_UNDERVALUED,
+            critical_flags=[],
+        )
+        assert verdict == "BUY"
+
+    def test_degraded_upstream_data_does_not_force_a_bearish_verdict(self) -> None:
+        """
+        Reproduces the Tata-Motors-memo failure chain directly: Fundamental,
+        Technical, and Valuation all lack data (a cold-run yFinance 429,
+        pre-hardening), while Risk Officer and Contrarian Investor still
+        render a moderately bearish opinion (their mandate doesn't stop
+        just because upstream data is missing). Pre-fix, their unscaled
+        penalty (~-1.0 combined) had nothing bullish to offset it (every
+        bullish input correctly defaults to a neutral zero for the same
+        missing-data reason) and could push the score toward SELL/HOLD
+        purely from data unavailability. Post-fix, the same Risk/Contrarian
+        penalty is scaled by completeness=0.0 -- i.e. fully discounted, an
+        evidence-backed committee treats "we don't know" as neutral, not
+        bearish -- so the verdict is exactly HOLD (the score is 0.0).
+        """
+        verdict = _determine_verdict(
+            fundamental={},
+            technical={},
+            sentiment={},
+            risk={"risk_score": 6},
+            contrarian={"bear_conviction": 6},
+            valuation={},
+            critical_flags=["Insufficient data availability"],
+        )
+        assert verdict == "HOLD"
+
+    def test_degraded_data_with_real_bullish_signal_now_reaches_buy(self) -> None:
+        """
+        The precise regression this fix targets: with fundamental/
+        technical/valuation all missing (completeness=0.0) and one
+        genuinely bullish, ungated signal present (maximally positive
+        sentiment, which does not depend on yFinance), the weighted tally
+        is exactly 1.5 -- BUY -- because the Risk/Contrarian/critical-flags
+        penalties are fully discounted by data completeness.
+
+        Proof this is a real regression, not just an assertion: recomputing
+        the SAME inputs through the pre-fix (unscaled) formula gives
+        1.5 - (6-5)*0.35 - (6-1)*0.1 - 1*0.3 = 0.35 -- HOLD, not BUY. A
+        single missing-data-driven "the committee looks skeptical" penalty
+        was enough to block BUY even though nothing in it was actually
+        evidence-backed. The completeness fix is what closes that gap.
+        """
+        verdict = _determine_verdict(
+            fundamental={},
+            technical={},
+            sentiment={"sentiment_score": 1.0},
+            risk={"risk_score": 6},
+            contrarian={"bear_conviction": 6},
+            valuation={},
+            critical_flags=["Insufficient data availability"],
+        )
+        assert verdict == "BUY"
+
+    def test_full_completeness_bearish_penalty_is_unchanged(self) -> None:
+        """
+        Regression guard in the other direction: when data completeness IS
+        1.0 (the common case), the Risk/Contrarian penalty must be exactly
+        as strong as before this fix -- completeness-scaling must not
+        soften a genuinely well-supported bearish case.
+        """
+        verdict = _determine_verdict(
+            fundamental=_FUNDAMENTAL_WEAK,
+            technical=_TECHNICAL_SELL_STRONG,
+            sentiment=_SENTIMENT_NEGATIVE,
+            risk=_RISK_HIGH,
+            contrarian=_CONTRARIAN_STRONG,
+            valuation=_VALUATION_OVERVALUED,
+            critical_flags=_RISK_HIGH["critical_flags"],
+        )
+        assert verdict == "SELL"
 
 
 # ---------------------------------------------------------------------------
@@ -774,6 +1020,98 @@ class TestBuildPriceTarget:
             {"intrinsic_value_per_share": "not-a-number"}, "12 months"
         )
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Tests: B2 -- relative price target fallback (bug #8 tail, T-087)
+#
+# Once the DCF has no intrinsic value (e.g. Section A's missing-financials
+# chain, or genuinely insufficient FCF history), the price target must
+# fall back to a peer-multiple-based relative estimate rather than the
+# flat "Not determined" placeholder -- and must never fabricate a number
+# when no usable data exists at all.
+# ---------------------------------------------------------------------------
+
+
+class TestBuildRelativePriceTarget:
+    def test_falls_back_to_pe_relative_estimate_when_intrinsic_missing(self) -> None:
+        valuation = {
+            "current_price": 1000.0,
+            "pe_ratio": 15.0,
+            "sector_avg_pe": 20.0,
+        }
+        result = _build_price_target(valuation, "12 months")
+        assert result is not None
+        # target = 1000 * (20 / 15) = 1333.33 -> rounds to 1,333
+        assert "1,333" in result
+        assert "relative estimate" in result
+        assert "P/E" in result
+
+    def test_falls_back_to_pb_when_pe_data_unavailable(self) -> None:
+        valuation = {
+            "current_price": 500.0,
+            "pb_ratio": 2.0,
+            "sector_avg_pb": 3.0,
+        }
+        result = _build_price_target(valuation, "12 months")
+        assert result is not None
+        # target = 500 * (3 / 2) = 750
+        assert "750" in result
+        assert "P/B" in result
+
+    def test_pe_takes_priority_over_pb_when_both_available(self) -> None:
+        valuation = {
+            "current_price": 1000.0,
+            "pe_ratio": 15.0,
+            "sector_avg_pe": 20.0,
+            "pb_ratio": 2.0,
+            "sector_avg_pb": 10.0,  # would imply a wildly different target
+        }
+        result = _build_price_target(valuation, "12 months")
+        assert result is not None
+        assert "1,333" in result
+        assert "P/E" in result
+
+    def test_intrinsic_value_takes_priority_over_relative_fallback(self) -> None:
+        valuation = {
+            "intrinsic_value_per_share": 4500.0,
+            "current_price": 1000.0,
+            "pe_ratio": 15.0,
+            "sector_avg_pe": 20.0,
+        }
+        result = _build_price_target(valuation, "12 months")
+        assert result is not None
+        assert "4,500" in result
+        assert "relative estimate" not in result
+
+    def test_never_fabricates_a_number_with_no_current_price(self) -> None:
+        valuation = {"pe_ratio": 15.0, "sector_avg_pe": 20.0}
+        assert _build_relative_price_target(valuation, "12 months") is None
+
+    def test_never_fabricates_a_number_with_no_multiples_at_all(self) -> None:
+        valuation = {"current_price": 1000.0}
+        assert _build_relative_price_target(valuation, "12 months") is None
+
+    def test_zero_or_negative_own_multiple_is_not_used(self) -> None:
+        valuation = {
+            "current_price": 1000.0,
+            "pe_ratio": 0.0,
+            "sector_avg_pe": 20.0,
+            "pb_ratio": -1.0,
+            "sector_avg_pb": 3.0,
+        }
+        assert _build_relative_price_target(valuation, "12 months") is None
+
+    def test_end_to_end_through_build_price_target_returns_labelled_estimate(
+        self,
+    ) -> None:
+        """Full B2 acceptance check: given a valuation dict shaped exactly
+        like ValuationOutput.model_dump() with no DCF but real peer
+        multiples, the memo-facing price target is populated, not 'Not
+        determined'."""
+        result = _build_price_target(_VALUATION_NO_DCF_WITH_PEERS, "12 months")
+        assert result is not None
+        assert result != "Not determined"
 
 
 # ---------------------------------------------------------------------------
