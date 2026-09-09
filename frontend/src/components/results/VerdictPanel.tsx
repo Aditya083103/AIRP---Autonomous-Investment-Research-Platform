@@ -7,8 +7,17 @@
 // the single most important panel on the results page -- it is
 // designed to be legible on its own even if the person never scrolls
 // to the bull/bear case or memo sections below.
+//
+// B10: this is the "reward" moment of a whole analysis run, so it gets
+// both a Reveal entrance (a satisfying fade/rise once the committee
+// finally lands on a verdict, rather than the memo just appearing
+// instantly) and TiltCard's pointer-tracked 3D tilt -- the work order's
+// own "subtle 3D tilt/parallax on key cards" language fits this card
+// specifically better than almost anywhere else in the app.
 
+import { Reveal } from "@/components/motion/Reveal";
 import { ConvictionGauge } from "@/components/results/ConvictionGauge";
+import { TiltCard } from "@/components/three/TiltCard";
 import { Badge, Card, type BadgeTone } from "@/components/ui";
 import { type InvestmentDecisionResponse, type Verdict } from "@/types/analysis";
 
@@ -25,33 +34,41 @@ const VERDICT_TONE: Record<Verdict, BadgeTone> = {
 /** Renders the Portfolio Manager's final verdict, conviction gauge, price target, and time horizon. */
 export function VerdictPanel({ decision }: VerdictPanelProps): JSX.Element {
   return (
-    <Card data-testid="verdict-panel">
-      <div className="grid gap-6 sm:grid-cols-[220px,1fr] sm:items-center">
-        <ConvictionGauge score={decision.conviction_score} verdict={decision.verdict} />
+    <Reveal>
+      <TiltCard>
+        <Card data-testid="verdict-panel">
+          <div className="grid gap-6 sm:grid-cols-[220px,1fr] sm:items-center">
+            <ConvictionGauge score={decision.conviction_score} verdict={decision.verdict} />
 
-        <div>
-          <Badge tone={VERDICT_TONE[decision.verdict]} className="px-3 py-1 text-sm">
-            {decision.verdict}
-          </Badge>
-
-          {decision.summary ? (
-            <p className="mt-3 text-sm leading-relaxed text-ink">{decision.summary}</p>
-          ) : null}
-
-          <dl className="mt-4 grid grid-cols-2 gap-4">
             <div>
-              <dt className="font-mono text-xs uppercase tracking-wide text-muted">Price target</dt>
-              <dd className="mt-1 font-mono text-sm text-ink">
-                {decision.price_target ?? "Not determined"}
-              </dd>
+              <Badge tone={VERDICT_TONE[decision.verdict]} className="px-3 py-1 text-sm">
+                {decision.verdict}
+              </Badge>
+
+              {decision.summary ? (
+                <p className="mt-3 text-sm leading-relaxed text-ink">{decision.summary}</p>
+              ) : null}
+
+              <dl className="mt-4 grid grid-cols-2 gap-4">
+                <div>
+                  <dt className="font-mono text-xs uppercase tracking-wide text-muted">
+                    Price target
+                  </dt>
+                  <dd className="mt-1 font-mono text-sm text-ink">
+                    {decision.price_target ?? "Not determined"}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="font-mono text-xs uppercase tracking-wide text-muted">
+                    Time horizon
+                  </dt>
+                  <dd className="mt-1 font-mono text-sm text-ink">{decision.time_horizon}</dd>
+                </div>
+              </dl>
             </div>
-            <div>
-              <dt className="font-mono text-xs uppercase tracking-wide text-muted">Time horizon</dt>
-              <dd className="mt-1 font-mono text-sm text-ink">{decision.time_horizon}</dd>
-            </div>
-          </dl>
-        </div>
-      </div>
-    </Card>
+          </div>
+        </Card>
+      </TiltCard>
+    </Reveal>
   );
 }
