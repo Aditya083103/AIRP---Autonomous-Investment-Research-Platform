@@ -38,7 +38,9 @@ from unittest.mock import MagicMock, patch  # noqa: E402
 
 import pandas as pd  # noqa: E402
 import pytest  # noqa: E402
+from yfinance.exceptions import YFRateLimitError  # noqa: E402
 
+from backend.tools import market_data  # noqa: E402
 from backend.tools.financials import (  # noqa: E402
     UNITS_TO_CRORES,
     USD_TO_INR,
@@ -47,6 +49,7 @@ from backend.tools.financials import (  # noqa: E402
     _build_balance_sheet,
     _build_cash_flow,
     _build_income_statement,
+    _fetch_financials_cached,
     _fetch_financials_from_yfinance,
     _fiscal_year_label,
     _safe_get,
@@ -635,3 +638,158 @@ class TestFinancialStatementsValidation:
         )
         assert model.ticker == "TCS.NS"
         assert model.data_warnings == []
+
+
+# ---------------------------------------------------------------------------
+# Tests: retry hardening + caching (T-087, Section A / B4 proof)
+#
+# Before this fix, financials.py made NO retry attempt on a transient
+# yFinance failure AND had no @cached decorator at all (every single call
+# re-hit yFinance live). Both are root causes of "No financial data found"
+# on the revenue/profit chart (bug #10 / B4).
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _no_retry_sleep() -> None:
+    """Eliminate tenacity's real back-off sleep for this module's tests."""
+    market_data._call_with_retry.retry.sleep = lambda seconds: None
+
+
+class TestFinancialsRetryRecovery:
+    def test_transient_rate_limit_on_financials_recovers(self) -> None:
+        """
+        Simulates a cold-run 429 on the income-statement property access,
+        recovering on retry -- the exact chain B4 exists to fix for the
+        revenue/profit trend chart.
+        """
+        income_df = _make_income_df()
+        calls = {"n": 0}
+
+        def flaky_financials() -> pd.DataFrame:
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise YFRateLimitError()
+            return income_df
+
+        mock = MagicMock()
+        type(mock).financials = property(lambda self: flaky_financials())
+        mock.balance_sheet = _make_balance_df()
+        mock.cashflow = _make_cashflow_df()
+        mock.info = {
+            "longName": "Tata Consultancy Services Limited",
+            "financialCurrency": "INR",
+        }
+
+        with patch("backend.tools.market_data.yf.Ticker", return_value=mock):
+            result = _fetch_financials_from_yfinance("TCS.NS")
+
+        assert isinstance(result, FinancialStatements)
+        assert result.income_statement[0].revenue_crores == pytest.approx(
+            240_000.0, abs=1.0
+        )
+        assert calls["n"] == 3
+
+    def test_persistent_failure_still_returns_error_dict_not_a_crash(self) -> None:
+        mock = MagicMock()
+        type(mock).financials = property(
+            lambda self: (_ for _ in ()).throw(YFRateLimitError())
+        )
+        type(mock).balance_sheet = property(
+            lambda self: (_ for _ in ()).throw(YFRateLimitError())
+        )
+        type(mock).cashflow = property(
+            lambda self: (_ for _ in ()).throw(YFRateLimitError())
+        )
+
+        with patch("backend.tools.market_data.yf.Ticker", return_value=mock):
+            result = fetch_financials.invoke({"ticker": "TCS.NS"})
+
+        assert result["error"] == "unexpected_error"
+
+
+class TestFinancialsCaching:
+    """
+    T-087: financials.py previously had NO @cached decorator -- every
+    fetch_financials/fetch_income_statement/fetch_balance_sheet/
+    fetch_cash_flow call re-hit yFinance live. _fetch_financials_cached
+    now wraps _fetch_financials_from_yfinance the same way stock_price.py
+    and ratios.py already did.
+    """
+
+    def test_fetch_financials_routes_through_the_cached_wrapper(self) -> None:
+        mock = _make_ticker_mock()
+        with (
+            patch("backend.tools.market_data.yf.Ticker", return_value=mock),
+            patch(
+                "backend.tools.financials._fetch_financials_cached",
+                wraps=_fetch_financials_cached,
+            ) as spy,
+        ):
+            result = fetch_financials.invoke({"ticker": "TCS.NS"})
+
+        spy.assert_called_once_with(ticker="TCS.NS")
+        assert "error" not in result
+
+    def test_single_statement_tools_route_through_the_cached_wrapper(self) -> None:
+        mock = _make_ticker_mock()
+        with (
+            patch("backend.tools.market_data.yf.Ticker", return_value=mock),
+            patch(
+                "backend.tools.financials._fetch_financials_cached",
+                wraps=_fetch_financials_cached,
+            ) as spy,
+        ):
+            fetch_income_statement.invoke({"ticker": "TCS.NS"})
+            fetch_balance_sheet.invoke({"ticker": "TCS.NS"})
+            fetch_cash_flow.invoke({"ticker": "TCS.NS"})
+
+        assert spy.call_count == 3
+
+    def test_cache_hit_skips_the_live_yfinance_call_entirely(self) -> None:
+        cached_payload = {
+            "ticker": "TCS.NS",
+            "company_name": "Tata Consultancy Services Limited",
+            "currency_reported": "INR",
+            "currency_output": "INR",
+            "years_available": 4,
+            "income_statement": [{"fiscal_year": "FY 2024", "revenue_crores": 1.0}],
+            "balance_sheet": [],
+            "cash_flow": [],
+            "fetched_at": "2026-01-01T00:00:00",
+            "source": "yfinance",
+            "data_warnings": [],
+        }
+
+        with (
+            patch(
+                "backend.tools.cache.cache_get_json",
+                return_value=cached_payload,
+            ),
+            patch("backend.tools.market_data.yf.Ticker") as mock_ctor,
+        ):
+            result = fetch_financials.invoke({"ticker": "TCS.NS"})
+
+        mock_ctor.assert_not_called()
+        assert result == cached_payload
+
+    def test_income_statement_shape_matches_pre_cache_contract(self) -> None:
+        """The cached path's dict shape for fetch_income_statement must be
+        identical to the pre-T-087 attribute-based construction."""
+        mock = _make_ticker_mock()
+        with patch("backend.tools.market_data.yf.Ticker", return_value=mock):
+            result = fetch_income_statement.invoke({"ticker": "TCS.NS"})
+
+        assert set(result.keys()) == {
+            "ticker",
+            "currency_reported",
+            "currency_output",
+            "years_available",
+            "income_statement",
+            "data_warnings",
+            "fetched_at",
+            "source",
+        }
+        assert result["income_statement"][0]["revenue_crores"] == pytest.approx(
+            240_000.0, abs=1.0
+        )

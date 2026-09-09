@@ -59,10 +59,25 @@ Usage (inside a tool):
 import logging
 import threading
 import time
+from typing import Any, Callable, TypeVar, cast
 
+import pandas as pd
+import requests
+from tenacity import (
+    before_sleep_log,
+    retry,
+    retry_if_exception,
+    stop_after_attempt,
+    wait_exponential_jitter,
+)
 import yfinance as yf
+from yfinance.exceptions import YFRateLimitError
+
+from backend.services.rate_limiter import yfinance_throttle
 
 logger = logging.getLogger(__name__)
+
+_T = TypeVar("_T")
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -178,8 +193,126 @@ def shared_ticker_cache_size() -> int:
         return len(_ticker_cache)
 
 
+# ---------------------------------------------------------------------------
+# Retry-hardened yFinance accessors (Section A data-layer hardening, T-087)
+# ---------------------------------------------------------------------------
+#
+# Root cause this section fixes: stock_price.py and financials.py used to
+# access yf.Ticker's .history()/.info/.financials/.balance_sheet/.cashflow
+# with no retry/back-off at all. On a cold run yFinance returns HTTP 429
+# ("Too Many Requests") or an empty/partial payload, which cascaded into
+# degraded Fundamental/Technical/Valuation output, a skewed committee
+# weighting (portfolio_manager._compute_agent_weights), a verdict that
+# could never reach BUY (portfolio_manager._determine_verdict), and a
+# price target that was always "Not determined" -- see this project's
+# refinement work order, Section A, for the full failure chain.
+#
+# These wrapper functions centralise the fix in the one module every tool
+# (stock_price.py, financials.py, ratios.py) already funnels its yfinance
+# access through via get_shared_ticker() above, mirroring the retry
+# pattern already used in backend/tools/news.py
+# (retry_if_exception_type/wait_exponential/before_sleep_log) but keyed on
+# yFinance's own exceptions plus the HTTP status codes Section A calls out
+# (429/403/503) rather than NewsAPI's.
+
+# Retry policy: a bit more patient than news.py's (3 attempts, 2s-60s)
+# because yFinance's rate limiting is typically shorter-lived and this
+# path also has the process-wide throttle above reducing how often it
+# gets hit in the first place. wait_exponential_jitter adds randomised
+# jitter on top of the exponential back-off so multiple retrying agents
+# don't all wake up and retry in lockstep.
+_YF_RETRY_ATTEMPTS: int = 4
+_YF_RETRY_WAIT_INITIAL_SECONDS: float = 2.0
+_YF_RETRY_WAIT_MAX_SECONDS: float = 30.0
+
+# HTTP status codes worth retrying: 429 (rate limited), 403 (Yahoo
+# sometimes returns this for the same throttling condition instead of
+# 429), 503 (upstream temporarily unavailable).
+_RETRYABLE_HTTP_STATUS_CODES: frozenset[int] = frozenset({429, 403, 503})
+
+
+def _is_retryable_yfinance_error(exc: BaseException) -> bool:
+    """
+    True for exceptions worth retrying: yFinance's own rate-limit
+    exception, a timeout/connection error, or an HTTPError carrying one of
+    _RETRYABLE_HTTP_STATUS_CODES. False for everything else (e.g. a
+    genuinely invalid ticker, a programming error) so those fail fast
+    instead of burning 4 retries on something back-off cannot fix.
+    """
+    if isinstance(exc, YFRateLimitError):
+        return True
+    if isinstance(exc, (requests.Timeout, requests.ConnectionError)):
+        return True
+    if isinstance(exc, requests.HTTPError):
+        response = getattr(exc, "response", None)
+        status_code = getattr(response, "status_code", None)
+        return status_code in _RETRYABLE_HTTP_STATUS_CODES
+    return False
+
+
+@retry(
+    retry=retry_if_exception(_is_retryable_yfinance_error),
+    wait=wait_exponential_jitter(
+        initial=_YF_RETRY_WAIT_INITIAL_SECONDS, max=_YF_RETRY_WAIT_MAX_SECONDS
+    ),
+    stop=stop_after_attempt(_YF_RETRY_ATTEMPTS),
+    before_sleep=before_sleep_log(logger, logging.WARNING),
+    reraise=True,
+)
+def _call_with_retry(fn: Callable[[], _T]) -> _T:
+    """
+    Run ``fn`` inside the process-wide yFinance concurrency throttle, with
+    tenacity retry + exponential back-off + jitter on transient failures.
+
+    ``fn`` takes no arguments -- callers pass a zero-arg closure (or bind
+    args via a lambda) so this helper stays generic across .history(),
+    .info, .financials, .balance_sheet, and .cashflow, which have
+    different call shapes (a method call vs. a bare property access).
+    """
+    with yfinance_throttle.acquire():
+        return fn()
+
+
+def fetch_history(
+    yf_ticker: yf.Ticker, period: str, auto_adjust: bool = True
+) -> pd.DataFrame:
+    """Retry-hardened wrapper around ``yf.Ticker.history()``."""
+    return cast(
+        pd.DataFrame,
+        _call_with_retry(
+            lambda: yf_ticker.history(period=period, auto_adjust=auto_adjust)
+        ),
+    )
+
+
+def fetch_info(yf_ticker: yf.Ticker) -> dict[str, Any]:
+    """Retry-hardened wrapper around the ``yf.Ticker.info`` property."""
+    info = cast(dict[str, Any], _call_with_retry(lambda: yf_ticker.info))
+    return info or {}
+
+
+def fetch_income_statement_df(yf_ticker: yf.Ticker) -> pd.DataFrame:
+    """Retry-hardened wrapper around the ``yf.Ticker.financials`` property."""
+    return cast(pd.DataFrame, _call_with_retry(lambda: yf_ticker.financials))
+
+
+def fetch_balance_sheet_df(yf_ticker: yf.Ticker) -> pd.DataFrame:
+    """Retry-hardened wrapper around the ``yf.Ticker.balance_sheet`` property."""
+    return cast(pd.DataFrame, _call_with_retry(lambda: yf_ticker.balance_sheet))
+
+
+def fetch_cashflow_df(yf_ticker: yf.Ticker) -> pd.DataFrame:
+    """Retry-hardened wrapper around the ``yf.Ticker.cashflow`` property."""
+    return cast(pd.DataFrame, _call_with_retry(lambda: yf_ticker.cashflow))
+
+
 __all__ = [
     "get_shared_ticker",
     "reset_shared_ticker_cache",
     "shared_ticker_cache_size",
+    "fetch_history",
+    "fetch_info",
+    "fetch_income_statement_df",
+    "fetch_balance_sheet_df",
+    "fetch_cashflow_df",
 ]

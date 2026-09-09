@@ -66,9 +66,13 @@ logger = logging.getLogger(__name__)
 
 try:
     from backend.db.redis_client import (
+        FINANCIALS_STALE_TTL,
+        FINANCIALS_TTL,
         MACRO_TTL,
         NEWS_TTL,
+        RATIOS_STALE_TTL,
         RATIOS_TTL,
+        STOCK_STALE_TTL,
         STOCK_TTL,
         get_redis_client,
         reset_redis_client,
@@ -89,6 +93,10 @@ except ImportError:
     NEWS_TTL = 3_600
     RATIOS_TTL = 3_600
     MACRO_TTL = 86_400
+    FINANCIALS_TTL = 3_600
+    STOCK_STALE_TTL = 3 * 86_400
+    FINANCIALS_STALE_TTL = 7 * 86_400
+    RATIOS_STALE_TTL = 7 * 86_400
 
     def get_client() -> redis.Redis | None:
         """Fallback get_client when redis_client module is unavailable."""
@@ -108,6 +116,10 @@ __all__ = [
     "NEWS_TTL",
     "RATIOS_TTL",
     "MACRO_TTL",
+    "FINANCIALS_TTL",
+    "STOCK_STALE_TTL",
+    "FINANCIALS_STALE_TTL",
+    "RATIOS_STALE_TTL",
     "get_client",
     "reset_client",
     "cache_get_json",
@@ -187,7 +199,9 @@ def cache_set_json(key: str, value: dict[str, Any], ttl_seconds: int) -> bool:
 _FuncT = Callable[..., dict[str, Any]]
 
 
-def cached(*, key: str, ttl: int) -> Callable[[_FuncT], _FuncT]:
+def cached(
+    *, key: str, ttl: int, stale_ttl: int | None = None
+) -> Callable[[_FuncT], _FuncT]:
     """
     Decorator that wraps a data-fetch function with a Redis read-through cache.
 
@@ -198,18 +212,34 @@ def cached(*, key: str, ttl: int) -> Callable[[_FuncT], _FuncT]:
         are resolved against the function's bound arguments at call time.
     ttl:
         Time-to-live in seconds.  Use the TTL constants from this module
-        (STOCK_TTL, NEWS_TTL, RATIOS_TTL, MACRO_TTL).
+        (STOCK_TTL, NEWS_TTL, RATIOS_TTL, MACRO_TTL, FINANCIALS_TTL).
+    stale_ttl:
+        Optional, much longer TTL (e.g. STOCK_STALE_TTL). When set, every
+        successful fetch is ALSO written under a second ``{key}:stale``
+        entry with this TTL. If a later call's live fetch raises (e.g.
+        yFinance rate-limited even after tenacity's retries in
+        backend.tools.market_data are exhausted), that stale copy is
+        returned instead of propagating the exception — with a
+        ``"stale": True`` marker injected — so a degraded-but-real chart
+        beats a blank one (T-087 / Section A "serve stale-but-valid cache
+        on failure"). When ``stale_ttl`` is omitted (the default) this
+        decorator behaves exactly as before: a fetch failure propagates.
 
     Behaviour
     ---------
     * Cache hit  → return the cached dict immediately (no network call).
     * Cache miss → call the wrapped function, cache the result, return it.
+    * Cache miss + fetch raises + a stale copy exists → return the stale
+      copy (marked ``stale: True``) instead of raising.
+    * Cache miss + fetch raises + no stale copy exists → re-raise, exactly
+      as before this parameter existed.
     * Redis unavailable → call the wrapped function normally (no caching).
-    * A result containing an ``"error"`` key is NOT cached.
+    * A result containing an ``"error"`` key is NOT cached (fresh or stale).
 
     Example
     -------
-        @cached(key="airp:stock:{ticker}:{period}", ttl=STOCK_TTL)
+        @cached(key="airp:stock:{ticker}:{period}", ttl=STOCK_TTL,
+                stale_ttl=STOCK_STALE_TTL)
         def _fetch_stock_data(ticker: str, period: str) -> dict[str, Any]:
             ...  # yFinance call
     """
@@ -232,6 +262,8 @@ def cached(*, key: str, ttl: int) -> Callable[[_FuncT], _FuncT]:
                 )
                 return func(*args, **kwargs)
 
+            stale_key = f"{resolved_key}:stale"
+
             cached_value = cache_get_json(resolved_key)
             if cached_value is not None:
                 logger.debug("Cache hit: %s", resolved_key)
@@ -239,10 +271,28 @@ def cached(*, key: str, ttl: int) -> Callable[[_FuncT], _FuncT]:
 
             logger.debug("Cache miss: %s", resolved_key)
 
-            result: dict[str, Any] = func(*args, **kwargs)
+            try:
+                result: dict[str, Any] = func(*args, **kwargs)
+            except Exception as exc:
+                if stale_ttl is not None:
+                    stale_value = cache_get_json(stale_key)
+                    if stale_value is not None:
+                        logger.warning(
+                            "Live fetch failed for %s (%s) — serving stale "
+                            "cache from %s instead of raising",
+                            resolved_key,
+                            exc,
+                            stale_key,
+                        )
+                        served = dict(stale_value)
+                        served["stale"] = True
+                        return served
+                raise
 
             if "error" not in result:
                 cache_set_json(resolved_key, result, ttl)
+                if stale_ttl is not None:
+                    cache_set_json(stale_key, result, stale_ttl)
 
             return result
 

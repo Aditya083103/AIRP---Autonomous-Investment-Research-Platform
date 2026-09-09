@@ -33,7 +33,9 @@ from unittest.mock import MagicMock, patch  # noqa: E402
 
 import pandas as pd  # noqa: E402
 import pytest  # noqa: E402
+from yfinance.exceptions import YFRateLimitError  # noqa: E402
 
+from backend.tools import market_data  # noqa: E402
 from backend.tools.stock_price import (  # noqa: E402
     OHLCVRecord,
     StockPrice,
@@ -487,3 +489,88 @@ class TestStockPriceModelValidation:
             fetched_at=datetime.utcnow(),
         )
         assert model.period == "10y"
+
+
+# ---------------------------------------------------------------------------
+# Tests: retry hardening (T-087, Section A / B4 proof) — a transient
+# yFinance failure must NOT surface as "no price data" once retries kick
+# in. This is the exact failure chain B4 exists to fix: the price-history
+# chart must populate once the underlying tool call recovers.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _no_retry_sleep() -> None:
+    """Eliminate tenacity's real back-off sleep for this module's tests."""
+    market_data._call_with_retry.retry.sleep = lambda seconds: None
+
+
+class TestFetchFromYfinanceRetryRecovery:
+    def test_transient_rate_limit_recovers_and_returns_stock_price(self) -> None:
+        """
+        Simulates the exact Section A failure chain: yFinance returns 429
+        on the first two attempts (a cold-run rate limit), then succeeds.
+        Before the retry hardening, this would have propagated
+        immediately as a bare exception -> fetch_stock_price's generic
+        except-Exception branch -> {"error": "unexpected_error"} -> a
+        blank price chart. After the fix, the caller sees a normal,
+        successful StockPrice with no retry-related symptoms at all.
+        """
+        hist_df = _make_hist_df(260)
+        calls = {"n": 0}
+
+        def flaky_history(*args: Any, **kwargs: Any) -> pd.DataFrame:
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise YFRateLimitError()
+            return hist_df
+
+        mock = MagicMock()
+        mock.history.side_effect = flaky_history
+        mock.info = {
+            "longName": "Tata Consultancy Services Limited",
+            "exchange": "NSE",
+            "currency": "INR",
+        }
+
+        with patch("backend.tools.market_data.yf.Ticker", return_value=mock):
+            result = _fetch_from_yfinance("TCS.NS", "1y")
+
+        assert isinstance(result, StockPrice)
+        assert result.data_points > 0
+        assert calls["n"] == 3
+
+    def test_tool_level_recovery_returns_no_error_dict(self) -> None:
+        """Same recovery, exercised through the public fetch_stock_price
+        tool (the exact call path the Technical Analyst and the charts
+        service use) -- must return a clean dict, no 'error' key."""
+        hist_df = _make_hist_df(260)
+        calls = {"n": 0}
+
+        def flaky_history(*args: Any, **kwargs: Any) -> pd.DataFrame:
+            calls["n"] += 1
+            if calls["n"] < 2:
+                raise YFRateLimitError()
+            return hist_df
+
+        mock = MagicMock()
+        mock.history.side_effect = flaky_history
+        mock.info = {"longName": "TCS", "exchange": "NSE", "currency": "INR"}
+
+        with patch("backend.tools.market_data.yf.Ticker", return_value=mock):
+            result = fetch_stock_price.invoke({"ticker": "TCS.NS", "period": "1y"})
+
+        assert "error" not in result
+        assert result["ohlcv"]
+
+    def test_persistent_rate_limit_still_returns_error_dict_not_a_crash(self) -> None:
+        """When every retry attempt is exhausted, the tool must still
+        degrade to the existing error-dict contract rather than raising
+        an unhandled exception up through the LangGraph node."""
+        mock = MagicMock()
+        mock.history.side_effect = YFRateLimitError()
+
+        with patch("backend.tools.market_data.yf.Ticker", return_value=mock):
+            result = fetch_stock_price.invoke({"ticker": "TCS.NS", "period": "1y"})
+
+        assert result["error"] == "unexpected_error"
