@@ -9,7 +9,16 @@
 // overall progress bar driven by the stream's own progress_percent, so
 // a stalled/dropped connection is visibly different from "the pipeline
 // is just still running."
+//
+// B10: each card fades/rises in via Reveal, staggered by its seat
+// number (not its position within its own round's grid) so the cascade
+// reads as one continuous roll call across all three rounds rather than
+// three independent ones restarting from zero. AgentCard.tsx separately
+// animates each card's own internal state transitions (waiting ->
+// thinking -> complete/failed) -- Reveal here only covers a card's
+// first entrance into the DOM.
 
+import { Reveal } from "@/components/motion/Reveal";
 import { AgentCard } from "@/components/progress/AgentCard";
 import { ProgressBar, Spinner } from "@/components/ui";
 import {
@@ -95,7 +104,9 @@ export function AgentProgressBoard({
               {cards
                 .filter((card) => card.round === round)
                 .map((card) => (
-                  <AgentCard key={card.nodeName} agent={card} />
+                  <Reveal key={card.nodeName} index={card.seat - 1} className="h-full">
+                    <AgentCard agent={card} />
+                  </Reveal>
                 ))}
             </div>
           </div>
