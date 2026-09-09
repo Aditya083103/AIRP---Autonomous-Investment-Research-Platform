@@ -2,16 +2,19 @@
 // AIRP -- animated KPI number counter (B10)
 //
 // The work order's "animated number counters on KPIs" micro-interaction:
-// tweens the displayed text from its previous value to `value` using
-// framer-motion's imperative `animate()` (not the declarative JSX
-// `animate` prop -- there is no motion.div to attach it to here, this
-// renders a plain <span> of formatted text, matching how every KPI tile
-// in this codebase already renders its number, e.g.
-// AccuracySummaryStats.tsx). `format` lets each caller keep its own
-// existing formatting convention (percentages, toLocaleString counts, a
-// bare "/10" score) rather than this component inventing a new one.
+// counts up from 0 to `value` on mount -- the same "animate in from an
+// empty state" pattern ConvictionGauge.tsx already establishes for its
+// gauge arc -- then smoothly tweens to each subsequent `value` change
+// from wherever it currently sits, using framer-motion's imperative
+// `animate()` (not the declarative JSX `animate` prop -- there is no
+// motion.div to attach it to here, this renders a plain <span> of
+// formatted text, matching how every KPI tile in this codebase already
+// renders its number, e.g. AccuracySummaryStats.tsx). `format` lets each
+// caller keep its own existing formatting convention (percentages,
+// toLocaleString counts, a bare "/10" score) rather than this component
+// inventing a new one.
 //
-// Jumps straight to the final formatted value with no animation under
+// Jumps straight to the final formatted value with no count-up under
 // usePrefersReducedMotion(), per the work order's explicit accessibility
 // constraint.
 
@@ -21,7 +24,7 @@ import { useEffect, useState } from "react";
 import { usePrefersReducedMotion } from "@/hooks/usePrefersReducedMotion";
 
 export interface AnimatedNumberProps {
-  /** The number to display. Changing this re-tweens from the previously displayed value. */
+  /** The number to display. Animates up from 0 on mount, then tweens to each new value. */
   value: number;
   /** Formats the (possibly fractional, mid-tween) number for display. Defaults to Math.round + toLocaleString. */
   format?: (value: number) => string;
@@ -34,15 +37,15 @@ function defaultFormat(value: number): string {
   return Math.round(value).toLocaleString("en-IN");
 }
 
-/** Tweens its displayed text from the previous `value` to the new one, formatted by `format`. */
+/** Counts up from 0 on mount, then tweens to each new `value`. Formatted by `format`. */
 export function AnimatedNumber({
   value,
   format = defaultFormat,
   className,
 }: AnimatedNumberProps): JSX.Element {
   const prefersReducedMotion = usePrefersReducedMotion();
-  const motionValue = useMotionValue(value);
-  const [displayText, setDisplayText] = useState(() => format(value));
+  const motionValue = useMotionValue(prefersReducedMotion ? value : 0);
+  const [displayText, setDisplayText] = useState(() => format(prefersReducedMotion ? value : 0));
 
   useEffect(() => {
     if (prefersReducedMotion) {

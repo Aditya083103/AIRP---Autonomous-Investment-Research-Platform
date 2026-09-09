@@ -11,6 +11,13 @@
 // the task description's wording. A per-agent Risk Officer score exists
 // only in the full GET /.../result payload (T-061's Results page), not
 // in this lightweight history list.
+//
+// B11: the root element carries data-testid="history-table" -- once
+// DashboardKpiRow.tsx started surfacing the same real company
+// name/verdict text (its "most recent verdict" tile) above this table,
+// a plain screen.getByText("Infosys")-style query became ambiguous
+// between the two; DashboardPage.test.tsx scopes its own queries to
+// this testid where that collision applies.
 
 import { Link } from "react-router-dom";
 
@@ -31,7 +38,7 @@ function formatDate(iso: string): string {
 
 export function HistoryTable({ entries }: HistoryTableProps): JSX.Element {
   return (
-    <div className="overflow-x-auto">
+    <div className="overflow-x-auto" data-testid="history-table">
       <table className="w-full min-w-[640px] border-collapse text-sm">
         <thead>
           <tr className="border-b border-line text-left text-xs uppercase tracking-wide text-muted">
