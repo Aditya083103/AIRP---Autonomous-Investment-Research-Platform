@@ -48,3 +48,31 @@ export const registerSchema = z
   });
 
 export type RegisterFormValues = z.infer<typeof registerSchema>;
+
+// (B6) "Forgot password?" -- just the email, same field as loginSchema's.
+export const forgotPasswordSchema = z.object({
+  email: emailField,
+});
+
+export type ForgotPasswordFormValues = z.infer<typeof forgotPasswordSchema>;
+
+// (B6) The confirm/set-new-password page reached via the emailed link.
+// Same password length bounds + confirm-match shape as registerSchema,
+// minus displayName (irrelevant here) -- token itself is read from the
+// URL by ResetPasswordPage, not entered by the person, so it is not a
+// form field.
+export const resetPasswordSchema = z
+  .object({
+    newPassword: z
+      .string()
+      .min(PASSWORD_MIN_LENGTH, `Password must be at least ${PASSWORD_MIN_LENGTH} characters.`)
+      .max(PASSWORD_MAX_LENGTH, `Password must be ${PASSWORD_MAX_LENGTH} characters or fewer.`)
+      .refine((value) => value.trim().length > 0, "Password must not be blank."),
+    confirmNewPassword: z.string().min(1, "Confirm your new password."),
+  })
+  .refine((values) => values.newPassword === values.confirmNewPassword, {
+    message: "Passwords do not match.",
+    path: ["confirmNewPassword"],
+  });
+
+export type ResetPasswordFormValues = z.infer<typeof resetPasswordSchema>;

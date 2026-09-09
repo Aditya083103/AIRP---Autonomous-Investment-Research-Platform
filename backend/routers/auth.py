@@ -1,8 +1,9 @@
 # backend/routers/auth.py
 """
-AIRP -- Auth Router (T-046, extended in T-056)
+AIRP -- Auth Router (T-046, extended in T-056 and B6)
 
-POST /auth/register, POST /auth/login, POST /auth/logout, GET /auth/me.
+POST /auth/register, POST /auth/login, POST /auth/logout, GET /auth/me,
+POST /auth/password-reset/request, POST /auth/password-reset/confirm.
 
 Acceptance criteria (from task spec):
   * Register -> login -> access protected route works end-to-end
@@ -30,7 +31,29 @@ a page refresh can silently restore a session without JS ever holding
 the token) -- that consumption side is intentionally NOT implemented
 here to avoid changing get_current_user's contract (and every existing
 test that calls it directly) inside a frontend-focused task.
+
+B6: POST /auth/password-reset/request always returns 200
+------------------------------------------------------------------------
+Bug #2 (refinement work order): there was no "forgot password" flow at
+all. POST /auth/password-reset/request returns the SAME 200 response
+(PasswordResetRequestResponse's own default generic message) whether
+or not ``email`` matches a real, active account -- backend.services.
+password_reset.create_password_reset_request already returns None
+rather than raising for "no such user" specifically so this handler
+never has anything to branch on that would let a caller (or an
+attacker enumerating registered emails) tell the two cases apart.
+
+When a real user IS found, the reset link is sent via
+backend.services.email_service.send_password_reset_email if
+``settings.email_service_configured``; otherwise it is LOGGED (at INFO)
+for local/staging developer convenience when ENVIRONMENT is not
+'production', or logged as an operator-facing WARNING with the token
+itself withheld when it IS production (no reset-token secrets in
+production logs, ever) -- see the request handler's own inline
+comments for the exact three-way branch.
 """
+
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import select
@@ -43,14 +66,25 @@ from backend.dependencies.auth import get_current_user
 from backend.dependencies.common import get_settings_dependency
 from backend.models.orm import User
 from backend.models.schemas import (
+    PasswordResetConfirmRequest,
+    PasswordResetConfirmResponse,
+    PasswordResetRequestRequest,
+    PasswordResetRequestResponse,
     TokenResponse,
     UserLoginRequest,
     UserRegisterRequest,
     UserResponse,
 )
 from backend.services.auth import create_access_token, hash_password, verify_password
+from backend.services.email_service import send_password_reset_email
+from backend.services.password_reset import (
+    InvalidOrExpiredResetTokenError,
+    confirm_password_reset,
+    create_password_reset_request,
+)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+logger = logging.getLogger(__name__)
 
 #: Name of the httpOnly cookie set by register()/login() and cleared by
 #: logout(). Not read by any dependency yet (see module docstring) --
@@ -151,7 +185,9 @@ async def register(
         ) from None
     await session.refresh(user)
 
-    access_token, expires_in = create_access_token(user.id, settings=settings)
+    access_token, expires_in = create_access_token(
+        user.id, settings=settings, token_version=user.token_version
+    )
     _set_access_token_cookie(
         response,
         access_token=access_token,
@@ -200,7 +236,9 @@ async def login(
     if not user.is_active:
         raise invalid_credentials
 
-    access_token, expires_in = create_access_token(user.id, settings=settings)
+    access_token, expires_in = create_access_token(
+        user.id, settings=settings, token_version=user.token_version
+    )
     _set_access_token_cookie(
         response,
         access_token=access_token,
@@ -256,3 +294,99 @@ async def read_current_user(
     current_user: User = Depends(get_current_user),
 ) -> UserResponse:
     return UserResponse.model_validate(current_user)
+
+
+# ---------------------------------------------------------------------------
+# POST /auth/password-reset/request
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/password-reset/request",
+    response_model=PasswordResetRequestResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Request a password-reset link",
+    description=(
+        "Always returns 200 with the same generic message, whether or "
+        "not `email` matches a real, active account -- see this "
+        "router's own module docstring for why. If it does match, a "
+        "single-use, expiring reset link is emailed (or logged, in a "
+        "non-production environment with no email service configured)."
+    ),
+)
+async def request_password_reset(
+    body: PasswordResetRequestRequest,
+    session: AsyncSession = Depends(get_async_session),
+    settings: Settings = Depends(get_settings_dependency),
+) -> PasswordResetRequestResponse:
+    result = await create_password_reset_request(session, body.email, settings)
+
+    if result is not None:
+        base_url = settings.frontend_base_url.rstrip("/")
+        reset_url = f"{base_url}/reset-password?token={result.raw_token}"
+
+        if settings.email_service_configured:
+            await send_password_reset_email(
+                settings=settings, to_email=body.email, reset_url=reset_url
+            )
+        elif not settings.is_production:
+            # Local/staging developer convenience ONLY -- see this
+            # router's own module docstring. Never reachable when
+            # ENVIRONMENT=production (the branch below handles that
+            # case instead, withholding the raw token entirely).
+            logger.info(
+                "password_reset: no email service configured -- reset URL for "
+                "%s: %s",
+                body.email,
+                reset_url,
+            )
+        else:
+            # Production with no email service configured: this is a
+            # real operational misconfiguration (the user cannot
+            # complete the reset), but the raw token is NEVER written
+            # to a production log -- see this router's own module
+            # docstring's "no reset-token secrets in production logs"
+            # guarantee.
+            logger.warning(
+                "password_reset: reset requested for %s but no email service "
+                "is configured in production -- the user cannot complete "
+                "this reset. Configure SMTP_HOST/SMTP_FROM_EMAIL.",
+                body.email,
+            )
+
+    return PasswordResetRequestResponse()
+
+
+# ---------------------------------------------------------------------------
+# POST /auth/password-reset/confirm
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/password-reset/confirm",
+    response_model=PasswordResetConfirmResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Complete a password reset",
+    description=(
+        "Sets a new password for the account the given token was "
+        "issued for, invalidates the token (single-use), and rotates "
+        "the account's sessions -- every access token issued before "
+        "this call stops working on its very next use. Returns 400 if "
+        "the token is invalid, expired, or already used."
+    ),
+)
+async def confirm_password_reset_endpoint(
+    body: PasswordResetConfirmRequest,
+    session: AsyncSession = Depends(get_async_session),
+) -> PasswordResetConfirmResponse:
+    try:
+        await confirm_password_reset(session, body.token, body.new_password)
+    except InvalidOrExpiredResetTokenError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "This reset link is invalid or has expired. Please request a new one."
+            ),
+        ) from None
+
+    return PasswordResetConfirmResponse()

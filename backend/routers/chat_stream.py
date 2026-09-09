@@ -421,7 +421,14 @@ def _cast_stream_event(  # nosec B107 -- "token" is a stream chunk, not a passwo
 async def _authenticate(
     token: str, session: AsyncSession, settings: Settings
 ) -> Optional[User]:
-    """Resolve a query-param bearer token to a User row, or None."""
+    """
+    Resolve a query-param bearer token to a User row, or None.
+
+    Mirrors backend.dependencies.auth.get_current_user's verification
+    logic, including the B6 token_version check -- a token issued
+    before a password reset must not open a chat WS connection either,
+    the same as it can no longer authenticate any REST endpoint.
+    """
     try:
         payload = decode_access_token(token, settings=settings)
     except InvalidTokenError:
@@ -435,6 +442,8 @@ async def _authenticate(
     result = await session.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
     if user is None or not user.is_active:
+        return None
+    if payload.token_version != user.token_version:
         return None
     return user
 

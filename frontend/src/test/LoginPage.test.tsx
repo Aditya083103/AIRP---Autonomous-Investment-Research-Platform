@@ -30,6 +30,7 @@ function renderLoginPage(login: AuthContextValue["login"]): void {
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/dashboard" element={<p>Dashboard page</p>} />
+          <Route path="/forgot-password" element={<p>Forgot password page</p>} />
         </Routes>
       </MemoryRouter>
     </AuthContext.Provider>,
@@ -79,5 +80,14 @@ describe("LoginPage", () => {
     await user.click(screen.getByRole("button", { name: /log in/i }));
 
     await waitFor(() => expect(screen.getByText("Dashboard page")).toBeInTheDocument());
+  });
+
+  it("links to /forgot-password (B6)", async () => {
+    const user = userEvent.setup();
+    renderLoginPage(vi.fn());
+
+    await user.click(screen.getByRole("link", { name: /forgot password/i }));
+
+    await waitFor(() => expect(screen.getByText("Forgot password page")).toBeInTheDocument());
   });
 });

@@ -5,6 +5,8 @@ AIRP — SQLAlchemy ORM Models (T-016, T-087)
 Defines the six core tables that back the AIRP system:
 
     users            — Self-hosted auth (T-046); local row per registered user
+    password_reset_tokens — Self-hosted auth (B6); single-use, expiring
+                       "forgot password" tokens
     companies        — Normalised company/ticker registry (avoid re-resolving)
     analyses         — One row per analysis job; tracks status & timing
     agent_outputs    — One row per agent per analysis; stores raw JSON output
@@ -206,6 +208,19 @@ class User(Base):
         server_default="true",
         comment="False disables login without deleting the account/history",
     )
+    token_version: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+        comment=(
+            "Incremented on every successful password reset (B6). A JWT "
+            "carries the token_version it was issued under as a claim; "
+            "get_current_user rejects a token whose claim no longer "
+            "matches this column -- see "
+            "backend.services.password_reset.confirm_password_reset."
+        ),
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -252,6 +267,72 @@ class User(Base):
 
     def __repr__(self) -> str:
         return f"<User id={self.id} email={self.email!r}>"
+
+
+# ---------------------------------------------------------------------------
+# Table: password_reset_tokens
+# ---------------------------------------------------------------------------
+
+
+class PasswordResetToken(Base):
+    """
+    A single-use, expiring "forgot password" token (B6).
+
+    ``token_hash`` stores a SHA-256 hex digest of the raw token --
+    never the raw value itself, the same "never persist the literal
+    secret" principle ``User.password_hash`` already applies (see this
+    table's own migration for why a fast hash, not bcrypt, is correct
+    here). ``used_at`` NULL means still usable, subject to
+    ``expires_at``; set once by
+    ``backend.services.password_reset.confirm_password_reset``, and
+    also set (without a successful reset) by a NEWER request for the
+    same user superseding an older, still-unused one -- see that
+    module's own docstring.
+    """
+
+    __tablename__ = "password_reset_tokens"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=func.gen_random_uuid(),
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+        comment="FK → users.id — who requested this reset",
+    )
+    token_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        comment="SHA-256 hex digest of the raw reset token",
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        comment="UTC timestamp after which this token is no longer usable",
+    )
+    used_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="NULL until consumed (single-use) — set once a reset succeeds",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        comment="UTC timestamp when this reset was requested",
+    )
+
+    __table_args__ = (
+        Index("ix_password_reset_tokens_token_hash", "token_hash", unique=True),
+        {"comment": "Single-use, expiring password-reset tokens (B6)"},
+    )
+
+    def __repr__(self) -> str:
+        return f"<PasswordResetToken id={self.id} user_id={self.user_id}>"
 
 
 # ---------------------------------------------------------------------------

@@ -109,6 +109,15 @@ async def get_current_user(
     if not user.is_active:
         raise _UNAUTHORIZED
 
+    if payload.token_version != user.token_version:
+        # B6: a password reset increments users.token_version --
+        # a token issued before that reset still verifies (correct
+        # signature, not expired) but carries the OLD version, so it
+        # is rejected here. This is what makes "rotates sessions" a
+        # real guarantee rather than just resetting the password hash
+        # while every previously-issued token remains usable.
+        raise _UNAUTHORIZED
+
     return user
 
 

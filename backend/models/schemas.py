@@ -31,6 +31,10 @@ from pydantic import (
 __all__ = [
     "UserRegisterRequest",
     "UserLoginRequest",
+    "PasswordResetRequestRequest",
+    "PasswordResetRequestResponse",
+    "PasswordResetConfirmRequest",
+    "PasswordResetConfirmResponse",
     "UserResponse",
     "TokenResponse",
     "TokenPayload",
@@ -114,6 +118,73 @@ class UserLoginRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Request/response schemas -- password reset (B6)
+# ---------------------------------------------------------------------------
+
+
+class PasswordResetRequestRequest(BaseModel):
+    """Body for POST /auth/password-reset/request."""
+
+    email: EmailStr = Field(
+        ..., description="Email of the account to send a reset link to"
+    )
+
+
+class PasswordResetRequestResponse(BaseModel):
+    """
+    Body for POST /auth/password-reset/request.
+
+    Always the SAME generic message regardless of whether ``email``
+    matched a real, active account -- see
+    backend.routers.auth's own docstring for why: this endpoint always
+    returns 200 with this exact shape either way, so a caller (or an
+    attacker probing for registered emails) cannot distinguish "we sent
+    a link" from "no such account" from the response alone.
+    """
+
+    message: str = Field(
+        default=(
+            "If an account exists for that email, a password reset "
+            "link has been sent."
+        ),
+        description="Always the same generic message -- see this schema's docstring",
+    )
+
+
+class PasswordResetConfirmRequest(BaseModel):
+    """Body for POST /auth/password-reset/confirm."""
+
+    token: str = Field(
+        ..., min_length=1, description="The raw reset token from the emailed link"
+    )
+    new_password: str = Field(
+        ...,
+        min_length=_MIN_PASSWORD_LENGTH,
+        max_length=_MAX_PASSWORD_LENGTH,
+        description=f"New plaintext password, {_MIN_PASSWORD_LENGTH}-"
+        f"{_MAX_PASSWORD_LENGTH} characters. Never stored or logged as-is.",
+    )
+
+    @field_validator("new_password")
+    @classmethod
+    def _reject_whitespace_only(cls, value: str) -> str:
+        """Reject a password that is technically long enough but
+        blank -- mirrors UserRegisterRequest's identical guard."""
+        if not value.strip():
+            raise ValueError("new_password must not be empty or whitespace-only")
+        return value
+
+
+class PasswordResetConfirmResponse(BaseModel):
+    """Body for a successful POST /auth/password-reset/confirm."""
+
+    message: str = Field(
+        default="Your password has been reset. Please log in with your new password.",
+        description="Human-readable confirmation",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Response schemas -- auth (T-046)
 # ---------------------------------------------------------------------------
 
@@ -158,6 +229,18 @@ class TokenPayload(BaseModel):
 
     sub: str = Field(..., description="Subject -- the user's UUID as a string")
     exp: int = Field(..., description="Expiry, Unix timestamp (seconds)")
+    token_version: int = Field(
+        default=0,
+        description=(
+            "The user's token_version at issuance (B6) -- "
+            "get_current_user rejects a token whose value here no "
+            "longer matches users.token_version (a password reset "
+            "increments it, invalidating every token issued before "
+            "the reset). Defaults to 0 so a token minted before this "
+            "field existed (no claim at all) still validates against "
+            "an unreset account, whose column also defaults to 0."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------

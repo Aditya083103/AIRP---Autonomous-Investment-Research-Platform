@@ -15,7 +15,7 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
-import { useLocation, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 
 import { AuthApiError } from "@/api/auth";
 import { AuthCard } from "@/components/auth/AuthCard";
@@ -84,6 +84,12 @@ export function LoginPage(): JSX.Element {
           {...register("password")}
           {...(errors.password?.message ? { error: errors.password.message } : {})}
         />
+        <Link
+          to="/forgot-password"
+          className="-mt-2 self-end text-sm font-medium text-brand-600 hover:text-brand-700"
+        >
+          Forgot password?
+        </Link>
 
         {formError ? (
           <p role="alert" className="text-sm text-verdict-sell">
