@@ -692,7 +692,15 @@ def _persist_after(node_fn: _NodeFn, node_name: str) -> _NodeFn:
     The wrapper:
     1. Calls _run_broadcast_started (fire-and-forget, non-fatal on
        error) using the INCOMING state, BEFORE node_fn runs -- T-095.
-    2. Calls the original node function to get the partial dict.
+    2. Calls the original node function to get the partial dict. (B3)
+       If node_fn itself raises -- a NodeTimeoutError from profile_node,
+       or any other unhandled bug -- the exception is caught here and
+       degraded to a minimal {"status": "failed", "pipeline_error": ...,
+       "current_node": node_name} partial instead of propagating, so
+       this node still gets a real terminal broadcast (steps 4-5 below)
+       rather than leaving its WebSocket seat permanently unaccounted
+       for. See the try/except around node_fn(state) for the full
+       rationale.
     3. Merges the partial dict with the incoming state to build the full
        state snapshot that should be persisted.
     4. Calls _run_persist (fire-and-forget, non-fatal on error).
@@ -700,8 +708,12 @@ def _persist_after(node_fn: _NodeFn, node_name: str) -> _NodeFn:
        pushes one NODE_COMPLETED AgentStreamEvent to any WebSocket
        client subscribed to this job_id, built from the exact same
        merged state _run_persist just wrote to PostgreSQL.
-    6. Returns the original partial dict unchanged so LangGraph can merge
-       it into shared state normally.
+    6. Returns the partial dict (node_fn's own, or the degraded
+       fallback) unchanged so LangGraph can merge it into shared state
+       normally -- downstream nodes already default every missing/None
+       upstream key to ``{}`` (this module's and every agent module's
+       established convention), so a degraded, mostly-empty partial from
+       one failed node does not crash the nodes after it.
 
     Only sequential nodes are wrapped -- NOT the 4 parallel research nodes
     (those call _broadcast_research_node_started / _broadcast_research_node
@@ -743,7 +755,47 @@ def _persist_after(node_fn: _NodeFn, node_name: str) -> _NodeFn:
                     exc,
                 )
 
-        partial: dict[str, Any] = node_fn(state)
+        # B3 defence in depth: every individual node function already
+        # documents a "never raises" contract (agent modules degrade
+        # internally; profile_node's NodeTimeoutError is the one
+        # documented exception that DOES propagate -- see
+        # _run_research_node_safely's docstring for why the 4 parallel
+        # research nodes catch it there). Nothing at this wrapper layer
+        # enforced that contract for the sequential nodes _persist_after
+        # wraps, though: an uncaught exception here -- NodeTimeoutError
+        # or any other unhandled bug -- used to propagate straight
+        # through LangGraph's graph.invoke(), aborting the whole run
+        # with NO terminal broadcast for this node at all. Since
+        # NODE_STARTED was already sent above, that seat's card would
+        # then sit at "thinking" until the client eventually treated the
+        # dead connection as complete and rendered it "skipped" forever
+        # -- indistinguishable from a node that genuinely never ran.
+        # Catching here restores the same resilience _run_research_node
+        # _safely already gives the 4 parallel research nodes, applied
+        # generically: degrade to a minimal partial dict carrying
+        # status="failed" (so downstream nodes, which already default
+        # every missing/None upstream key to `{}` per this module's own
+        # established convention, are unaffected) and current_node=
+        # node_name (so persistence/compute_progress correctly advances
+        # past this node instead of leaving it looking un-reached), then
+        # let persistence and the broadcast below fire exactly as they
+        # would for a normal completion -- guaranteeing a terminal event
+        # for this seat either way.
+        try:
+            partial: dict[str, Any] = node_fn(state)
+        except Exception as exc:
+            logger.exception(
+                "_persist_after: node_fn raised for node=%s job_id=%s -- "
+                "degrading to a failed terminal event instead of aborting "
+                "the pipeline with no broadcast for this node",
+                node_name,
+                job_id_before,
+            )
+            partial = {
+                "status": "failed",
+                "pipeline_error": f"{node_name} failed unexpectedly: {exc}",
+                "current_node": node_name,
+            }
 
         # Build a merged view: start from incoming state, overlay the
         # partial dict that the node returned.  This is what LangGraph
