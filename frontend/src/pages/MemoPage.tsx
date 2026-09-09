@@ -21,11 +21,17 @@
 //
 // The verdict itself (VerdictPanel) is intentionally NOT wrapped in a
 // CollapsibleSection -- it is the one section a reader should never
-// have to expand to see the headline BUY/HOLD/SELL call.
+// have to expand to see the headline BUY/HOLD/SELL call. VerdictPanel
+// already carries its own Reveal + TiltCard entrance (B10, see that
+// component's own docstring) simply by being reused here; every
+// CollapsibleSection below it gets its own staggered Reveal so the
+// whole memo cascades into view top-to-bottom, matching
+// ResultsPanel.tsx's identical treatment on the live result page.
 
 import { useParams } from "react-router-dom";
 
 import { MemoToolbar } from "@/components/memo";
+import { Reveal } from "@/components/motion/Reveal";
 import { AgentWeightsPanel, BullBearPanel, KeyRisksList, VerdictPanel } from "@/components/results";
 import { ResultsPanelSkeleton } from "@/components/skeletons";
 import { CollapsibleSection } from "@/components/ui";
@@ -135,51 +141,65 @@ export function MemoPage(): JSX.Element {
         <div className="mt-8 space-y-4">
           <VerdictPanel decision={decision} />
 
-          <CollapsibleSection title="Executive summary">
-            <p className="whitespace-pre-line text-sm leading-relaxed text-ink">
-              {decision.executive_summary || "Not available for this analysis."}
-            </p>
-          </CollapsibleSection>
+          <Reveal index={1}>
+            <CollapsibleSection title="Executive summary">
+              <p className="whitespace-pre-line text-sm leading-relaxed text-ink">
+                {decision.executive_summary || "Not available for this analysis."}
+              </p>
+            </CollapsibleSection>
+          </Reveal>
 
-          <CollapsibleSection title="Investment thesis">
-            <p className="whitespace-pre-line text-sm leading-relaxed text-ink">
-              {decision.investment_thesis || "Not available for this analysis."}
-            </p>
-          </CollapsibleSection>
+          <Reveal index={2}>
+            <CollapsibleSection title="Investment thesis">
+              <p className="whitespace-pre-line text-sm leading-relaxed text-ink">
+                {decision.investment_thesis || "Not available for this analysis."}
+              </p>
+            </CollapsibleSection>
+          </Reveal>
 
-          <CollapsibleSection title="Bull case & bear case">
-            <BullBearPanel bullCase={decision.bull_case} bearCase={decision.bear_case} />
-          </CollapsibleSection>
+          <Reveal index={3}>
+            <CollapsibleSection title="Bull case & bear case">
+              <BullBearPanel bullCase={decision.bull_case} bearCase={decision.bear_case} />
+            </CollapsibleSection>
+          </Reveal>
 
-          <CollapsibleSection title="Key risks & catalysts">
-            <KeyRisksList
-              riskSummary={decision.risk_summary}
-              keyRisks={decision.key_risks}
-              keyCatalysts={decision.key_catalysts}
-            />
-          </CollapsibleSection>
+          <Reveal index={4}>
+            <CollapsibleSection title="Key risks & catalysts">
+              <KeyRisksList
+                riskSummary={decision.risk_summary}
+                keyRisks={decision.key_risks}
+                keyCatalysts={decision.key_catalysts}
+              />
+            </CollapsibleSection>
+          </Reveal>
 
-          <CollapsibleSection title="Valuation">
-            <p className="whitespace-pre-line text-sm leading-relaxed text-ink">
-              {decision.valuation_summary || "Not available for this analysis."}
-            </p>
-          </CollapsibleSection>
+          <Reveal index={5}>
+            <CollapsibleSection title="Valuation">
+              <p className="whitespace-pre-line text-sm leading-relaxed text-ink">
+                {decision.valuation_summary || "Not available for this analysis."}
+              </p>
+            </CollapsibleSection>
+          </Reveal>
 
-          <CollapsibleSection
-            title={`Contrarian resolution (${decision.debate_rounds_used} debate round${
-              decision.debate_rounds_used === 1 ? "" : "s"
-            })`}
-          >
-            <p className="whitespace-pre-line text-sm leading-relaxed text-ink">
-              {decision.contrarian_response ||
-                "The Portfolio Manager did not record a direct response to the " +
-                  "Contrarian Investor."}
-            </p>
-          </CollapsibleSection>
+          <Reveal index={6}>
+            <CollapsibleSection
+              title={`Contrarian resolution (${decision.debate_rounds_used} debate round${
+                decision.debate_rounds_used === 1 ? "" : "s"
+              })`}
+            >
+              <p className="whitespace-pre-line text-sm leading-relaxed text-ink">
+                {decision.contrarian_response ||
+                  "The Portfolio Manager did not record a direct response to the " +
+                    "Contrarian Investor."}
+              </p>
+            </CollapsibleSection>
+          </Reveal>
 
-          <CollapsibleSection title="Agent weighting" defaultOpen={false}>
-            <AgentWeightsPanel agentWeights={decision.agent_weights} />
-          </CollapsibleSection>
+          <Reveal index={7}>
+            <CollapsibleSection title="Agent weighting" defaultOpen={false}>
+              <AgentWeightsPanel agentWeights={decision.agent_weights} />
+            </CollapsibleSection>
+          </Reveal>
         </div>
       ) : null}
     </div>
