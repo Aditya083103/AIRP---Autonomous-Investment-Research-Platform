@@ -11,21 +11,19 @@ directional scoring rule.
 
 What this module does
 ----------------------
-1. ``derive_evaluation_horizon_days`` -- pure function mapping a
-   verdict + its ``time_horizon`` label (from
-   ``backend.agents.portfolio_manager._determine_time_horizon``) onto
-   a concrete number of days to wait before evaluating accuracy.
-   Deliberately only two buckets exist (90 vs 365) even though
-   ``time_horizon`` itself has four possible free-text values --
-   collapsing "quarterly review (3 months)" / "3-6 months (...)" /
-   "12 months" all into the 90-day default keeps the accuracy tracker
-   simple: it answers "was this verdict directionally right a quarter
-   later", not "did the stock hit every intermediate checkpoint the
-   memo's prose happened to mention". Only a BUY verdict backed by a
-   high margin of safety earns the long 365-day horizon, matching the
-   one case ``_determine_time_horizon`` itself treats as a genuine
-   multi-year hold ("3-5 years (high margin of safety supports a long
-   hold)").
+1. ``derive_evaluation_horizon_days`` -- pure function mapping the
+   user's own selected analysis ``period`` (B1 -- InvestmentState
+   ["period"], one of backend.tools.stock_price.VALID_PERIODS) onto a
+   concrete number of days to wait before evaluating accuracy, so a
+   3-year analysis is scored roughly 3 years out and a 1-month analysis
+   is scored roughly 1 month out -- not a flat, period-blind default.
+   The one exception: a BUY verdict whose ``time_horizon`` label
+   mentions a high margin of safety (the one case
+   ``backend.agents.portfolio_manager._determine_time_horizon`` itself
+   treats as a genuine long-term conviction call) is floored at
+   ``HIGH_CONFIDENCE_EVALUATION_HORIZON_DAYS`` (365 days) even if the
+   user's selected period was shorter, so a confidently long-term call
+   is never scored too early.
 2. ``record_pending_evaluations`` -- reads the final ``InvestmentState``
    a completed pipeline run produced, pulls out the verdict-time fields
    (ticker, verdict, conviction_score, current price from the
@@ -175,15 +173,36 @@ __all__ = [
 # Horizon mapping (T-088 acceptance criteria)
 # ---------------------------------------------------------------------------
 
-#: Days to wait before evaluating accuracy for every verdict EXCEPT the
-#: high-conviction, high-margin-of-safety BUY case below.
+#: Days to wait before evaluating accuracy when ``period`` is missing or
+#: is not one of _PERIOD_TO_EVALUATION_HORIZON_DAYS's keys (e.g. a
+#: pre-B1 test fixture / state dict). Also happens to equal the "3mo"
+#: mapping below, which is a coincidence of the day-count arithmetic,
+#: not a design dependency between the two.
 DEFAULT_EVALUATION_HORIZON_DAYS = 90
 
-#: Days to wait for a BUY verdict whose time_horizon reflects a high
-#: margin of safety -- the one case _determine_time_horizon treats as a
-#: genuine multi-year hold ("3-5 years (high margin of safety supports
-#: a long hold)").
+#: Floor applied to a BUY verdict whose time_horizon reflects a high
+#: margin of safety (B1: "~Ny (high margin of safety supports a long
+#: hold)") -- the one case _determine_time_horizon treats as a genuine
+#: long-term conviction call. Ensures such a verdict is never scored
+#: earlier than a year out even if the user picked a short analysis
+#: period.
 HIGH_CONFIDENCE_EVALUATION_HORIZON_DAYS = 365
+
+#: B1: the user's selected analysis period is now the primary driver of
+#: the evaluation horizon, mirroring backend.tools.stock_price
+#: .VALID_PERIODS and backend.agents.portfolio_manager
+#: ._PERIOD_HORIZON_LABELS -- a 3-year analysis is scored roughly 3
+#: years out, a 1-month analysis roughly 1 month out, instead of the
+#: pre-B1 flat 90/365-day split that ignored the user's choice entirely.
+_PERIOD_TO_EVALUATION_HORIZON_DAYS: dict[str, int] = {
+    "1mo": 30,
+    "3mo": 90,
+    "6mo": 180,
+    "1y": 365,
+    "3y": 365 * 3,
+    "5y": 365 * 5,
+    "10y": 365 * 10,
+}
 
 #: Verdict strings the Portfolio Manager can produce (T-042/T-043).
 _VALID_VERDICTS: frozenset[str] = frozenset({"BUY", "HOLD", "SELL"})
@@ -195,29 +214,37 @@ _VALID_VERDICTS: frozenset[str] = frozenset({"BUY", "HOLD", "SELL"})
 _HIGH_MARGIN_OF_SAFETY_MARKER = "high margin of safety"
 
 
-def derive_evaluation_horizon_days(verdict: str, time_horizon: str) -> int:
+def derive_evaluation_horizon_days(verdict: str, time_horizon: str, period: str) -> int:
     """
-    Map a verdict + its time_horizon label onto an evaluation horizon.
+    Map the user's selected analysis period onto a concrete evaluation
+    horizon (B1), floored for a high-conviction long-term BUY.
 
     Args:
         verdict:      One of "BUY" / "HOLD" / "SELL" (case-sensitive,
                       matching backend.agents.output_models
                       .InvestmentDecision.verdict exactly).
         time_horizon: The free-text holding-period label from
-                      InvestmentDecision.time_horizon, e.g. "12 months"
-                      or "3-5 years (high margin of safety supports a
-                      long hold)".
+                      InvestmentDecision.time_horizon -- only consulted
+                      for the high-margin-of-safety floor below.
+        period:       The user's selected analysis horizon (B1) --
+                      InvestmentState["period"], one of
+                      backend.tools.stock_price.VALID_PERIODS.
 
     Returns:
-        HIGH_CONFIDENCE_EVALUATION_HORIZON_DAYS (365) when verdict is
-        "BUY" and time_horizon mentions a high margin of safety;
-        DEFAULT_EVALUATION_HORIZON_DAYS (90) for every other
-        verdict/time_horizon combination, including HOLD, SELL, and any
-        BUY that is not backed by a high margin of safety.
+        The day-count mapped from ``period`` via
+        _PERIOD_TO_EVALUATION_HORIZON_DAYS (falling back to
+        DEFAULT_EVALUATION_HORIZON_DAYS for an unrecognised period), or
+        HIGH_CONFIDENCE_EVALUATION_HORIZON_DAYS (365) if that would be
+        larger AND verdict is "BUY" with a high-margin-of-safety
+        time_horizon -- i.e. a confidently long-term BUY is never scored
+        earlier than a year out even on a short selected period.
     """
+    base_days = _PERIOD_TO_EVALUATION_HORIZON_DAYS.get(
+        period, DEFAULT_EVALUATION_HORIZON_DAYS
+    )
     if verdict == "BUY" and _HIGH_MARGIN_OF_SAFETY_MARKER in time_horizon.lower():
-        return HIGH_CONFIDENCE_EVALUATION_HORIZON_DAYS
-    return DEFAULT_EVALUATION_HORIZON_DAYS
+        return max(base_days, HIGH_CONFIDENCE_EVALUATION_HORIZON_DAYS)
+    return base_days
 
 
 # ---------------------------------------------------------------------------
@@ -354,7 +381,8 @@ async def record_pending_evaluations(
         return None
 
     time_horizon = str(decision.get("time_horizon") or "")
-    horizon_days = derive_evaluation_horizon_days(verdict, time_horizon)
+    period = str(state.get("period") or "1y")
+    horizon_days = derive_evaluation_horizon_days(verdict, time_horizon, period)
     verdict_date = _parse_verdict_date(state.get("completed_at"))
 
     try:

@@ -156,50 +156,102 @@ def _make_mock_session() -> AsyncMock:
 
 
 class TestDeriveEvaluationHorizonDays:
-    def test_buy_with_high_margin_of_safety_is_365_days(self) -> None:
+    """
+    B1 fix: the user's selected analysis ``period`` is now the primary
+    driver of the evaluation horizon (a 3-year analysis is scored ~3
+    years out, a 1-month analysis ~1 month out) -- previously this
+    function ignored the user's choice entirely and only ever returned
+    90 or 365 days based on a "high margin of safety" phrase match.
+    """
+
+    @pytest.mark.parametrize(
+        ("period", "expected_days"),
+        [
+            ("1mo", 30),
+            ("3mo", 90),
+            ("6mo", 180),
+            ("1y", 365),
+            ("3y", 1095),
+            ("5y", 1825),
+            ("10y", 3650),
+        ],
+    )
+    def test_every_supported_period_maps_to_its_own_horizon(
+        self, period: str, expected_days: int
+    ) -> None:
+        """B1: confirm across all supported periods."""
+        days = derive_evaluation_horizon_days("HOLD", "12 months", period)
+        assert days == expected_days
+
+    def test_selecting_3y_yields_a_three_year_horizon(self) -> None:
+        """Explicit B1 acceptance check named in the work order."""
+        days = derive_evaluation_horizon_days("BUY", "~3 years", "3y")
+        assert days == 365 * 3
+
+    def test_selecting_1mo_yields_a_one_month_horizon(self) -> None:
+        """Explicit B1 acceptance check named in the work order."""
+        days = derive_evaluation_horizon_days("BUY", "~1 month", "1mo")
+        assert days == 30
+
+    def test_unrecognised_period_falls_back_to_default(self) -> None:
+        days = derive_evaluation_horizon_days("HOLD", "12 months", "2mo")
+        assert days == DEFAULT_EVALUATION_HORIZON_DAYS
+        assert days == 90
+
+    def test_high_margin_of_safety_buy_floors_a_short_period_at_365(self) -> None:
+        """A confidently long-term BUY (high margin of safety) must never
+        be scored earlier than a year out, even if the user picked a
+        short analysis period."""
         days = derive_evaluation_horizon_days(
-            "BUY", "3-5 years (high margin of safety supports a long hold)"
+            "BUY",
+            "~1 month (high margin of safety supports a long hold)",
+            "1mo",
         )
         assert days == HIGH_CONFIDENCE_EVALUATION_HORIZON_DAYS
         assert days == 365
 
     def test_matching_is_case_insensitive(self) -> None:
         days = derive_evaluation_horizon_days(
-            "BUY", "3-5 YEARS (HIGH MARGIN OF SAFETY SUPPORTS A LONG HOLD)"
+            "BUY", "~1 MONTH (HIGH MARGIN OF SAFETY SUPPORTS A LONG HOLD)", "1mo"
         )
         assert days == 365
 
-    def test_buy_without_high_margin_phrase_is_default(self) -> None:
-        days = derive_evaluation_horizon_days("BUY", "12 months")
-        assert days == DEFAULT_EVALUATION_HORIZON_DAYS
-        assert days == 90
-
-    def test_buy_technically_driven_horizon_is_default(self) -> None:
+    def test_high_margin_of_safety_never_shrinks_a_longer_period(self) -> None:
+        """The floor only ever raises the horizon -- it must not shrink a
+        period that already implies more than 365 days."""
         days = derive_evaluation_horizon_days(
-            "BUY", "3-6 months (technically driven, reassess on momentum shift)"
+            "BUY", "~10 years (high margin of safety supports a long hold)", "10y"
+        )
+        assert days == 3650
+
+    def test_buy_without_high_margin_phrase_uses_period_only(self) -> None:
+        days = derive_evaluation_horizon_days("BUY", "~1 year", "1y")
+        assert days == 365
+
+    def test_buy_technically_driven_horizon_uses_period_only(self) -> None:
+        days = derive_evaluation_horizon_days(
+            "BUY", "~6 months (technically driven, reassess on momentum shift)", "6mo"
+        )
+        assert days == 180
+
+    def test_hold_uses_period_only(self) -> None:
+        days = derive_evaluation_horizon_days(
+            "HOLD", "~3 months (quarterly review recommended)", "3mo"
         )
         assert days == 90
 
-    def test_hold_is_default(self) -> None:
-        days = derive_evaluation_horizon_days("HOLD", "quarterly review (3 months)")
-        assert days == 90
-
-    def test_sell_is_default(self) -> None:
-        days = derive_evaluation_horizon_days("SELL", "12 months")
-        assert days == 90
-
-    def test_sell_with_high_margin_phrase_is_still_default(self) -> None:
-        # The 365-day horizon is BUY-only by spec -- a SELL verdict must
+    def test_sell_with_high_margin_phrase_is_never_floored(self) -> None:
+        # The 365-day floor is BUY-only by spec -- a SELL verdict must
         # never get the long horizon even if the phrase were somehow
         # present on it.
         days = derive_evaluation_horizon_days(
-            "SELL", "high margin of safety mentioned incorrectly"
+            "SELL", "high margin of safety mentioned incorrectly", "1mo"
         )
-        assert days == 90
+        assert days == 30
 
     def test_empty_time_horizon_does_not_raise(self) -> None:
-        days = derive_evaluation_horizon_days("BUY", "")
-        assert days == 90
+        days = derive_evaluation_horizon_days("BUY", "", "1y")
+        assert days == 365
 
 
 # ---------------------------------------------------------------------------
@@ -246,14 +298,17 @@ class TestRecordPendingEvaluationsHappyPath:
         assert added.price_at_verdict == 3550.25
 
     @pytest.mark.asyncio
-    async def test_default_horizon_is_90_days(self) -> None:
+    async def test_default_period_1y_uses_365_day_horizon(self) -> None:
+        """B1: _make_completed_state() defaults to period='1y' (via
+        make_initial_state), which must now drive a 365-day horizon --
+        not the pre-B1 flat 90-day default that ignored period."""
         session = _make_mock_session()
-        state = _make_completed_state()  # time_horizon = "12 months"
+        state = _make_completed_state()  # period = "1y", time_horizon = "12 months"
 
         await record_pending_evaluations(session, _JOB_ID, state)
 
         added = session.add.call_args.args[0]
-        assert added.evaluation_horizon_days == 90
+        assert added.evaluation_horizon_days == 365
 
     @pytest.mark.asyncio
     async def test_buy_high_margin_of_safety_uses_365_day_horizon(self) -> None:
@@ -267,6 +322,54 @@ class TestRecordPendingEvaluationsHappyPath:
                 ),
             }
         )
+
+        await record_pending_evaluations(session, _JOB_ID, state)
+
+        added = session.add.call_args.args[0]
+        assert added.evaluation_horizon_days == 365
+
+    @pytest.mark.asyncio
+    async def test_selecting_3y_period_yields_a_three_year_db_horizon(self) -> None:
+        """Explicit B1 acceptance check named in the work order: selecting
+        3y yields a ~3-year horizon in the DB row."""
+        session = _make_mock_session()
+        state = _make_completed_state(
+            period="3y",
+            decision={
+                "verdict": "HOLD",
+                "conviction_score": 6,
+                "time_horizon": "~3 years (quarterly review recommended)",
+            },
+        )
+
+        await record_pending_evaluations(session, _JOB_ID, state)
+
+        added = session.add.call_args.args[0]
+        assert added.evaluation_horizon_days == 365 * 3
+
+    @pytest.mark.asyncio
+    async def test_selecting_1mo_period_yields_a_one_month_db_horizon(self) -> None:
+        """Explicit B1 acceptance check named in the work order: selecting
+        1mo yields a ~1-month horizon in the DB row."""
+        session = _make_mock_session()
+        state = _make_completed_state(
+            period="1mo",
+            decision={
+                "verdict": "SELL",
+                "conviction_score": 6,
+                "time_horizon": "~1 month",
+            },
+        )
+
+        await record_pending_evaluations(session, _JOB_ID, state)
+
+        added = session.add.call_args.args[0]
+        assert added.evaluation_horizon_days == 30
+
+    @pytest.mark.asyncio
+    async def test_missing_period_falls_back_to_1y(self) -> None:
+        session = _make_mock_session()
+        state = _make_completed_state(period=None)
 
         await record_pending_evaluations(session, _JOB_ID, state)
 

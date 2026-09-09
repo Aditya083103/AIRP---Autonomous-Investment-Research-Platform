@@ -972,31 +972,107 @@ class TestScoreConviction:
 
 
 class TestDetermineTimeHorizon:
-    def test_hold_returns_quarterly_review(self) -> None:
+    """
+    B1 fix: the user's selected analysis ``period`` is now the PRIMARY
+    driver of the displayed holding period -- previously this function
+    ignored ``period`` entirely, hardcoding "quarterly review (3 months)"
+    for every HOLD and a flat "12 months" default for BUY/SELL regardless
+    of what horizon the user actually selected.
+    """
+
+    def test_hold_reflects_the_selected_period(self) -> None:
         horizon = _determine_time_horizon(
-            _TECHNICAL_HOLD, _VALUATION_FAIR, verdict="HOLD"
+            _TECHNICAL_HOLD, _VALUATION_FAIR, verdict="HOLD", period="3y"
         )
+        assert "3 years" in horizon
         assert "quarter" in horizon.lower()
 
-    def test_technically_driven_buy_returns_short_horizon(self) -> None:
+    def test_hold_on_a_short_period_no_longer_says_three_months(self) -> None:
+        """The exact pre-fix bug: HOLD used to always say '(3 months)'
+        even when the user selected a completely different period."""
         horizon = _determine_time_horizon(
-            _TECHNICAL_BUY_STRONG, _VALUATION_FAIR, verdict="BUY"
+            _TECHNICAL_HOLD, _VALUATION_FAIR, verdict="HOLD", period="1mo"
         )
-        assert "month" in horizon.lower()
+        assert "1 month" in horizon
+        assert "3 months" not in horizon
 
-    def test_high_margin_of_safety_buy_returns_long_horizon(self) -> None:
+    def test_technically_driven_buy_reflects_the_selected_period(self) -> None:
+        horizon = _determine_time_horizon(
+            _TECHNICAL_BUY_STRONG, _VALUATION_FAIR, verdict="BUY", period="6mo"
+        )
+        assert "6 months" in horizon
+        assert "technically driven" in horizon.lower()
+
+    def test_high_margin_of_safety_buy_reflects_the_selected_period(self) -> None:
         weak_technical = {"signal": "BUY", "signal_strength": 4}
         horizon = _determine_time_horizon(
-            weak_technical, _VALUATION_UNDERVALUED, verdict="BUY"
+            weak_technical, _VALUATION_UNDERVALUED, verdict="BUY", period="10y"
         )
-        assert "year" in horizon.lower()
+        assert "10 years" in horizon
+        assert "high margin of safety" in horizon.lower()
 
-    def test_default_horizon_is_twelve_months(self) -> None:
+    def test_default_buy_case_is_exactly_the_period_label(self) -> None:
         weak_technical = {"signal": "HOLD", "signal_strength": 5}
         horizon = _determine_time_horizon(
-            weak_technical, _VALUATION_FAIR, verdict="BUY"
+            weak_technical, _VALUATION_FAIR, verdict="BUY", period="1y"
         )
-        assert horizon == "12 months"
+        assert horizon == "~1 year"
+
+    def test_selecting_3y_yields_a_three_year_horizon(self) -> None:
+        """Explicit B1 acceptance check named in the work order."""
+        horizon = _determine_time_horizon(
+            _TECHNICAL_HOLD, _VALUATION_FAIR, verdict="BUY", period="3y"
+        )
+        assert horizon == "~3 years"
+
+    def test_selecting_1mo_yields_a_one_month_horizon(self) -> None:
+        """Explicit B1 acceptance check named in the work order."""
+        horizon = _determine_time_horizon(
+            _TECHNICAL_HOLD, _VALUATION_FAIR, verdict="BUY", period="1mo"
+        )
+        assert horizon == "~1 month"
+
+    @pytest.mark.parametrize(
+        ("period", "expected_label"),
+        [
+            ("1mo", "~1 month"),
+            ("3mo", "~3 months"),
+            ("6mo", "~6 months"),
+            ("1y", "~1 year"),
+            ("3y", "~3 years"),
+            ("5y", "~5 years"),
+            ("10y", "~10 years"),
+        ],
+    )
+    def test_every_supported_period_maps_to_its_own_label(
+        self, period: str, expected_label: str
+    ) -> None:
+        """B1: confirm across all supported periods (default BUY case,
+        where the label is returned unmodified)."""
+        weak_technical = {"signal": "HOLD", "signal_strength": 5}
+        horizon = _determine_time_horizon(
+            weak_technical, _VALUATION_FAIR, verdict="BUY", period=period
+        )
+        assert horizon == expected_label
+
+    def test_unrecognised_period_falls_back_to_one_year(self) -> None:
+        weak_technical = {"signal": "HOLD", "signal_strength": 5}
+        horizon = _determine_time_horizon(
+            weak_technical, _VALUATION_FAIR, verdict="BUY", period="2mo"
+        )
+        assert horizon == "~1 year"
+
+    def test_verdict_never_overrides_the_periods_magnitude(self) -> None:
+        """The period is the primary driver -- verdict/technicals only
+        refine wording, they never substitute a different magnitude."""
+        hold = _determine_time_horizon(
+            _TECHNICAL_HOLD, _VALUATION_FAIR, verdict="HOLD", period="5y"
+        )
+        buy = _determine_time_horizon(
+            _TECHNICAL_HOLD, _VALUATION_FAIR, verdict="BUY", period="5y"
+        )
+        assert "5 years" in hold
+        assert "5 years" in buy
 
 
 # ---------------------------------------------------------------------------
@@ -1484,6 +1560,47 @@ class TestRunPortfolioManagerCore:
         )
         assert len(result.time_horizon) > 0
 
+    @patch("backend.agents.portfolio_manager.get_llm")
+    def test_period_threads_through_to_time_horizon(
+        self, mock_get_llm: MagicMock
+    ) -> None:
+        """B1: the period kwarg (defaults to '1y' when omitted) reaches
+        _determine_time_horizon and shows up verbatim in the decision."""
+        mock_get_llm.return_value = _make_llm()
+        result = _run_portfolio_manager_core(
+            **_BASE_KWARGS,
+            fundamental=_FUNDAMENTAL_STRONG,
+            technical=_TECHNICAL_BUY_STRONG,
+            sentiment=_SENTIMENT_POSITIVE,
+            macro=_MACRO_FAVOURABLE,
+            risk=_RISK_LOW,
+            contrarian=_CONTRARIAN_MILD,
+            valuation=_VALUATION_UNDERVALUED,
+            debate_rounds=_DEBATE_ROUNDS_ONE,
+            debate_round_count=1,
+            critical_flags=[],
+            period="5y",
+        )
+        assert "5 years" in result.time_horizon
+
+    @patch("backend.agents.portfolio_manager.get_llm")
+    def test_period_omitted_defaults_to_one_year(self, mock_get_llm: MagicMock) -> None:
+        mock_get_llm.return_value = _make_llm()
+        result = _run_portfolio_manager_core(
+            **_BASE_KWARGS,
+            fundamental=_FUNDAMENTAL_STRONG,
+            technical=_TECHNICAL_BUY_STRONG,
+            sentiment=_SENTIMENT_POSITIVE,
+            macro=_MACRO_FAVOURABLE,
+            risk=_RISK_LOW,
+            contrarian=_CONTRARIAN_MILD,
+            valuation=_VALUATION_UNDERVALUED,
+            debate_rounds=_DEBATE_ROUNDS_ONE,
+            debate_round_count=1,
+            critical_flags=[],
+        )
+        assert "1 year" in result.time_horizon
+
 
 # ---------------------------------------------------------------------------
 # Tests: run_portfolio_manager_decision (LangGraph node)
@@ -1506,6 +1623,7 @@ class TestRunPortfolioManagerDecisionNode:
         debate_rounds: list[dict[str, Any]] | None = None,
         debate_round_count: int = 1,
         critical_flags: list[str] | None = None,
+        period: str = "1y",
     ) -> dict[str, Any]:
         return {
             "job_id": job_id,
@@ -1521,6 +1639,7 @@ class TestRunPortfolioManagerDecisionNode:
             "debate_rounds": debate_rounds or _DEBATE_ROUNDS_ONE,
             "debate_round_count": debate_round_count,
             "critical_flags": critical_flags or [],
+            "period": period,
         }
 
     @patch("backend.agents.portfolio_manager.get_llm")
@@ -1580,6 +1699,38 @@ class TestRunPortfolioManagerDecisionNode:
         mock_get_llm.return_value = _make_llm()
         result = run_portfolio_manager_decision(self._make_state())
         assert result["decision"]["agent_name"] == "portfolio_manager"
+
+    @patch("backend.agents.portfolio_manager.get_llm")
+    def test_selecting_3y_flows_through_to_decision_time_horizon(
+        self, mock_get_llm: MagicMock
+    ) -> None:
+        """B1 end-to-end acceptance check: state["period"] set by the
+        Planner from the user's AnalysisStartRequest flows all the way
+        through to InvestmentDecision.time_horizon."""
+        mock_get_llm.return_value = _make_llm()
+        result = run_portfolio_manager_decision(self._make_state(period="3y"))
+        assert "3 years" in result["decision"]["time_horizon"]
+
+    @patch("backend.agents.portfolio_manager.get_llm")
+    def test_selecting_1mo_flows_through_to_decision_time_horizon(
+        self, mock_get_llm: MagicMock
+    ) -> None:
+        mock_get_llm.return_value = _make_llm()
+        result = run_portfolio_manager_decision(self._make_state(period="1mo"))
+        assert "1 month" in result["decision"]["time_horizon"]
+
+    @patch("backend.agents.portfolio_manager.get_llm")
+    def test_missing_period_key_falls_back_to_one_year(
+        self, mock_get_llm: MagicMock
+    ) -> None:
+        """A state dict predating B1 (no 'period' key at all) must not
+        crash -- it falls back to the same '1y' default AnalysisStart
+        Request itself uses."""
+        mock_get_llm.return_value = _make_llm()
+        state = self._make_state()
+        del state["period"]
+        result = run_portfolio_manager_decision(state)
+        assert "1 year" in result["decision"]["time_horizon"]
 
     def test_missing_ticker_returns_error_result(self) -> None:
         state: dict[str, Any] = {

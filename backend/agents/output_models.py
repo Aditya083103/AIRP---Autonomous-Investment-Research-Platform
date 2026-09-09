@@ -897,9 +897,11 @@ class InvestmentDecision(AgentOutput):
     time_horizon: str = Field(
         default="12 months",
         description=(
-            "Suggested holding period for this verdict, e.g. "
-            "'3-6 months', '12 months', '3-5 years', or "
-            "'quarterly review (3 months)' for HOLD verdicts."
+            "Suggested holding period for this verdict. Primarily driven by "
+            "the user's selected analysis period (B1), e.g. '~3 years "
+            "(quarterly review recommended)' for a HOLD on a 3y analysis, "
+            "or '~1 month (technically driven, reassess on momentum "
+            "shift)' for a BUY on a 1mo analysis."
         ),
     )
 
