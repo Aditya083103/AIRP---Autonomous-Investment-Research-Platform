@@ -127,4 +127,94 @@ describe("deriveAgentCards", () => {
     expect(risk?.state).toBe("complete");
     expect(risk?.outputPreview).toBe("Second pass, revised.");
   });
+
+  // -------------------------------------------------------------------
+  // B3: a live connection can miss an individual round-1 research
+  // agent's own events (a Send-parallel branch that fired before this
+  // connection subscribed). research_join cannot complete unless all 4
+  // round-1 agents already have, so its arrival is authoritative proof
+  // those seats ran -- mirroring backend/routers/websocket.py's own
+  // `_snapshot_to_events` expansion of research_join into its 4
+  // upstream agents on a fresh reconnect/reload.
+  // -------------------------------------------------------------------
+
+  it("marks a round-1 seat complete via research_join even with no event of its own", () => {
+    const events = [
+      makeEvent({ agent: "fundamental_analyst" }),
+      makeEvent({ agent: "technical_analyst" }),
+      makeEvent({ agent: "sentiment_analyst" }),
+      // macro_economist's own event never arrived on this connection.
+      makeEvent({ agent: "research_join", output_preview: "Research complete." }),
+    ];
+    const cards = deriveAgentCards(events, false);
+    const macro = cards.find((card) => card.nodeName === "macro_economist");
+    expect(macro?.state).toBe("complete");
+    expect(macro?.outputPreview).toBe("Research complete.");
+  });
+
+  it("does not mark a missing round-1 seat as skipped once the job terminates, when research_join fired", () => {
+    const events = [
+      makeEvent({ agent: "fundamental_analyst" }),
+      makeEvent({ agent: "technical_analyst" }),
+      makeEvent({ agent: "sentiment_analyst" }),
+      makeEvent({ agent: "research_join" }),
+    ];
+    // The exact bug this fix targets: isComplete=true (job terminated)
+    // must not flip macro_economist to "skipped" just because this
+    // live connection never received its own event.
+    const cards = deriveAgentCards(events, true);
+    const macro = cards.find((card) => card.nodeName === "macro_economist");
+    expect(macro?.state).toBe("complete");
+  });
+
+  it("marks a missing round-1 seat failed (not complete) if research_join itself reports failed", () => {
+    const events = [makeEvent({ agent: "research_join", status: "failed" })];
+    const cards = deriveAgentCards(events, false);
+    const fundamental = cards.find((card) => card.nodeName === "fundamental_analyst");
+    expect(fundamental?.state).toBe("failed");
+  });
+
+  it("a seat's own event always takes priority over the research_join fallback", () => {
+    const events = [
+      makeEvent({
+        agent: "fundamental_analyst",
+        status: "failed",
+        output_preview: "Rate limited.",
+      }),
+      makeEvent({ agent: "research_join", output_preview: "Research complete." }),
+    ];
+    const cards = deriveAgentCards(events, false);
+    const fundamental = cards.find((card) => card.nodeName === "fundamental_analyst");
+    expect(fundamental?.state).toBe("failed");
+    expect(fundamental?.outputPreview).toBe("Rate limited.");
+  });
+
+  it("research_join does not affect round-2/round-3 seats directly (only promotes them via roundIsComplete)", () => {
+    const events = [makeEvent({ agent: "research_join" })];
+    const cards = deriveAgentCards(events, false);
+    const riskOfficer = cards.find((card) => card.nodeName === "risk_officer");
+    // Round 1 is done (via research_join), so Round 2 is now "thinking",
+    // not "complete" -- research_join is not itself risk_officer's event.
+    expect(riskOfficer?.state).toBe("thinking");
+  });
+
+  it("promotes Round 2 to thinking via research_join even when a round-1 seat's own event never arrived", () => {
+    const events = [
+      makeEvent({ agent: "fundamental_analyst" }),
+      makeEvent({ agent: "technical_analyst" }),
+      makeEvent({ agent: "sentiment_analyst" }),
+      // macro_economist's own event missing, but research_join fired.
+      makeEvent({ agent: "research_join" }),
+    ];
+    const cards = deriveAgentCards(events, false);
+    const riskOfficer = cards.find((card) => card.nodeName === "risk_officer");
+    expect(riskOfficer?.state).toBe("thinking");
+  });
+
+  it("without research_join, a missing round-1 seat still renders skipped once terminated (no over-eager synthesis)", () => {
+    const events = [makeEvent({ agent: "fundamental_analyst" })];
+    const cards = deriveAgentCards(events, true);
+    const technical = cards.find((card) => card.nodeName === "technical_analyst");
+    expect(technical?.state).toBe("skipped");
+  });
 });

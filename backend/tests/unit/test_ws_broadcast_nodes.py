@@ -493,6 +493,146 @@ class TestPersistAfterCallsBothPersistAndBroadcast:
 
 
 # ---------------------------------------------------------------------------
+# 4b. (B3) _persist_after degrades gracefully when node_fn itself raises,
+#     instead of letting the pipeline abort with no terminal broadcast
+#     for this node -- see the try/except around node_fn(state) in
+#     _persist_after for the full rationale.
+# ---------------------------------------------------------------------------
+
+
+class TestPersistAfterDegradesOnNodeFnException:
+    def test_exception_from_node_fn_does_not_propagate(self) -> None:
+        from backend.graph.nodes import _persist_after
+
+        mock_fn = MagicMock(side_effect=RuntimeError("agent blew up"))
+        wrapped = _persist_after(mock_fn, "risk_officer")
+        state = _make_state()
+        with (
+            patch("backend.graph.nodes._run_persist"),
+            patch("backend.graph.nodes._run_broadcast"),
+        ):
+            result = wrapped(state)  # must not raise
+        assert result["status"] == "failed"
+
+    def test_degraded_result_names_the_failed_node(self) -> None:
+        from backend.graph.nodes import _persist_after
+
+        mock_fn = MagicMock(side_effect=RuntimeError("agent blew up"))
+        wrapped = _persist_after(mock_fn, "risk_officer")
+        state = _make_state()
+        with (
+            patch("backend.graph.nodes._run_persist"),
+            patch("backend.graph.nodes._run_broadcast"),
+        ):
+            result = wrapped(state)
+        assert result["current_node"] == "risk_officer"
+        assert "risk_officer" in result["pipeline_error"]
+
+    def test_persist_and_broadcast_still_fire_after_node_fn_raises(self) -> None:
+        """The core B3 guarantee: even when node_fn raises, this node
+        still gets persisted and broadcast -- so its WebSocket seat is
+        never left permanently unaccounted for."""
+        from backend.graph.nodes import _persist_after
+
+        mock_fn = MagicMock(side_effect=RuntimeError("agent blew up"))
+        wrapped = _persist_after(mock_fn, "risk_officer")
+        state = _make_state()
+        with (
+            patch("backend.graph.nodes._run_persist") as mock_persist,
+            patch("backend.graph.nodes._run_broadcast") as mock_broadcast,
+        ):
+            wrapped(state)
+        mock_persist.assert_called_once()
+        mock_broadcast.assert_called_once()
+
+    def test_broadcast_receives_merged_state_with_failed_status(self) -> None:
+        from backend.graph.nodes import _persist_after
+
+        mock_fn = MagicMock(side_effect=ValueError("unexpected bug"))
+        wrapped = _persist_after(mock_fn, "valuation_agent")
+        state = _make_state()
+        with (
+            patch("backend.graph.nodes._run_persist"),
+            patch("backend.graph.nodes._run_broadcast") as mock_broadcast,
+        ):
+            wrapped(state)
+        _, kwargs = mock_broadcast.call_args
+        assert kwargs["merged"]["status"] == "failed"
+        assert kwargs["node_name"] == "valuation_agent"
+
+    def test_started_broadcast_still_fires_before_node_fn_raises(self) -> None:
+        """NODE_STARTED already fired before node_fn ran -- an exception
+        inside node_fn must not retroactively un-fire it."""
+        from backend.graph.nodes import _persist_after
+
+        mock_fn = MagicMock(side_effect=RuntimeError("agent blew up"))
+        wrapped = _persist_after(mock_fn, "risk_officer")
+        state = _make_state()
+        with (
+            patch("backend.graph.nodes._run_broadcast_started") as mock_started,
+            patch("backend.graph.nodes._run_persist"),
+            patch("backend.graph.nodes._run_broadcast"),
+        ):
+            wrapped(state)
+        mock_started.assert_called_once()
+
+    def test_node_timeout_error_is_caught_the_same_way(self) -> None:
+        """profile_node's watchdog re-raises NodeTimeoutError on a slow
+        node -- this must degrade exactly like any other exception, not
+        propagate as a special case."""
+        from backend.graph.nodes import NodeTimeoutError, _persist_after
+
+        mock_fn = MagicMock(
+            side_effect=NodeTimeoutError(
+                node_name="risk_officer", timeout_s=30.0, elapsed_s=31.2
+            )
+        )
+        wrapped = _persist_after(mock_fn, "risk_officer")
+        state = _make_state()
+        with (
+            patch("backend.graph.nodes._run_persist"),
+            patch("backend.graph.nodes._run_broadcast") as mock_broadcast,
+        ):
+            result = wrapped(state)
+        assert result["status"] == "failed"
+        mock_broadcast.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_end_to_end_a_crashing_node_still_reaches_the_subscriber(
+        self,
+    ) -> None:
+        """Real broadcaster, no mocks on the delivery path: a node
+        function that raises must still deliver a terminal event to a
+        live WebSocket subscriber -- the literal B3 acceptance criterion
+        ('simulate an agent raising mid-run -> its seat ends completed/
+        degraded, never skipped')."""
+        from backend.graph.nodes import _persist_after
+
+        queue = await subscribe(_JOB_ID)
+        state = _make_state()
+
+        def _crashing_node(_: InvestmentState) -> dict[str, Any]:
+            raise RuntimeError("simulated unhandled agent bug")
+
+        wrapped = _persist_after(_crashing_node, "risk_officer")
+        with patch("backend.graph.nodes._run_persist"):
+            wrapped(state)
+
+        # Drain the queue: NODE_STARTED, then the degraded NODE_COMPLETED.
+        started = await asyncio.wait_for(queue.get(), timeout=1.0)
+        completed = await asyncio.wait_for(queue.get(), timeout=1.0)
+
+        assert started["agent"] == "risk_officer"
+        assert started["event_type"] == "node_started"
+
+        assert completed["agent"] == "risk_officer"
+        assert completed["event_type"] == "node_completed"
+        assert completed["status"] == "failed"
+        # A failed node's completion is treated as terminal for this run.
+        assert completed["is_final"] is True
+
+
+# ---------------------------------------------------------------------------
 # 5. End-to-end: a real sequential node delivers an event to a real
 #    broadcaster subscriber, in order
 # ---------------------------------------------------------------------------

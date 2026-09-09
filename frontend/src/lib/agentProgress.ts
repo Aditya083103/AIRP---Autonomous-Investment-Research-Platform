@@ -91,7 +91,27 @@ function latestEventFor(
   return undefined;
 }
 
+/**
+ * LangGraph join/barrier node that only ever completes after all 4
+ * round-1 research agents (fundamental_analyst, technical_analyst,
+ * sentiment_analyst, macro_economist) have -- see
+ * backend/graph/graph.py's edges (all 4 point into NODE_RESEARCH_JOIN)
+ * and backend/routers/websocket.py's `_snapshot_to_events`, which
+ * already expands a replayed `research_join` completion into its own 4
+ * agent events for exactly this reason. Not itself a COMMITTEE_ROSTER
+ * entry (no card is rendered for it) -- used only as corroborating
+ * evidence that round 1 finished, in `roundIsComplete` and
+ * `deriveAgentCards` below (see the B3 fix note on `deriveAgentCards`).
+ */
+const NODE_RESEARCH_JOIN = "research_join";
+
 function roundIsComplete(round: 1 | 2 | 3, events: readonly AgentStreamEvent[]): boolean {
+  if (round === 1 && latestEventFor(events, NODE_RESEARCH_JOIN) !== undefined) {
+    // research_join cannot complete unless all 4 round-1 agents already
+    // have -- authoritative even if this live connection missed one of
+    // their own individual events (B3).
+    return true;
+  }
   return COMMITTEE_ROSTER.filter((entry) => entry.round === round).every(
     (entry) => latestEventFor(events, entry.nodeName) !== undefined,
   );
@@ -112,11 +132,33 @@ function roundIsComplete(round: 1 | 2 | 3, events: readonly AgentStreamEvent[]):
  *                    "waiting"/"thinking" to "skipped" instead of
  *                    leaving its card spinning forever after the job
  *                    has already terminated.
+ *
+ * B3 fix: a seat only ever renders "skipped" once `isComplete` is true
+ * (the job's terminal state) -- while the job is still running, a seat
+ * with no event of its own always renders "waiting"/"thinking", never
+ * "skipped". That alone does not fully close the bug this fix targets:
+ * a live connection can miss an individual round-1 research agent's own
+ * NODE_STARTED/NODE_COMPLETED events (e.g. it connected slightly after
+ * that agent's Send-parallel branch already fired -- see
+ * backend/routers/websocket.py's own documented connect-timing races),
+ * so by the time the job's real terminal event arrives through THIS
+ * SAME live connection, that seat's local event history is still empty
+ * and it would wrongly render "skipped" even though the agent
+ * genuinely ran (a full page reload's fresh replay,
+ * `_snapshot_to_events`, already gets this right by expanding
+ * `research_join` into its 4 upstream agents -- see that function's own
+ * docstring). Reconciling the live stream against `research_join`'s own
+ * completion event the same way closes that gap without requiring a
+ * reload: `research_join` cannot complete unless all 4 round-1 agents
+ * already have, so its arrival is authoritative proof a round-1 seat
+ * with no event of its own still actually ran.
  */
 export function deriveAgentCards(
   events: readonly AgentStreamEvent[],
   isComplete: boolean,
 ): AgentCardViewModel[] {
+  const researchJoin = latestEventFor(events, NODE_RESEARCH_JOIN);
+
   return COMMITTEE_ROSTER.map((entry): AgentCardViewModel => {
     const latest = latestEventFor(events, entry.nodeName);
 
@@ -125,6 +167,14 @@ export function deriveAgentCards(
         ...entry,
         state: latest.status === "failed" ? "failed" : "complete",
         outputPreview: latest.output_preview,
+      };
+    }
+
+    if (entry.round === 1 && researchJoin !== undefined) {
+      return {
+        ...entry,
+        state: researchJoin.status === "failed" ? "failed" : "complete",
+        outputPreview: researchJoin.output_preview,
       };
     }
 
