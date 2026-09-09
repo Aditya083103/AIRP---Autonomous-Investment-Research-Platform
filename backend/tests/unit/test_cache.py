@@ -42,6 +42,7 @@ from backend.tools.cache import (  # noqa: E402
     MACRO_TTL,
     NEWS_TTL,
     RATIOS_TTL,
+    STOCK_STALE_TTL,
     STOCK_TTL,
     cache_get_json,
     cache_set_json,
@@ -424,6 +425,113 @@ class TestCachedDecoratorPreservesMetadata:
             return {}
 
         assert _documented_fetch.__doc__ == "This is the docstring."
+
+
+# ---------------------------------------------------------------------------
+# @cached decorator — stale-on-error fallback (T-087, Section A)
+# ---------------------------------------------------------------------------
+
+
+class TestCachedDecoratorStaleFallback:
+    def test_stale_ttl_writes_a_second_stale_key_on_success(self) -> None:
+        @cached(key="airp:stock:{ticker}", ttl=STOCK_TTL, stale_ttl=STOCK_STALE_TTL)
+        def _fetch(ticker: str) -> dict[str, Any]:
+            return {"ticker": ticker, "price": 100.0}
+
+        with (
+            patch("backend.tools.cache.cache_get_json", return_value=None),
+            patch("backend.tools.cache.cache_set_json") as mock_set,
+        ):
+            _fetch(ticker="TCS.NS")
+
+        calls = mock_set.call_args_list
+        assert calls[0].args == (
+            "airp:stock:TCS.NS",
+            {"ticker": "TCS.NS", "price": 100.0},
+            STOCK_TTL,
+        )
+        assert calls[1].args == (
+            "airp:stock:TCS.NS:stale",
+            {"ticker": "TCS.NS", "price": 100.0},
+            STOCK_STALE_TTL,
+        )
+
+    def test_serves_stale_copy_when_live_fetch_raises(self) -> None:
+        @cached(key="airp:stock:{ticker}", ttl=STOCK_TTL, stale_ttl=STOCK_STALE_TTL)
+        def _fetch(ticker: str) -> dict[str, Any]:
+            raise RuntimeError("yfinance still rate-limited after retries")
+
+        stale_value = {"ticker": "TCS.NS", "price": 90.0}
+
+        def fake_get(key: str) -> dict[str, Any] | None:
+            if key.endswith(":stale"):
+                return stale_value
+            return None  # the fresh key is a miss
+
+        with patch("backend.tools.cache.cache_get_json", side_effect=fake_get):
+            result = _fetch(ticker="TCS.NS")
+
+        assert result["price"] == 90.0
+        assert result["stale"] is True
+        # The cached stale entry itself must not be mutated in place —
+        # a second caller reading the same stale_value must not see the
+        # "stale" marker leak into what get_client() would actually return.
+        assert "stale" not in stale_value
+
+    def test_raises_when_no_stale_copy_available(self) -> None:
+        @cached(key="airp:stock:{ticker}", ttl=STOCK_TTL, stale_ttl=STOCK_STALE_TTL)
+        def _fetch(ticker: str) -> dict[str, Any]:
+            raise RuntimeError("no data ever cached for this ticker")
+
+        with patch("backend.tools.cache.cache_get_json", return_value=None):
+            with pytest.raises(RuntimeError, match="no data ever cached"):
+                _fetch(ticker="NEW.NS")
+
+    def test_without_stale_ttl_failure_propagates_as_before(self) -> None:
+        """
+        Omitting stale_ttl (the default) must reproduce the exact pre-T-087
+        behaviour: a fetch failure propagates, full stop -- no behaviour
+        change for any @cached call site that hasn't opted in.
+        """
+
+        @cached(key="airp:stock:{ticker}", ttl=STOCK_TTL)
+        def _fetch(ticker: str) -> dict[str, Any]:
+            raise RuntimeError("boom")
+
+        with patch("backend.tools.cache.cache_get_json", return_value=None):
+            with pytest.raises(RuntimeError, match="boom"):
+                _fetch(ticker="X.NS")
+
+    def test_error_result_is_not_written_to_stale_cache_either(self) -> None:
+        @cached(key="airp:stock:{ticker}", ttl=STOCK_TTL, stale_ttl=STOCK_STALE_TTL)
+        def _fetch(ticker: str) -> dict[str, Any]:
+            return {"error": "ticker_not_found", "ticker": ticker}
+
+        with (
+            patch("backend.tools.cache.cache_get_json", return_value=None),
+            patch("backend.tools.cache.cache_set_json") as mock_set,
+        ):
+            _fetch(ticker="BAD.NS")
+
+        mock_set.assert_not_called()
+
+    def test_fresh_cache_hit_is_returned_without_consulting_stale_key(self) -> None:
+        """A fresh cache hit must short-circuit before the stale key is ever
+        looked up -- the happy path must not pay for the fallback."""
+
+        @cached(key="airp:stock:{ticker}", ttl=STOCK_TTL, stale_ttl=STOCK_STALE_TTL)
+        def _fetch(ticker: str) -> dict[str, Any]:
+            raise AssertionError("should not be called on a fresh cache hit")
+
+        fresh_value = {"ticker": "TCS.NS", "price": 123.0}
+
+        with patch(
+            "backend.tools.cache.cache_get_json", return_value=fresh_value
+        ) as mock_get:
+            result = _fetch(ticker="TCS.NS")
+
+        assert result == fresh_value
+        mock_get.assert_called_once_with("airp:stock:TCS.NS")
 
 
 # ---------------------------------------------------------------------------

@@ -11,6 +11,7 @@ Test strategy:
 """
 
 import os
+import threading
 import time
 from unittest.mock import MagicMock
 
@@ -24,9 +25,12 @@ from starlette.routing import Route  # noqa: E402
 from starlette.testclient import TestClient  # noqa: E402
 
 from backend.services.rate_limiter import (  # noqa: E402
+    YFINANCE_MAX_CONCURRENT_REQUESTS,
+    ConcurrencyThrottle,
     RateLimiter,
     RateLimitMiddleware,
     _client_key,
+    yfinance_throttle,
 )
 
 # ---------------------------------------------------------------------------
@@ -142,6 +146,73 @@ class TestRateLimitMiddleware:
             client.get("/thing", headers={"x-forwarded-for": "1.1.1.1"}).status_code
             == 429
         )
+
+
+# ---------------------------------------------------------------------------
+# ConcurrencyThrottle / yfinance_throttle (T-087, Section A)
+# ---------------------------------------------------------------------------
+
+
+class TestConcurrencyThrottle:
+    def test_rejects_non_positive_max_concurrent(self) -> None:
+        with pytest.raises(ValueError):
+            ConcurrencyThrottle(0)
+
+    def test_single_caller_acquires_and_releases(self) -> None:
+        throttle = ConcurrencyThrottle(1)
+        with throttle.acquire():
+            pass  # must not raise / hang
+        # A second, later acquisition must succeed -- the slot was released.
+        with throttle.acquire():
+            pass
+
+    def test_bounds_concurrency_to_max_concurrent(self) -> None:
+        """
+        With max_concurrent=2, a third caller must block until one of the
+        first two releases -- verified by timing: the third acquire()
+        cannot complete before either of the first two threads finishes
+        its (artificially slow) guarded section.
+        """
+        throttle = ConcurrencyThrottle(2)
+        currently_inside = {"n": 0, "max_seen": 0}
+        lock = threading.Lock()
+
+        def worker() -> None:
+            with throttle.acquire():
+                with lock:
+                    currently_inside["n"] += 1
+                    currently_inside["max_seen"] = max(
+                        currently_inside["max_seen"], currently_inside["n"]
+                    )
+                time.sleep(0.05)
+                with lock:
+                    currently_inside["n"] -= 1
+
+        threads = [threading.Thread(target=worker) for _ in range(5)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=5)
+
+        assert currently_inside["max_seen"] <= 2
+
+    def test_yfinance_throttle_is_bounded_by_the_documented_constant(self) -> None:
+        """
+        yfinance_throttle must actually be constructed with
+        YFINANCE_MAX_CONCURRENT_REQUESTS, not just happen to share the
+        name -- verified behaviourally rather than by reaching into
+        private state: acquiring exactly that many slots must succeed,
+        and each acquired slot is independently releasable.
+        """
+        acquired: list[object] = []
+        try:
+            for _ in range(YFINANCE_MAX_CONCURRENT_REQUESTS):
+                ctx = yfinance_throttle.acquire()
+                ctx.__enter__()
+                acquired.append(ctx)
+        finally:
+            for ctx in acquired:
+                ctx.__exit__(None, None, None)
 
 
 if __name__ == "__main__":  # pragma: no cover

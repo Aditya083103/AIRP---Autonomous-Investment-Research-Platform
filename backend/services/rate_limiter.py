@@ -30,8 +30,11 @@ liveness probe can never itself get rate-limited into reporting the
 service as down.
 """
 
+from contextlib import contextmanager
 import logging
+import threading
 import time
+from typing import Iterator
 
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
@@ -122,3 +125,68 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 },
             )
         return await call_next(request)
+
+
+# ---------------------------------------------------------------------------
+# Outbound concurrency throttle (Section A data-layer hardening, T-087)
+# ---------------------------------------------------------------------------
+#
+# The RateLimiter/RateLimitMiddleware above guard INBOUND requests to
+# AIRP's own API. This section guards OUTBOUND calls AIRP itself makes to
+# a burst-sensitive third-party API -- specifically yFinance. LangGraph's
+# Send API fans the 4 research agents (Fundamental, Technical, Valuation,
+# and indirectly Ratios via Valuation) out in parallel; each independently
+# calls backend.tools.market_data for the same ticker at roughly the same
+# instant. Redis (backend.tools.cache) only helps once one of those calls
+# has already succeeded and been cached -- on the very first ("cold") run
+# of a ticker, all of them race yFinance simultaneously and can
+# self-inflict a 429 that no retry/back-off alone fully prevents, because
+# every concurrent attempt is retrying independently against the same
+# already-rate-limited window.
+#
+# A simple bounded semaphore is enough here: this is a single Render web
+# service instance (the same constraint RateLimiter above documents), not
+# a fleet, so no cross-process coordination is needed.
+
+
+class ConcurrencyThrottle:
+    """
+    Process-wide semaphore bounding how many callers may be inside a
+    guarded block at once.
+
+    Deliberately simpler than a token-bucket/leaky-bucket rate limiter:
+    the goal is only "don't let N agents hit the same rate-sensitive
+    upstream at the exact same instant," not precise requests-per-second
+    shaping. threading.Semaphore is thread-safe and blocks the calling
+    thread (not the asyncio event loop) until a slot frees up, which is
+    correct here since every yFinance call in this codebase already runs
+    inside a worker thread (LangGraph node execution / asyncio.to_thread),
+    never directly on the event loop.
+    """
+
+    def __init__(self, max_concurrent: int) -> None:
+        if max_concurrent < 1:
+            raise ValueError("max_concurrent must be >= 1")
+        self._semaphore = threading.Semaphore(max_concurrent)
+
+    @contextmanager
+    def acquire(self) -> Iterator[None]:
+        self._semaphore.acquire()
+        try:
+            yield
+        finally:
+            self._semaphore.release()
+
+
+# Max simultaneous outbound yFinance calls across the whole process. Low
+# enough to meaningfully de-burst the 4-agent parallel fan-out (which
+# would otherwise be up to 4 simultaneous yf.Ticker() property accesses,
+# each potentially triggering its own underlying HTTP request) while still
+# allowing real concurrency -- 1 would serialise everything and slow down
+# every analysis even when yFinance is perfectly healthy.
+YFINANCE_MAX_CONCURRENT_REQUESTS: int = 2
+
+#: Shared throttle instance -- backend.tools.market_data wraps every
+#: outbound yf.Ticker property/method access with
+#: `with yfinance_throttle.acquire():`.
+yfinance_throttle = ConcurrencyThrottle(YFINANCE_MAX_CONCURRENT_REQUESTS)

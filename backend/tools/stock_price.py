@@ -28,8 +28,8 @@ from typing import Any
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field, field_validator
 
-from backend.tools.cache import STOCK_TTL, cached
-from backend.tools.market_data import get_shared_ticker
+from backend.tools.cache import STOCK_STALE_TTL, STOCK_TTL, cached
+from backend.tools.market_data import fetch_history, fetch_info, get_shared_ticker
 
 logger = logging.getLogger(__name__)
 
@@ -274,8 +274,11 @@ def _fetch_stock_data(ticker: str, period: str) -> dict[str, Any]:
 
     yf_ticker = get_shared_ticker(ticker)
 
-    # Download historical OHLCV
-    hist = yf_ticker.history(period=PERIOD_MAP[period], auto_adjust=True)
+    # Download historical OHLCV. fetch_history retries on 429/403/503/
+    # timeout with exponential back-off + jitter, and runs inside the
+    # process-wide yfinance_throttle so the 4 parallel research agents
+    # don't self-inflict a 429 on a cold run (Section A).
+    hist = fetch_history(yf_ticker, PERIOD_MAP[period], auto_adjust=True)
 
     if hist.empty:
         raise TickerNotFoundError(
@@ -287,7 +290,7 @@ def _fetch_stock_data(ticker: str, period: str) -> dict[str, Any]:
     # Parse ticker metadata
     info: dict[str, Any] = {}
     try:
-        info = yf_ticker.info or {}
+        info = fetch_info(yf_ticker)
     except Exception:
         logger.warning("Could not fetch ticker info for %s — using defaults", ticker)
 
@@ -337,14 +340,18 @@ def _fetch_stock_data(ticker: str, period: str) -> dict[str, Any]:
     ).model_dump(mode="json")
 
 
-@cached(key="airp:stock:{ticker}:{period}", ttl=STOCK_TTL)
+@cached(key="airp:stock:{ticker}:{period}", ttl=STOCK_TTL, stale_ttl=STOCK_STALE_TTL)
 def _fetch_stock_cached(ticker: str, period: str) -> dict[str, Any]:
     """
     Cached wrapper around ``_fetch_stock_data``.
 
     The ``@cached`` decorator intercepts the call: on a hit it returns the
     cached dict immediately; on a miss it calls ``_fetch_stock_data``,
-    caches the result for ``STOCK_TTL`` seconds, then returns it.
+    caches the result for ``STOCK_TTL`` seconds, then returns it. If the
+    live fetch fails (e.g. yFinance still rate-limited after retries), the
+    last successfully cached payload for this ticker/period is served
+    instead (marked ``stale: True``) rather than raising -- see
+    ``STOCK_STALE_TTL`` and ``backend.tools.cache.cached``.
     """
     return _fetch_stock_data(ticker=ticker, period=period)
 

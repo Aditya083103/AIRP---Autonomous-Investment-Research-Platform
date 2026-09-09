@@ -48,6 +48,7 @@ Public interface
   _score_conviction(...)                 -> int
   _determine_time_horizon(...)           -> str
   _build_price_target(...)               -> Optional[str]
+  _build_relative_price_target(...)      -> Optional[str]  (B2 fallback)
   _build_key_risks(...)                  -> list[str]
   _build_key_catalysts(...)              -> list[str]
   _extract_debate_highlights(...)        -> list[str]
@@ -93,6 +94,25 @@ _BASE_AGENT_WEIGHTS: dict[str, float] = {
     "macro_economist": 0.10,
     "news_sentiment": 0.08,
 }
+
+# Agents whose entire mandate is to argue the bearish/skeptical side of
+# the committee. Naive proportional weight redistribution (see
+# _compute_agent_weights) hands these seats 100% of any bullish agent's
+# dropped weight, which manufactures a bearish-looking committee purely
+# because Fundamental/Technical/Valuation lacked data -- not because Risk
+# or Contrarian said anything more convincing. See
+# _MAX_ADVERSARIAL_WEIGHT_MULTIPLIER below (Section A, bug #9).
+_ADVERSARIAL_AGENTS: frozenset[str] = frozenset({"risk_officer", "contrarian_investor"})
+
+# An adversarial seat's redistribution-inflated weight is capped at this
+# multiple of its own base weight. Any excess is redistributed among the
+# other *usable, non-adversarial* agents instead (proportional to their
+# base weights) -- e.g. Valuation, which is still grounded in real data
+# even when Fundamental/Technical are not. If no non-adversarial agent is
+# usable, the cap cannot be enforced without breaking sum(weights) == 1.0,
+# so it is left uncapped in that edge case (nothing else to redistribute
+# the reserve to).
+_MAX_ADVERSARIAL_WEIGHT_MULTIPLIER = 1.5
 
 # Risk Officer's risk_score at or above this level is treated as
 # prohibitive -- no combination of bullish signals can override it.
@@ -217,18 +237,80 @@ def _compute_agent_weights(
 
     # Redistribute proportionally so usable weights sum to exactly 1.0.
     normalised: dict[str, float] = {
-        name: round(weight / total_usable, 4) for name, weight in usable.items()
+        name: weight / total_usable for name, weight in usable.items()
+    }
+
+    # Bug #9 fix: cap how much of the redistributed weight an adversarial
+    # seat (Risk Officer / Contrarian Investor) can end up with. Without
+    # this, a cold run where Fundamental/Technical/Valuation all lack data
+    # redistributes their entire combined 0.47 base weight onto whichever
+    # agents remain usable -- if that happens to be mostly Risk +
+    # Contrarian, the committee-weighting card shows a bearish-looking
+    # 60%+ combined share that reflects data availability, not what those
+    # two agents actually said. Any excess above the cap flows back to
+    # the other usable, non-adversarial agents (proportional to their own
+    # base weight) instead.
+    non_adversarial_usable = {
+        name: weight
+        for name, weight in usable.items()
+        if name not in _ADVERSARIAL_AGENTS
+    }
+    if non_adversarial_usable:
+        reserve = 0.0
+        for name in _ADVERSARIAL_AGENTS:
+            if name not in normalised:
+                continue
+            cap = base_weights[name] * _MAX_ADVERSARIAL_WEIGHT_MULTIPLIER
+            if normalised[name] > cap:
+                reserve += normalised[name] - cap
+                normalised[name] = cap
+        if reserve > 0:
+            non_adv_total = sum(non_adversarial_usable.values())
+            for name, base_w in non_adversarial_usable.items():
+                normalised[name] += reserve * (base_w / non_adv_total)
+
+    rounded: dict[str, float] = {
+        name: round(weight, 4) for name, weight in normalised.items()
     }
     for name in base_weights:
-        if name not in normalised:
-            normalised[name] = 0.0
+        if name not in rounded:
+            rounded[name] = 0.0
 
-    return normalised
+    return rounded
 
 
 # ---------------------------------------------------------------------------
 # Stage 1b -- verdict
 # ---------------------------------------------------------------------------
+
+# The three agents whose output is directly gated on live yFinance data
+# (Section A's failure chain: stock_price.py / financials.py 429s ->
+# degraded/empty output here). Used by _data_completeness below to decide
+# how much weight a bearish critique deserves.
+_DATA_DEPENDENT_AGENTS_FOR_COMPLETENESS = 3  # fundamental, technical, valuation
+
+
+def _data_completeness(
+    fundamental: dict[str, Any],
+    technical: dict[str, Any],
+    valuation: dict[str, Any],
+) -> float:
+    """
+    Fraction (0.0-1.0) of the three yFinance-dependent research agents
+    that actually returned usable data this run.
+
+    Used to scale down the Contrarian's and Risk Officer's bearish
+    contribution to the verdict tally (bug #12): when the fundamental
+    data those two agents would critique was itself unavailable, a
+    confident bearish score from them is not evidence-backed -- it must
+    not be allowed to out-vote the bullish inputs that correctly
+    defaulted to a neutral (zero-contribution) value for the exact same
+    reason. At full completeness (1.0, the common case) this exactly
+    reproduces the pre-fix penalty.
+    """
+    sources = (fundamental, technical, valuation)
+    usable = sum(1 for s in sources if s and not s.get("error"))
+    return usable / _DATA_DEPENDENT_AGENTS_FOR_COMPLETENESS
 
 
 def _determine_verdict(
@@ -264,6 +346,7 @@ def _determine_verdict(
     fund_data_quality = str(fundamental.get("data_quality") or "sufficient")
     fund_score = int(fundamental.get("score") or 5)
     bear_conviction = int(contrarian.get("bear_conviction") or 1)
+    completeness = _data_completeness(fundamental, technical, valuation)
 
     # -- Hard gate 1: prohibitive risk overrides everything ---------------
     if risk_score >= _PROHIBITIVE_RISK_SCORE_THRESHOLD:
@@ -296,14 +379,23 @@ def _determine_verdict(
     elif valuation_verdict == "overvalued":
         score -= 1.5
 
-    score -= max(0, risk_score - 5) * 0.35
+    # Bug #12 fix: scale the Risk/Contrarian/critical-flags penalties by
+    # data completeness. These are the "always-present bearish inputs"
+    # from Section A -- unlike fund_score/tech_signal/valuation_verdict,
+    # which default to neutral (zero contribution) when their data is
+    # missing, Risk Officer and Contrarian still render an opinion even
+    # when the fundamentals they'd be critiquing don't exist, and that
+    # opinion skews skeptical by design. Discounting their penalty in
+    # proportion to how much real data actually backed it keeps a
+    # data-outage from manufacturing a structurally bearish verdict.
+    score -= max(0, risk_score - 5) * 0.35 * completeness
 
     if bear_conviction >= _HIGH_BEAR_CONVICTION_THRESHOLD:
-        score -= 1.5
+        score -= 1.5 * completeness
     else:
-        score -= (bear_conviction - 1) * 0.1
+        score -= (bear_conviction - 1) * 0.1 * completeness
 
-    score -= len(critical_flags) * 0.3
+    score -= len(critical_flags) * 0.3 * completeness
 
     if score >= 1.5:
         verdict = "BUY"
@@ -437,16 +529,71 @@ def _determine_time_horizon(
 # ---------------------------------------------------------------------------
 
 
-def _build_price_target(valuation: dict[str, Any], time_horizon: str) -> Optional[str]:
-    """Format the DCF intrinsic value into a price-target string."""
-    intrinsic = valuation.get("intrinsic_value_per_share")
-    if intrinsic is None:
+def _as_float(value: Any) -> Optional[float]:
+    """Best-effort float coercion. Returns None instead of raising."""
+    if value is None:
         return None
     try:
-        intrinsic_float = float(intrinsic)
+        return float(value)
     except (TypeError, ValueError):
         return None
-    return f"Rs. {intrinsic_float:,.0f} ({time_horizon})"
+
+
+def _build_relative_price_target(
+    valuation: dict[str, Any], time_horizon: str
+) -> Optional[str]:
+    """
+    B2 fallback: when the DCF has no intrinsic value (e.g. insufficient
+    FCF history), derive a relative price target from peer PE/PB multiples
+    instead of falling back to a flat "Not determined".
+
+    Re-rates the current price to where it would sit if the stock traded
+    at the sector-average multiple: target = current_price * (sector_avg /
+    own_multiple). PE is tried first (Valuation Agent's primary relative
+    metric); PB is the fallback when PE data is unavailable (e.g. the
+    company has no trailing earnings). Returns None -- never a fabricated
+    number -- when neither multiple pair nor a current price is available.
+    """
+    current_price = _as_float(valuation.get("current_price"))
+    if current_price is None or current_price <= 0:
+        return None
+
+    pe_ratio = _as_float(valuation.get("pe_ratio"))
+    sector_avg_pe = _as_float(valuation.get("sector_avg_pe"))
+    if pe_ratio and pe_ratio > 0 and sector_avg_pe and sector_avg_pe > 0:
+        target = current_price * (sector_avg_pe / pe_ratio)
+        return (
+            f"Rs. {target:,.0f} ({time_horizon}, relative estimate "
+            "vs. sector-average P/E -- DCF intrinsic value unavailable)"
+        )
+
+    pb_ratio = _as_float(valuation.get("pb_ratio"))
+    sector_avg_pb = _as_float(valuation.get("sector_avg_pb"))
+    if pb_ratio and pb_ratio > 0 and sector_avg_pb and sector_avg_pb > 0:
+        target = current_price * (sector_avg_pb / pb_ratio)
+        return (
+            f"Rs. {target:,.0f} ({time_horizon}, relative estimate "
+            "vs. sector-average P/B -- DCF intrinsic value unavailable)"
+        )
+
+    return None
+
+
+def _build_price_target(valuation: dict[str, Any], time_horizon: str) -> Optional[str]:
+    """
+    Format a price target string for the Investment Memo.
+
+    Primary source: the DCF intrinsic value per share (Valuation Agent).
+    B2 fallback: when the DCF is unavailable (missing FCF history, no
+    shares-outstanding figure, etc. -- see Section A's failure chain),
+    derive a relative target from peer PE/PB multiples instead of
+    returning the flat "Not determined" placeholder. Never fabricates a
+    number -- returns None when neither source has usable data.
+    """
+    intrinsic_float = _as_float(valuation.get("intrinsic_value_per_share"))
+    if intrinsic_float is not None:
+        return f"Rs. {intrinsic_float:,.0f} ({time_horizon})"
+    return _build_relative_price_target(valuation, time_horizon)
 
 
 # ---------------------------------------------------------------------------
@@ -943,6 +1090,8 @@ __all__ = [
     "_score_conviction",
     "_determine_time_horizon",
     "_build_price_target",
+    "_build_relative_price_target",
+    "_data_completeness",
     "_build_key_risks",
     "_build_key_catalysts",
     "_extract_debate_highlights",

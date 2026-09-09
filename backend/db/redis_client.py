@@ -29,10 +29,11 @@ Tests that need to exercise the connection path call
 teardown — no patching of os.environ required.
 
 TTL constants (seconds) — match config.py cache_ttl_* fields:
-    STOCK_TTL   =  21 600 ( 6 h)
-    NEWS_TTL    =  43 200 (12 h)
-    RATIOS_TTL  =  86 400 (24 h)
-    MACRO_TTL   = 604 800 ( 7 d)
+    STOCK_TTL       =  21 600 ( 6 h)
+    NEWS_TTL        =  43 200 (12 h)
+    RATIOS_TTL      =  86 400 (24 h)
+    MACRO_TTL       = 604 800 ( 7 d)
+    FINANCIALS_TTL  =  43 200 (12 h)
 
 Raised from the original dev values (15 min / 1 h / 1 h / 24 h) to protect
 the free-tier API quotas (Alpha Vantage 25 req/day, NewsAPI 100 req/day)
@@ -41,6 +42,18 @@ ratios, and macro data barely move intraday, so a long shared TTL is safe
 and turns "ten users analyse TCS" into a single upstream call instead of
 ten. The cache is keyed on ticker / company only (see the @cached templates
 in backend/tools/*.py), so every user shares the same cached result.
+
+Stale-on-error TTLs (T-087, Section A data-layer hardening)
+-------------------------------------------------------------
+In addition to the "fresh" TTLs above, ``backend.tools.cache.cached``
+optionally writes a second, much longer-lived copy of every successful
+fetch under a ``:stale`` key. When a live fetch fails even after
+tenacity's retries are exhausted (persistent yFinance rate limiting, an
+outage, etc.), the caller serves that stale copy (marked ``stale: True``)
+instead of surfacing a blank error to the user — a stale price chart beats
+no price chart. These TTLs are deliberately much longer than the fresh
+TTLs above; they are the outer bound on "how out of date is acceptable
+before we'd rather show nothing," not the normal refresh cadence.
 """
 
 import logging
@@ -68,6 +81,16 @@ STOCK_TTL: int = 21_600  # 6 hours (raised from 15 min for free-tier demo)
 NEWS_TTL: int = 43_200  # 12 hours (raised from 1 h; NewsAPI 100 req/day)
 RATIOS_TTL: int = 86_400  # 24 hours (raised from 1 h; Alpha Vantage 25 req/day)
 MACRO_TTL: int = 604_800  # 7 days (raised from 24 h; macro data is slow-moving)
+FINANCIALS_TTL: int = 43_200  # 12 hours (T-087: financials.py had NO caching
+# before this fix -- every fetch_financials call hit yFinance live, even
+# though annual statements change at most quarterly. This was the single
+# biggest contributor to cold-run 429s alongside the redundant per-tool
+# yf.Ticker() fan-out that backend.tools.market_data already fixed.
+
+# Stale-on-error fallback TTLs (T-087) -- see module docstring above.
+STOCK_STALE_TTL: int = 3 * 86_400  # 3 days
+FINANCIALS_STALE_TTL: int = 7 * 86_400  # 7 days (annual data barely moves)
+RATIOS_STALE_TTL: int = 7 * 86_400
 
 # Connection timeouts — keep short so a dead Redis fails fast.
 _SOCKET_TIMEOUT: int = 3

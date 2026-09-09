@@ -13,6 +13,9 @@ Tools exposed:
     fetch_financials        — All three statements in one call (convenience tool)
 
 Data source: yFinance (unofficial Yahoo Finance API — no key required)
+Cache:       Redis (TTL = FINANCIALS_TTL, 12h) via _fetch_financials_cached,
+             with a longer-lived stale fallback (FINANCIALS_STALE_TTL, 7d)
+             served on a live-fetch failure — see backend.tools.cache.cached.
 Currency:    All monetary values normalised to INR (Crores).
              USD figures are converted using a hardcoded exchange rate constant
              (USD_TO_INR) so agents always work in the same unit regardless of
@@ -35,7 +38,14 @@ from typing import Any
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field, field_validator
 
-from backend.tools.market_data import get_shared_ticker
+from backend.tools.cache import FINANCIALS_STALE_TTL, FINANCIALS_TTL, cached
+from backend.tools.market_data import (
+    fetch_balance_sheet_df,
+    fetch_cashflow_df,
+    fetch_income_statement_df,
+    fetch_info,
+    get_shared_ticker,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -498,10 +508,12 @@ def _fetch_financials_from_yfinance(ticker: str) -> FinancialStatements:
 
     yf_ticker = get_shared_ticker(ticker)
 
-    # Fetch all three statements (annual=True is the default)
-    income_df = yf_ticker.financials  # income statement
-    balance_df = yf_ticker.balance_sheet  # balance sheet
-    cashflow_df = yf_ticker.cashflow  # cash flow statement
+    # Fetch all three statements (annual=True is the default). Each
+    # accessor retries on 429/403/503/timeout with exponential back-off +
+    # jitter and runs inside the process-wide yfinance_throttle (Section A).
+    income_df = fetch_income_statement_df(yf_ticker)  # income statement
+    balance_df = fetch_balance_sheet_df(yf_ticker)  # balance sheet
+    cashflow_df = fetch_cashflow_df(yf_ticker)  # cash flow statement
 
     # Guard: if ALL three are empty, the ticker is invalid
     all_empty = (
@@ -526,7 +538,7 @@ def _fetch_financials_from_yfinance(ticker: str) -> FinancialStatements:
     # Ticker metadata
     info: dict[str, Any] = {}
     try:
-        info = yf_ticker.info or {}
+        info = fetch_info(yf_ticker)
     except Exception:
         logger.warning("Could not fetch ticker info for %s", ticker)
 
@@ -567,6 +579,38 @@ def _fetch_financials_from_yfinance(ticker: str) -> FinancialStatements:
 
 
 # ---------------------------------------------------------------------------
+# Redis-cached wrapper (T-087)
+# ---------------------------------------------------------------------------
+#
+# Before this fix, financials.py had NO @cached decorator at all -- every
+# single fetch_financials/fetch_income_statement/fetch_balance_sheet/
+# fetch_cash_flow call hit yFinance live, even though the Fundamental
+# Analyst and the Valuation Agent both fetch the same ticker's financials
+# during one analysis (backend/services/analysis.py's own docstring for
+# _fetch_financial_trend_sync flagged this as a known, previously
+# out-of-scope gap). This was the single biggest contributor to cold-run
+# 429s alongside the retry hardening above -- annual statements change at
+# most quarterly, so a 12-hour cache (FINANCIALS_TTL) is safe.
+
+
+@cached(
+    key="airp:financials:{ticker}", ttl=FINANCIALS_TTL, stale_ttl=FINANCIALS_STALE_TTL
+)
+def _fetch_financials_cached(ticker: str) -> dict[str, Any]:
+    """
+    Cached wrapper around ``_fetch_financials_from_yfinance``.
+
+    Serves from Redis for ``FINANCIALS_TTL`` seconds on a cache hit; calls
+    yFinance and caches the result on a miss. If the live fetch fails
+    (e.g. yFinance still rate-limited after retries), the last
+    successfully cached statements for this ticker are served instead
+    (marked ``stale: True``) rather than raising -- see
+    ``FINANCIALS_STALE_TTL`` and ``backend.tools.cache.cached``.
+    """
+    return _fetch_financials_from_yfinance(ticker=ticker).model_dump(mode="json")
+
+
+# ---------------------------------------------------------------------------
 # LangChain tools
 # ---------------------------------------------------------------------------
 
@@ -604,8 +648,7 @@ def fetch_financials(ticker: str) -> dict[str, Any]:
         240890.5
     """
     try:
-        data = _fetch_financials_from_yfinance(ticker=ticker)
-        return data.model_dump(mode="json")
+        return _fetch_financials_cached(ticker=ticker)
     except FinancialsNotFoundError as exc:
         logger.error("Financials not found: %s — %s", ticker, exc)
         return {
@@ -639,16 +682,16 @@ def fetch_income_statement(ticker: str) -> dict[str, Any]:
         Returns error dict on failure.
     """
     try:
-        data = _fetch_financials_from_yfinance(ticker=ticker)
+        data = _fetch_financials_cached(ticker=ticker)
         return {
-            "ticker": data.ticker,
-            "currency_reported": data.currency_reported,
-            "currency_output": data.currency_output,
-            "years_available": data.years_available,
-            "income_statement": [r.model_dump() for r in data.income_statement],
-            "data_warnings": data.data_warnings,
-            "fetched_at": data.fetched_at.isoformat(),
-            "source": data.source,
+            "ticker": data["ticker"],
+            "currency_reported": data["currency_reported"],
+            "currency_output": data["currency_output"],
+            "years_available": data["years_available"],
+            "income_statement": data["income_statement"],
+            "data_warnings": data["data_warnings"],
+            "fetched_at": data["fetched_at"],
+            "source": data["source"],
         }
     except FinancialsNotFoundError as exc:
         return {
@@ -684,16 +727,16 @@ def fetch_balance_sheet(ticker: str) -> dict[str, Any]:
         Returns error dict on failure.
     """
     try:
-        data = _fetch_financials_from_yfinance(ticker=ticker)
+        data = _fetch_financials_cached(ticker=ticker)
         return {
-            "ticker": data.ticker,
-            "currency_reported": data.currency_reported,
-            "currency_output": data.currency_output,
-            "years_available": data.years_available,
-            "balance_sheet": [r.model_dump() for r in data.balance_sheet],
-            "data_warnings": data.data_warnings,
-            "fetched_at": data.fetched_at.isoformat(),
-            "source": data.source,
+            "ticker": data["ticker"],
+            "currency_reported": data["currency_reported"],
+            "currency_output": data["currency_output"],
+            "years_available": data["years_available"],
+            "balance_sheet": data["balance_sheet"],
+            "data_warnings": data["data_warnings"],
+            "fetched_at": data["fetched_at"],
+            "source": data["source"],
         }
     except FinancialsNotFoundError as exc:
         return {
@@ -727,16 +770,16 @@ def fetch_cash_flow(ticker: str) -> dict[str, Any]:
         Returns error dict on failure.
     """
     try:
-        data = _fetch_financials_from_yfinance(ticker=ticker)
+        data = _fetch_financials_cached(ticker=ticker)
         return {
-            "ticker": data.ticker,
-            "currency_reported": data.currency_reported,
-            "currency_output": data.currency_output,
-            "years_available": data.years_available,
-            "cash_flow": [r.model_dump() for r in data.cash_flow],
-            "data_warnings": data.data_warnings,
-            "fetched_at": data.fetched_at.isoformat(),
-            "source": data.source,
+            "ticker": data["ticker"],
+            "currency_reported": data["currency_reported"],
+            "currency_output": data["currency_output"],
+            "years_available": data["years_available"],
+            "cash_flow": data["cash_flow"],
+            "data_warnings": data["data_warnings"],
+            "fetched_at": data["fetched_at"],
+            "source": data["source"],
         }
     except FinancialsNotFoundError as exc:
         return {

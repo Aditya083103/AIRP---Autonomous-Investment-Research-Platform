@@ -71,8 +71,13 @@ except Exception:
 #   patch("backend.tools.ratios.settings") replaces this object
 settings = _settings
 
-from backend.tools.cache import RATIOS_TTL, cached  # noqa: E402
-from backend.tools.market_data import get_shared_ticker  # noqa: E402
+from backend.tools.cache import RATIOS_STALE_TTL, RATIOS_TTL, cached  # noqa: E402
+from backend.tools.market_data import (  # noqa: E402
+    fetch_balance_sheet_df,
+    fetch_income_statement_df,
+    fetch_info,
+    get_shared_ticker,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -622,12 +627,12 @@ def _fetch_ratios_from_sources(ticker: str) -> RatiosModel:
 
     info: dict[str, Any] = {}
     try:
-        info = yf_ticker.info or {}
+        info = fetch_info(yf_ticker)
     except Exception:
         logger.warning("Could not fetch ticker info for %s", ticker)
 
-    balance_df = yf_ticker.balance_sheet
-    income_df = yf_ticker.financials
+    balance_df = fetch_balance_sheet_df(yf_ticker)
+    income_df = fetch_income_statement_df(yf_ticker)
 
     inputs = _build_inputs(info, balance_df, income_df)
     computed = _compute_ratios(inputs)
@@ -676,7 +681,7 @@ def _fetch_ratios_from_sources(ticker: str) -> RatiosModel:
 # ---------------------------------------------------------------------------
 
 
-@cached(key="airp:ratios:{ticker}", ttl=RATIOS_TTL)
+@cached(key="airp:ratios:{ticker}", ttl=RATIOS_TTL, stale_ttl=RATIOS_STALE_TTL)
 def _fetch_ratios_cached(ticker: str) -> dict[str, Any]:
     """
     Cached wrapper around ``_fetch_ratios_from_sources``.
