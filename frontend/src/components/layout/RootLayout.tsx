@@ -27,6 +27,11 @@
 // this one). The year is computed at render time rather than hardcoded so
 // it never goes stale.
 //
+// B10: <main> renders <PageTransition /> (src/components/motion/
+// PageTransition.tsx) instead of a bare <Outlet /> -- it renders the
+// Outlet itself, keyed on the current route so every navigation fades
+// the new page's content in.
+//
 // Auth actions (Log in/Get started, or the signed-in email + Log out)
 // are deliberately NOT duplicated inside the mobile panel -- they stay
 // in the header bar itself at every width, since they're already
@@ -38,9 +43,10 @@
 // valid unchanged after this task.
 
 import { useEffect, useState } from "react";
-import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 
 import { ChatWidget } from "@/components/chat";
+import { PageTransition } from "@/components/motion/PageTransition";
 import { Button } from "@/components/ui";
 import { useAuth } from "@/hooks/useAuth";
 import { cn } from "@/lib/cn";
@@ -210,7 +216,7 @@ export function RootLayout(): JSX.Element {
       </header>
 
       <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-12">
-        <Outlet />
+        <PageTransition />
       </main>
 
       <footer className="border-t border-line bg-surface">

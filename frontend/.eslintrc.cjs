@@ -108,5 +108,19 @@ module.exports = {
         "@typescript-eslint/triple-slash-reference": "off",
       },
     },
+    {
+      // react-three-fiber (B10) renders three.js objects as lowercase JSX
+      // intrinsics (<mesh>, <ambientLight>, ...) whose props (args,
+      // intensity, roughness, position, ...) are three.js constructor/
+      // property names, not DOM attributes -- eslint-plugin-react's
+      // no-unknown-property rule has no R3F awareness and flags every one
+      // of them. Scoped to HeroSceneCanvas.tsx only, the single file in
+      // this codebase that authors R3F JSX by design (see that file's own
+      // docstring on why it is isolated from HeroScene.tsx).
+      files: ["src/components/three/HeroSceneCanvas.tsx"],
+      rules: {
+        "react/no-unknown-property": "off",
+      },
+    },
   ],
 };

@@ -4,14 +4,21 @@
 // Vitest's `expect` with jest-dom's DOM matchers (toBeInTheDocument,
 // toHaveAttribute, ...) via the side-effecting import, (2) unmount
 // every rendered component after each test so one test's DOM doesn't
-// leak into the next, and (3)/(4) stub `ResizeObserver` and mock
+// leak into the next, (3)/(4) stub `ResizeObserver` and mock
 // `getBoundingClientRect` (T-062) -- jsdom does not implement the
 // former and always returns a 0x0 rect for the latter, but Recharts'
 // `ResponsiveContainer` (every chart in src/components/charts/)
 // constructs a real ResizeObserver on mount and treats a 0x0 rect as
 // "not sized yet" (rendering no chart content at all) -- without both
 // of these, any test rendering a chart either throws immediately or
-// silently renders an empty container.
+// silently renders an empty container -- and (5) stub `matchMedia`
+// (B10) -- jsdom has no implementation at all (calling it throws "not
+// implemented"), but usePrefersReducedMotion.ts (every framer-motion/3D
+// primitive B10 adds reads it) calls `window.matchMedia` on mount. The
+// stub defaults to `matches: false` ("no reduced-motion preference") so
+// existing tests are unaffected; an individual test that needs to
+// assert the reduced-motion branch overrides this per-test with
+// `vi.stubGlobal("matchMedia", ...)`.
 
 import "@testing-library/jest-dom/vitest";
 import { cleanup } from "@testing-library/react";
@@ -25,6 +32,20 @@ class ResizeObserverStub {
 
 if (typeof globalThis.ResizeObserver === "undefined") {
   globalThis.ResizeObserver = ResizeObserverStub as unknown as typeof ResizeObserver;
+}
+
+if (typeof window.matchMedia !== "function") {
+  window.matchMedia = ((query: string): MediaQueryList =>
+    ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: () => {},
+      removeListener: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      dispatchEvent: () => false,
+    }) as unknown as MediaQueryList) as typeof window.matchMedia;
 }
 
 // jsdom lays out every element at 0x0 -- Recharts' ResponsiveContainer
