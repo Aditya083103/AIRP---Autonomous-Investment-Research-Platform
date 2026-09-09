@@ -4,6 +4,15 @@
 // grouped by execution round, not sequence), this content genuinely is an
 // ordered pipeline -- see AIRP_Project_Overview_Updated.docx section 4.2,
 // "Request Flow" -- so a numbered list encodes real information here.
+//
+// B10: each step's text is wrapped in Reveal (staggered fade/rise-in by
+// step index), matching the cascading-entrance treatment given to every
+// other list/grid this unit touches. The timeline dot stays a direct
+// child of <li> (not inside the Reveal wrapper) so its `absolute -left`
+// positioning keeps resolving against the <li>'s own `relative` -- the
+// wrapper only ever contains the text content beside it.
+
+import { Reveal } from "@/components/motion/Reveal";
 
 interface Step {
   readonly number: string;
@@ -56,17 +65,19 @@ export function HowItWorksSection(): JSX.Element {
       </div>
 
       <ol className="mt-10 space-y-8 border-l border-line pl-8">
-        {STEPS.map((step) => (
+        {STEPS.map((step, index) => (
           <li key={step.number} className="relative">
             <span
               aria-hidden="true"
               className="absolute -left-[34px] top-1 h-2.5 w-2.5 rounded-full bg-brand-600 ring-4 ring-canvas"
             />
-            <p className="font-mono text-xs font-semibold text-brand-600">{step.number}</p>
-            <h3 className="mt-1 text-lg font-semibold text-ink">{step.title}</h3>
-            <p className="mt-1.5 max-w-memo text-sm leading-relaxed text-muted">
-              {step.description}
-            </p>
+            <Reveal index={index}>
+              <p className="font-mono text-xs font-semibold text-brand-600">{step.number}</p>
+              <h3 className="mt-1 text-lg font-semibold text-ink">{step.title}</h3>
+              <p className="mt-1.5 max-w-memo text-sm leading-relaxed text-muted">
+                {step.description}
+              </p>
+            </Reveal>
           </li>
         ))}
       </ol>
