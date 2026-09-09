@@ -14,7 +14,10 @@
 // streaming, ...), which is fully covered by test/ChatWidget.test.tsx;
 // it only proves RootLayout wires the auth gate correctly, so no
 // fetch/WebSocket stubbing is needed here (the widget makes no network
-// call until it is opened).
+// call until it is opened). B8 adds one assertion that the global
+// copyright/attribution footer line is present -- it renders on every
+// route via this one component, unlike LandingFooter.tsx's landing-only
+// content footer.
 
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -125,6 +128,18 @@ describe("RootLayout mobile nav panel", () => {
     await user.click(within(panel).getByRole("link", { name: "Compare" }));
 
     expect(screen.queryByTestId("mobile-nav-panel")).not.toBeInTheDocument();
+  });
+});
+
+describe("RootLayout footer (B8)", () => {
+  it("renders the copyright/attribution line on every page", () => {
+    renderLayout(false);
+
+    expect(
+      screen.getByText(
+        `© ${new Date().getFullYear()} AIRP — Designed & developed by Aditya Bhavsar.`,
+      ),
+    ).toBeInTheDocument();
   });
 });
 

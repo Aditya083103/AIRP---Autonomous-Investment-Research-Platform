@@ -112,8 +112,22 @@ const POPULATED_HISTORY_RESPONSE = {
       directional_correct: true,
       evaluated_at: "2026-04-01T00:00:00Z",
     },
+    {
+      id: "33333333-3333-3333-3333-333333333333",
+      analysis_id: "44444444-4444-4444-4444-444444444444",
+      ticker: "INFY.NS",
+      verdict: "HOLD",
+      conviction_score: 5,
+      price_at_verdict: 1500.0,
+      verdict_date: "2026-01-01T00:00:00Z",
+      evaluation_horizon_days: 30,
+      price_at_evaluation: null,
+      price_change_pct: null,
+      directional_correct: null,
+      evaluated_at: null,
+    },
   ],
-  total_count: 1,
+  total_count: 2,
   limit: 100,
   offset: 0,
   has_more: false,
@@ -164,6 +178,14 @@ describe("AccuracyPage", () => {
     ).toBeInTheDocument();
   });
 
+  it("renders the B7 explainer callout regardless of loading state", () => {
+    mockFetch({});
+    renderPage();
+
+    expect(screen.getByTestId("accuracy-explainer")).toBeInTheDocument();
+    expect(screen.getByText(/why this page might look empty/i)).toBeInTheDocument();
+  });
+
   it("shows a skeleton while summary and history are both loading", () => {
     mockFetch({
       summary: () => new Promise(() => {}),
@@ -204,6 +226,18 @@ describe("AccuracyPage", () => {
     expect(screen.getByTestId("accuracy-trend-chart")).toBeInTheDocument();
     expect(screen.getByTestId("verdict-accuracy-chart")).toBeInTheDocument();
     expect(screen.getByTestId("conviction-accuracy-scatter-chart")).toBeInTheDocument();
+  });
+
+  it("shows a pending verdict's ticker and scheduled scoring date in the awaiting-verdicts card", async () => {
+    mockFetch({
+      summary: jsonResponse(200, POPULATED_SUMMARY_RESPONSE),
+      history: jsonResponse(200, POPULATED_HISTORY_RESPONSE),
+    });
+    renderPage();
+
+    expect(await screen.findByTestId("awaiting-verdicts-card")).toBeInTheDocument();
+    expect(screen.getByText("INFY.NS")).toBeInTheDocument();
+    expect(screen.getByText(/scored on 31 jan 2026/i)).toBeInTheDocument();
   });
 
   it("renders the panel's own empty states for a brand-new, all-zero platform", async () => {

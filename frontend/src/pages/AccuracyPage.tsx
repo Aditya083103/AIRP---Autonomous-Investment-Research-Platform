@@ -9,6 +9,16 @@
 // user (see backend/routers/accuracy.py's module docstring for the full
 // "why public" rationale this page's own route registration relies on).
 //
+// B7: a verdict only gets a directional_correct once its
+// evaluation_horizon_days elapses (backend/services/accuracy_tracker.py),
+// so a freshly-launched deployment (or simply a slow week for issued
+// verdicts) can legitimately show every chart below empty. The explainer
+// callout right below the intro paragraph says so up front, and
+// AccuracyPanel's AwaitingVerdictsCard backs that claim with each
+// pending verdict's actual scheduled scoring date -- so "nothing scored
+// yet" reads as "the pipeline is working, come back later" rather than
+// as a broken page.
+//
 // Two independent useQuery calls (useAccuracySummary, useAccuracyHistory)
 // rather than one combined fetch -- the same reasoning
 // AnalysisResultPage.tsx's docstring already gives for keeping
@@ -64,6 +74,19 @@ export function AccuracyPage(): JSX.Element {
         its evaluation horizon elapses, using a ±5% dead-zone directional scoring rule. No account
         needed -- this page is public.
       </p>
+
+      <div
+        className="mt-6 max-w-2xl rounded-card border border-brand-600/20 bg-brand-50 px-4 py-3 text-sm text-ink"
+        role="note"
+        data-testid="accuracy-explainer"
+      >
+        <p className="font-semibold">Why this page might look empty</p>
+        <p className="mt-1 text-muted">
+          Verdicts are scored against real market outcomes only <strong>after</strong> their
+          evaluation horizon elapses -- e.g. a 3-month HOLD is scored roughly 3 months later. This
+          page fills in automatically as evaluations complete; it is not a bug.
+        </p>
+      </div>
 
       <div className="mt-8">
         {isLoading ? (

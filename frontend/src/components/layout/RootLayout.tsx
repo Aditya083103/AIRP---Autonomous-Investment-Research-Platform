@@ -20,6 +20,13 @@
 // itself requires a signed-in caller
 // (backend/routers/chat.py's create_chat_session_endpoint).
 //
+// B8: the footer's first line is the site-wide copyright/attribution
+// notice -- the only place in the app that carries it, since this is the
+// one footer rendered on every route (LandingFooter.tsx's own docstring
+// already documents itself as a second, landing-only tier stacked above
+// this one). The year is computed at render time rather than hardcoded so
+// it never goes stale.
+//
 // Auth actions (Log in/Get started, or the signed-in email + Log out)
 // are deliberately NOT duplicated inside the mobile panel -- they stay
 // in the header bar itself at every width, since they're already
@@ -208,7 +215,11 @@ export function RootLayout(): JSX.Element {
 
       <footer className="border-t border-line bg-surface">
         <div className="mx-auto w-full max-w-6xl px-6 py-6 text-xs text-muted">
-          Built as a portfolio project - 8-agent investment committee - FastAPI - LangGraph - React
+          <p>{`© ${new Date().getFullYear()} AIRP — Designed & developed by Aditya Bhavsar.`}</p>
+          <p className="mt-1">
+            Built as a portfolio project - 8-agent investment committee - FastAPI - LangGraph -
+            React
+          </p>
         </div>
       </footer>
 

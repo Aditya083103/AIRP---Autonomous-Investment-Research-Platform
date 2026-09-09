@@ -12,6 +12,10 @@ export {
   AccuracyTrendChart,
   type AccuracyTrendChartProps,
 } from "@/components/charts/AccuracyTrendChart";
+export {
+  AwaitingVerdictsCard,
+  type AwaitingVerdictsCardProps,
+} from "@/components/charts/AwaitingVerdictsCard";
 export { ChartsPanel, type ChartsPanelProps } from "@/components/charts/ChartsPanel";
 export {
   ConvictionAccuracyScatterChart,

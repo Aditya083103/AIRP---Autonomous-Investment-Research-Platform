@@ -75,10 +75,11 @@ function makeEntry(
 }
 
 describe("AccuracyPanel", () => {
-  it("renders the stats row and all three charts", () => {
+  it("renders the stats row, the awaiting-verdicts card, and all three charts", () => {
     render(<AccuracyPanel summary={makeSummary()} historyEntries={[makeEntry()]} />);
 
     expect(screen.getByTestId("accuracy-summary-stats")).toBeInTheDocument();
+    expect(screen.getByTestId("awaiting-verdicts-card")).toBeInTheDocument();
     expect(screen.getByTestId("accuracy-trend-chart")).toBeInTheDocument();
     expect(screen.getByTestId("verdict-accuracy-chart")).toBeInTheDocument();
     expect(screen.getByTestId("conviction-accuracy-scatter-chart")).toBeInTheDocument();
