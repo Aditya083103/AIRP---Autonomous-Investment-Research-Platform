@@ -46,3 +46,27 @@ export interface ChatMessageResponse {
   tokens_used: number | null;
   created_at: string;
 }
+
+/** Body returned by GET /api/v1/chat/sessions. Mirrors ChatSessionListResponse. */
+export interface ChatSessionListResponse {
+  items: ChatSessionResponse[];
+  total_count: number;
+  limit: number;
+  offset: number;
+  has_more: boolean;
+}
+
+/** Body returned by GET /api/v1/chat/sessions/{id}/messages. Mirrors ChatMessagesResponse. */
+export interface ChatMessagesResponse {
+  session_id: string;
+  items: ChatMessageResponse[];
+  total_count: number;
+  limit: number;
+  offset: number;
+  has_more: boolean;
+}
+
+/** Body returned by DELETE /api/v1/chat/sessions/{id}/messages/{id} (B9). Mirrors ChatMessagesTruncateResponse. */
+export interface ChatMessagesTruncateResponse {
+  deleted_count: number;
+}

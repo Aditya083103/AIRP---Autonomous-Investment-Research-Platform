@@ -7,7 +7,13 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ChatApiError, createChatSession } from "@/api/chat";
+import {
+  ChatApiError,
+  createChatSession,
+  deleteChatMessagesFrom,
+  getChatSessionMessages,
+  listChatSessions,
+} from "@/api/chat";
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -153,5 +159,217 @@ describe("createChatSession", () => {
         analysisId: null,
       }),
     ).rejects.toThrow("Something went wrong. Please try again.");
+  });
+});
+
+// (B9) Conversation-list UI's two read endpoints.
+
+const SESSION_LIST_RESPONSE = {
+  items: [SESSION_RESPONSE],
+  total_count: 1,
+  limit: 20,
+  offset: 0,
+  has_more: false,
+};
+
+describe("listChatSessions", () => {
+  it("GETs /chat/sessions with the Authorization header and no query string by default", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, SESSION_LIST_RESPONSE));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await listChatSessions({ accessToken: "jwt-token" });
+
+    const [url, options] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain("/chat/sessions");
+    expect(url).not.toContain("?");
+    expect(options.method ?? "GET").toBe("GET");
+    const headers = options.headers as Record<string, string>;
+    expect(headers.Authorization).toBe("Bearer jwt-token");
+  });
+
+  it("forwards limit and offset as query params when provided", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, SESSION_LIST_RESPONSE));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await listChatSessions({ accessToken: "jwt-token", limit: 10, offset: 5 });
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain("limit=10");
+    expect(url).toContain("offset=5");
+  });
+
+  it("returns the parsed ChatSessionListResponse on success", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, SESSION_LIST_RESPONSE));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await listChatSessions({ accessToken: "jwt-token" });
+
+    expect(result).toEqual(SESSION_LIST_RESPONSE);
+  });
+
+  it("throws ChatApiError carrying the response status on failure", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(401, { detail: "Not authenticated" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      await listChatSessions({ accessToken: "expired-token" });
+      expect.unreachable("listChatSessions should have thrown");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ChatApiError);
+      expect((error as ChatApiError).status).toBe(401);
+    }
+  });
+});
+
+const MESSAGES_RESPONSE = {
+  session_id: "session-1",
+  items: [
+    {
+      id: "msg-1",
+      session_id: "session-1",
+      role: "user",
+      content: "What was the verdict on TCS?",
+      tool_calls: null,
+      tool_name: null,
+      tokens_used: null,
+      created_at: "2026-01-01T00:00:00Z",
+    },
+  ],
+  total_count: 1,
+  limit: 200,
+  offset: 0,
+  has_more: false,
+};
+
+describe("getChatSessionMessages", () => {
+  it("GETs /chat/sessions/{id}/messages with the Authorization header", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, MESSAGES_RESPONSE));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await getChatSessionMessages({ accessToken: "jwt-token", sessionId: "session-1" });
+
+    const [url, options] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain("/chat/sessions/session-1/messages");
+    const headers = options.headers as Record<string, string>;
+    expect(headers.Authorization).toBe("Bearer jwt-token");
+  });
+
+  it("forwards limit as a query param when provided", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, MESSAGES_RESPONSE));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await getChatSessionMessages({ accessToken: "jwt-token", sessionId: "session-1", limit: 200 });
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain("limit=200");
+  });
+
+  it("returns the parsed ChatMessagesResponse on success", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, MESSAGES_RESPONSE));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await getChatSessionMessages({
+      accessToken: "jwt-token",
+      sessionId: "session-1",
+    });
+
+    expect(result).toEqual(MESSAGES_RESPONSE);
+  });
+
+  it("throws ChatApiError with the string detail on a 404 (not found or not yours)", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse(404, { detail: "No chat session found for the given session_id" }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      await getChatSessionMessages({ accessToken: "jwt-token", sessionId: "not-mine" });
+      expect.unreachable("getChatSessionMessages should have thrown");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ChatApiError);
+      expect((error as ChatApiError).message).toBe(
+        "No chat session found for the given session_id",
+      );
+    }
+  });
+});
+
+// (B9) Edit-and-resend's server-side truncate step.
+
+describe("deleteChatMessagesFrom", () => {
+  it("DELETEs /chat/sessions/{id}/messages/{id} with the Authorization header", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { deleted_count: 2 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await deleteChatMessagesFrom({
+      accessToken: "jwt-token",
+      sessionId: "session-1",
+      messageId: "msg-1",
+    });
+
+    const [url, options] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain("/chat/sessions/session-1/messages/msg-1");
+    expect(options.method).toBe("DELETE");
+    const headers = options.headers as Record<string, string>;
+    expect(headers.Authorization).toBe("Bearer jwt-token");
+  });
+
+  it("returns the parsed deleted_count on success", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { deleted_count: 3 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await deleteChatMessagesFrom({
+      accessToken: "jwt-token",
+      sessionId: "session-1",
+      messageId: "msg-1",
+    });
+
+    expect(result).toEqual({ deleted_count: 3 });
+  });
+
+  it("throws ChatApiError with the string detail on a 404 (message not found)", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse(404, { detail: "No message found for message_id=msg-1 in this session" }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      await deleteChatMessagesFrom({
+        accessToken: "jwt-token",
+        sessionId: "session-1",
+        messageId: "msg-1",
+      });
+      expect.unreachable("deleteChatMessagesFrom should have thrown");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ChatApiError);
+      expect((error as ChatApiError).message).toBe(
+        "No message found for message_id=msg-1 in this session",
+      );
+    }
+  });
+
+  it("throws ChatApiError carrying a 422 status for a non-user (not-editable) message", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(422, {
+        detail: "message_id=msg-1 has role='assistant'; only 'user' messages can be edited",
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      await deleteChatMessagesFrom({
+        accessToken: "jwt-token",
+        sessionId: "session-1",
+        messageId: "msg-1",
+      });
+      expect.unreachable("deleteChatMessagesFrom should have thrown");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ChatApiError);
+      expect((error as ChatApiError).status).toBe(422);
+    }
   });
 });

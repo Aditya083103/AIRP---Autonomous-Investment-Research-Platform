@@ -274,3 +274,291 @@ describe("ChatWidget conversation", () => {
     );
   });
 });
+
+describe("ChatWidget edit-and-resend (B9)", () => {
+  function routedFetchMock(deleteResponse: unknown = { deleted_count: 2 }) {
+    return vi.fn((_url: string, init?: RequestInit) => {
+      const method = init?.method ?? "GET";
+      if (method === "DELETE") {
+        return Promise.resolve(jsonResponse(200, deleteResponse));
+      }
+      return Promise.resolve(jsonResponse(201, sessionResponse()));
+    });
+  }
+
+  it("shows an edit affordance on a confirmed user message and lets the person edit it", async () => {
+    const fetchMock = routedFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+
+    const user = userEvent.setup();
+    renderWidget();
+
+    await user.click(screen.getByRole("button", { name: "Open AIRP Assistant chat" }));
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = lastSocket();
+    act(() => {
+      socket.emitOpen();
+    });
+
+    const composer = screen.getByLabelText("Message the AIRP Assistant");
+    await user.type(composer, "What was the verdict on TCS?");
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+
+    act(() => {
+      socket.emitMessage({
+        session_id: "session-1",
+        event_type: "start",
+        token: "",
+        message_id: "user-msg-1",
+        is_final: false,
+        error: null,
+      });
+      socket.emitMessage({
+        session_id: "session-1",
+        event_type: "token",
+        token: "BUY.",
+        message_id: null,
+        is_final: false,
+        error: null,
+      });
+      socket.emitMessage({
+        session_id: "session-1",
+        event_type: "done",
+        token: "",
+        message_id: "assistant-msg-1",
+        is_final: true,
+        error: null,
+      });
+    });
+    await waitFor(() => expect(screen.getByText("BUY.")).toBeInTheDocument());
+
+    await user.click(screen.getByRole("button", { name: "Edit message" }));
+    const editBox = screen.getByLabelText("Edit message");
+    expect(editBox).toHaveValue("What was the verdict on TCS?");
+
+    await user.clear(editBox);
+    await user.type(editBox, "What was the verdict on Infosys?");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    const deleteCall = fetchMock.mock.calls.find((call) => call[1]?.method === "DELETE");
+    expect(deleteCall?.[0]).toContain("/chat/sessions/session-1/messages/user-msg-1");
+
+    await waitFor(() =>
+      expect(screen.getByText("What was the verdict on Infosys?")).toBeInTheDocument(),
+    );
+    expect(screen.queryByText("What was the verdict on TCS?")).not.toBeInTheDocument();
+    expect(screen.queryByText("BUY.")).not.toBeInTheDocument();
+    expect(socket.sent.at(-1)).toBe(
+      JSON.stringify({ message: "What was the verdict on Infosys?" }),
+    );
+  });
+
+  it("Cancel leaves the original message unchanged", async () => {
+    const fetchMock = routedFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+
+    const user = userEvent.setup();
+    renderWidget();
+
+    await user.click(screen.getByRole("button", { name: "Open AIRP Assistant chat" }));
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = lastSocket();
+    act(() => {
+      socket.emitOpen();
+    });
+
+    const composer = screen.getByLabelText("Message the AIRP Assistant");
+    await user.type(composer, "Original question");
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+
+    act(() => {
+      socket.emitMessage({
+        session_id: "session-1",
+        event_type: "start",
+        token: "",
+        message_id: "user-msg-1",
+        is_final: false,
+        error: null,
+      });
+      socket.emitMessage({
+        session_id: "session-1",
+        event_type: "done",
+        token: "",
+        message_id: "assistant-msg-1",
+        is_final: true,
+        error: null,
+      });
+    });
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Edit message" })).toBeInTheDocument(),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Edit message" }));
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(screen.getByText("Original question")).toBeInTheDocument();
+    expect(fetchMock.mock.calls.some((call) => call[1]?.method === "DELETE")).toBe(false);
+  });
+
+  it("does not show an edit affordance on assistant messages", async () => {
+    const fetchMock = routedFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+
+    const user = userEvent.setup();
+    renderWidget();
+
+    await user.click(screen.getByRole("button", { name: "Open AIRP Assistant chat" }));
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const socket = lastSocket();
+    act(() => {
+      socket.emitOpen();
+    });
+
+    const composer = screen.getByLabelText("Message the AIRP Assistant");
+    await user.type(composer, "hello");
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+
+    act(() => {
+      socket.emitMessage({
+        session_id: "session-1",
+        event_type: "start",
+        token: "",
+        message_id: "user-msg-1",
+        is_final: false,
+        error: null,
+      });
+      socket.emitMessage({
+        session_id: "session-1",
+        event_type: "token",
+        token: "hi there",
+        message_id: null,
+        is_final: false,
+        error: null,
+      });
+      socket.emitMessage({
+        session_id: "session-1",
+        event_type: "done",
+        token: "",
+        message_id: "assistant-msg-1",
+        is_final: true,
+        error: null,
+      });
+    });
+    await waitFor(() => expect(screen.getByText("hi there")).toBeInTheDocument());
+
+    // Exactly one edit affordance -- the user's own turn, not the
+    // assistant's reply.
+    expect(screen.getAllByRole("button", { name: "Edit message" })).toHaveLength(1);
+  });
+});
+
+describe("ChatWidget history panel (B9)", () => {
+  function messagesResponse(sessionId: string): unknown {
+    return {
+      session_id: sessionId,
+      items: [
+        {
+          id: "msg-1",
+          session_id: sessionId,
+          role: "user",
+          content: "What was the verdict on TCS?",
+          tool_calls: null,
+          tool_name: null,
+          tokens_used: null,
+          created_at: "2026-01-01T00:00:00Z",
+        },
+        {
+          id: "msg-2",
+          session_id: sessionId,
+          role: "assistant",
+          content: "AIRP rated TCS a BUY.",
+          tool_calls: null,
+          tool_name: null,
+          tokens_used: null,
+          created_at: "2026-01-01T00:00:01Z",
+        },
+      ],
+      total_count: 2,
+      limit: 200,
+      offset: 0,
+      has_more: false,
+    };
+  }
+
+  function routedFetchMock() {
+    return vi.fn((url: string, init?: RequestInit) => {
+      const method = init?.method ?? "GET";
+      if (method === "POST" && url.includes("/chat/sessions")) {
+        return jsonResponse(201, sessionResponse());
+      }
+      if (url.includes("/messages")) {
+        return jsonResponse(200, messagesResponse("session-a"));
+      }
+      return jsonResponse(200, {
+        items: [sessionResponse({ id: "session-a", title: "About TCS" })],
+        total_count: 1,
+        limit: 20,
+        offset: 0,
+        has_more: false,
+      });
+    });
+  }
+
+  it("opens the history panel and lists past conversations", async () => {
+    vi.stubGlobal("fetch", routedFetchMock());
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+
+    const user = userEvent.setup();
+    renderWidget();
+
+    await user.click(screen.getByRole("button", { name: "Open AIRP Assistant chat" }));
+    await user.click(screen.getByRole("button", { name: "View past conversations" }));
+
+    expect(screen.getByTestId("chat-history-panel")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText("About TCS")).toBeInTheDocument());
+  });
+
+  it("resumes a past conversation's transcript when a history entry is clicked", async () => {
+    vi.stubGlobal("fetch", routedFetchMock());
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+
+    const user = userEvent.setup();
+    renderWidget();
+
+    await user.click(screen.getByRole("button", { name: "Open AIRP Assistant chat" }));
+    await user.click(screen.getByRole("button", { name: "View past conversations" }));
+    await waitFor(() => expect(screen.getByText("About TCS")).toBeInTheDocument());
+
+    await user.click(screen.getByText("About TCS"));
+
+    // Back to the live transcript view, now showing the resumed turns.
+    await waitFor(() => expect(screen.queryByTestId("chat-history-panel")).not.toBeInTheDocument());
+    expect(screen.getByText("What was the verdict on TCS?")).toBeInTheDocument();
+    expect(screen.getByText("AIRP rated TCS a BUY.")).toBeInTheDocument();
+  });
+
+  it("starting a new conversation returns to the live transcript with no resumed messages", async () => {
+    vi.stubGlobal("fetch", routedFetchMock());
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+
+    const user = userEvent.setup();
+    renderWidget();
+
+    await user.click(screen.getByRole("button", { name: "Open AIRP Assistant chat" }));
+    await user.click(screen.getByRole("button", { name: "View past conversations" }));
+    await waitFor(() => expect(screen.getByText("About TCS")).toBeInTheDocument());
+    await user.click(screen.getByText("About TCS"));
+    await waitFor(() =>
+      expect(screen.getByText("What was the verdict on TCS?")).toBeInTheDocument(),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Start a new conversation" }));
+
+    await waitFor(() =>
+      expect(screen.queryByText("What was the verdict on TCS?")).not.toBeInTheDocument(),
+    );
+  });
+});

@@ -70,12 +70,19 @@ function lastSocket(): FakeWebSocket {
   return socket;
 }
 
-function startEvent(): unknown {
+function jsonResponse(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+function startEvent(messageId: string | null = null): unknown {
   return {
     session_id: "session-1",
     event_type: "start",
     token: "",
-    message_id: null,
+    message_id: messageId,
     is_final: false,
     error: null,
   };
@@ -393,5 +400,291 @@ describe("useChatStream sendMessage", () => {
 
     expect(result.current.messages).toHaveLength(0);
     expect(lastSocket().sent).toHaveLength(0);
+  });
+});
+
+describe("stale-socket race (B9)", () => {
+  it("ignores a belated close from a superseded socket after a session switch", async () => {
+    // Regression test for the exact root cause behind "Starting a new
+    // conversation..." then "Connection closed unexpectedly (code
+    // 1005)": this hook used to guard onopen/onmessage/onerror/onclose
+    // with a single SHARED boolean ref, reset to true at the top of
+    // every effect run -- the same bug useAnalysisStream.ts's own
+    // "stale-socket race" test already covers for its sibling hook,
+    // ported here after being missed when useChatStream was built.
+    // Switching sessionId (a scope switch discarding the old session --
+    // see useChatWidget.ts -- or React 18 StrictMode's double-invoke in
+    // dev) tears down the first socket and opens a second; if the FIRST
+    // socket's close event arrives asynchronously AFTER the second has
+    // already taken over, it must not be allowed to overwrite the
+    // second (real, current) socket's state.
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+
+    const { result, rerender } = renderHook(
+      ({ sessionId }: { sessionId: string }) => useChatStream({ sessionId, token: "jwt-token" }),
+      { initialProps: { sessionId: "session-1" } },
+    );
+
+    const staleSocket = lastSocket();
+
+    rerender({ sessionId: "session-2" });
+    const currentSocket = lastSocket();
+    expect(currentSocket).not.toBe(staleSocket);
+
+    act(() => {
+      currentSocket.emitOpen();
+    });
+    await waitFor(() => expect(result.current.connectionStatus).toBe("open"));
+
+    // The stale socket's close event arrives late, after the real
+    // connection is already open -- it must be ignored entirely.
+    act(() => {
+      staleSocket.emitClose(1005);
+    });
+
+    expect(result.current.connectionStatus).toBe("open");
+    expect(result.current.error).toBeNull();
+  });
+
+  it("does not let a stale socket's belated 'start' event corrupt the new session's transcript", async () => {
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+
+    const { result, rerender } = renderHook(
+      ({ sessionId }: { sessionId: string }) => useChatStream({ sessionId, token: "jwt-token" }),
+      { initialProps: { sessionId: "session-1" } },
+    );
+    const staleSocket = lastSocket();
+
+    rerender({ sessionId: "session-2" });
+    const currentSocket = lastSocket();
+
+    act(() => {
+      currentSocket.emitOpen();
+    });
+    await waitFor(() => expect(result.current.connectionStatus).toBe("open"));
+
+    act(() => {
+      staleSocket.emitMessage(startEvent());
+    });
+
+    expect(result.current.messages).toHaveLength(0);
+  });
+});
+
+describe("useChatStream serverId confirmation (B9)", () => {
+  it("fills in the user message's serverId from the 'start' event's message_id", async () => {
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+
+    const { result } = renderHook(() =>
+      useChatStream({ sessionId: "session-1", token: "jwt-token" }),
+    );
+
+    act(() => {
+      lastSocket().emitOpen();
+    });
+    await waitFor(() => expect(result.current.connectionStatus).toBe("open"));
+
+    act(() => {
+      result.current.sendMessage("What is the conviction score?");
+    });
+    await waitFor(() => expect(result.current.messages).toHaveLength(1));
+    expect(result.current.messages[0]?.serverId).toBeNull();
+
+    act(() => {
+      lastSocket().emitMessage(startEvent("user-msg-1"));
+    });
+
+    await waitFor(() => expect(result.current.messages[0]?.serverId).toBe("user-msg-1"));
+  });
+
+  it("fills in the assistant message's serverId from the 'done' event's message_id", async () => {
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+
+    const { result } = renderHook(() =>
+      useChatStream({ sessionId: "session-1", token: "jwt-token" }),
+    );
+
+    act(() => {
+      lastSocket().emitOpen();
+      lastSocket().emitMessage(startEvent("user-msg-1"));
+      lastSocket().emitMessage(tokenEvent("BUY."));
+    });
+    await waitFor(() => expect(result.current.messages).toHaveLength(1));
+    expect(result.current.messages[0]?.serverId).toBeNull();
+
+    act(() => {
+      lastSocket().emitMessage(doneEvent("assistant-msg-1"));
+    });
+
+    await waitFor(() => expect(result.current.messages[0]?.serverId).toBe("assistant-msg-1"));
+  });
+
+  it("a second turn's 'start' does not disturb an already-confirmed prior user message", async () => {
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+
+    const { result } = renderHook(() =>
+      useChatStream({ sessionId: "session-1", token: "jwt-token" }),
+    );
+
+    act(() => {
+      lastSocket().emitOpen();
+      result.current.sendMessage("first");
+    });
+    await waitFor(() => expect(result.current.messages).toHaveLength(1));
+    act(() => {
+      lastSocket().emitMessage(startEvent("user-msg-1"));
+      lastSocket().emitMessage(doneEvent("assistant-msg-1"));
+    });
+    await waitFor(() => expect(result.current.messages[0]?.serverId).toBe("user-msg-1"));
+
+    act(() => {
+      result.current.sendMessage("second");
+    });
+    await waitFor(() => expect(result.current.messages).toHaveLength(3));
+    act(() => {
+      lastSocket().emitMessage(startEvent("user-msg-2"));
+    });
+
+    await waitFor(() => expect(result.current.messages[2]?.serverId).toBe("user-msg-2"));
+    // First turn's ids are untouched by the second turn's confirmation.
+    expect(result.current.messages[0]?.serverId).toBe("user-msg-1");
+    expect(result.current.messages[1]?.serverId).toBe("assistant-msg-1");
+  });
+});
+
+describe("useChatStream editMessage (B9)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  async function setUpConfirmedUserMessage() {
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const { result } = renderHook(() =>
+      useChatStream({ sessionId: "session-1", token: "jwt-token" }),
+    );
+    act(() => {
+      lastSocket().emitOpen();
+      result.current.sendMessage("What was the verdict on TCS?");
+    });
+    await waitFor(() => expect(result.current.messages).toHaveLength(1));
+    act(() => {
+      lastSocket().emitMessage(startEvent("user-msg-1"));
+      lastSocket().emitMessage(tokenEvent("BUY."));
+      lastSocket().emitMessage(doneEvent("assistant-msg-1"));
+    });
+    await waitFor(() => expect(result.current.messages[0]?.serverId).toBe("user-msg-1"));
+    return { result };
+  }
+
+  it("returns false and sets editError when the message has no confirmed serverId yet", async () => {
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const { result } = renderHook(() =>
+      useChatStream({ sessionId: "session-1", token: "jwt-token" }),
+    );
+    act(() => {
+      lastSocket().emitOpen();
+      result.current.sendMessage("unconfirmed");
+    });
+    await waitFor(() => expect(result.current.messages).toHaveLength(1));
+
+    let outcome: boolean | undefined;
+    await act(async () => {
+      outcome = await result.current.editMessage(result.current.messages[0]!.id, "edited");
+    });
+
+    expect(outcome).toBe(false);
+    expect(result.current.editError).not.toBeNull();
+  });
+
+  it("returns false for an assistant message (only user turns are editable)", async () => {
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const { result } = renderHook(() =>
+      useChatStream({ sessionId: "session-1", token: "jwt-token" }),
+    );
+    act(() => {
+      lastSocket().emitOpen();
+      lastSocket().emitMessage(startEvent("user-msg-1"));
+      lastSocket().emitMessage(doneEvent("assistant-msg-1"));
+    });
+    await waitFor(() => expect(result.current.messages).toHaveLength(1));
+
+    let outcome: boolean | undefined;
+    await act(async () => {
+      outcome = await result.current.editMessage(result.current.messages[0]!.id, "edited");
+    });
+
+    expect(outcome).toBe(false);
+  });
+
+  it("deletes-and-resends on a valid edit: truncates the message and everything after it, then sends the new text", async () => {
+    const { result } = await setUpConfirmedUserMessage();
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { deleted_count: 2 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    let outcome: boolean | undefined;
+    await act(async () => {
+      outcome = await result.current.editMessage(
+        result.current.messages[0]!.id,
+        "What was the verdict on Infosys?",
+      );
+    });
+
+    expect(outcome).toBe(true);
+    const [url, options] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain("/chat/sessions/session-1/messages/user-msg-1");
+    expect(options.method).toBe("DELETE");
+
+    // The stale user+assistant pair is gone, replaced by the freshly
+    // sent edited user message (the socket has no reply yet).
+    await waitFor(() => expect(result.current.messages).toHaveLength(1));
+    expect(result.current.messages[0]).toMatchObject({
+      role: "user",
+      content: "What was the verdict on Infosys?",
+    });
+    expect(lastSocket().sent.at(-1)).toBe(
+      JSON.stringify({ message: "What was the verdict on Infosys?" }),
+    );
+  });
+
+  it("surfaces a failed delete as editError and does not touch the transcript or the socket", async () => {
+    const { result } = await setUpConfirmedUserMessage();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse(404, { detail: "No message found for message_id" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    let outcome: boolean | undefined;
+    await act(async () => {
+      outcome = await result.current.editMessage(result.current.messages[0]!.id, "edited");
+    });
+
+    expect(outcome).toBe(false);
+    expect(result.current.editError).toBe("No message found for message_id");
+    expect(result.current.messages).toHaveLength(2);
+    expect(lastSocket().sent).toHaveLength(1);
+  });
+
+  it("refuses to edit while the assistant is still typing", async () => {
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const { result } = renderHook(() =>
+      useChatStream({ sessionId: "session-1", token: "jwt-token" }),
+    );
+    act(() => {
+      lastSocket().emitOpen();
+      result.current.sendMessage("first");
+    });
+    await waitFor(() => expect(result.current.messages).toHaveLength(1));
+    act(() => {
+      lastSocket().emitMessage(startEvent("user-msg-1"));
+    });
+    await waitFor(() => expect(result.current.isAssistantTyping).toBe(true));
+
+    let outcome: boolean | undefined;
+    await act(async () => {
+      outcome = await result.current.editMessage(result.current.messages[0]!.id, "edited");
+    });
+
+    expect(outcome).toBe(false);
+    expect(result.current.editError).not.toBeNull();
   });
 });

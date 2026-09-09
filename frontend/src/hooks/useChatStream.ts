@@ -33,6 +33,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { ChatApiError, deleteChatMessagesFrom } from "@/api/chat";
 import { env } from "@/config/env";
 
 /** One push payload received over WS /api/v1/chat/{session_id}/stream. See backend/routers/chat_stream.py's ChatStreamEvent for the authoritative field meanings. */
@@ -58,6 +59,18 @@ export interface ChatWidgetMessage {
   isStreaming: boolean;
   /** True when this assistant message ended in a turn-level error (backend event_type='error'). */
   isError: boolean;
+  /**
+   * (B9) The server's real chat_messages.id for this message, or null
+   * until it is known. A message loaded from GET .../messages (a
+   * resumed session) always has this set from the start. A message
+   * sent live over this connection starts null and is filled in once
+   * the backend confirms it: a user message's id arrives on the
+   * SAME turn's 'start' event (see chat_stream.py's "Why 'start' now
+   * carries the user message's id"), an assistant message's on its
+   * own 'done'. Required to call editMessage -- see that function's
+   * own docstring below.
+   */
+  serverId: string | null;
 }
 
 export interface UseChatStreamOptions {
@@ -69,6 +82,19 @@ export interface UseChatStreamOptions {
   baseUrl?: string;
   /** Set to false to skip connecting (e.g. before the widget panel has been opened, or before a session exists). */
   enabled?: boolean;
+  /**
+   * (B9) A previously-persisted transcript to seed `messages` with when
+   * this sessionId's connection is (re)established, instead of the
+   * usual empty transcript -- how useChatWidget.ts resumes a past
+   * session picked from the conversation list (GET .../messages,
+   * converted to ChatWidgetMessage[]) so re-opening an old
+   * conversation shows its history immediately rather than looking
+   * like a blank new chat. Ignored (transcript starts empty, as
+   * before) when omitted or when sessionId changes to a session this
+   * was not provided for -- callers are responsible for keeping this
+   * in sync with `sessionId` (see useChatWidget's openHistorySession).
+   */
+  initialMessages?: ChatWidgetMessage[];
 }
 
 export interface UseChatStreamResult {
@@ -81,6 +107,26 @@ export interface UseChatStreamResult {
   error: string | null;
   /** Send one user message over the open connection. No-op (does nothing) when the connection is not open. */
   sendMessage: (text: string) => void;
+  /**
+   * (B9) Edit a past user message: deletes it and everything the
+   * assistant said after it (DELETE .../messages/{id}, matching the
+   * Claude UX), then re-sends `newContent` as a fresh turn over this
+   * SAME connection -- reusing `sendMessage`'s own turn mechanics
+   * rather than a separate regeneration path. `localMessageId` is a
+   * ChatWidgetMessage.id from `messages` (its role must be 'user' and
+   * its `serverId` must be non-null -- a message whose id is not yet
+   * confirmed, or an assistant message, cannot be edited; both are a
+   * silent no-op returning false rather than throwing, since this is
+   * always called from a UI affordance that itself decides whether to
+   * offer editing at all). Returns whether the edit actually went
+   * through; a failure (network, 404, 422) is also surfaced via
+   * `editError`.
+   */
+  editMessage: (localMessageId: string, newContent: string) => Promise<boolean>;
+  /** True while an editMessage() call's DELETE request is in flight. */
+  isEditingMessage: boolean;
+  /** Set when the most recent editMessage() call failed. Cleared at the start of the next attempt. */
+  editError: string | null;
 }
 
 const LOCAL_ID_PREFIX = "local-";
@@ -92,6 +138,24 @@ function defaultWebSocketBaseUrl(): string {
   // when neither VITE_WS_BASE_URL nor an absolute VITE_API_BASE_URL is set.
   if (env.wsBaseUrl) {
     return env.wsBaseUrl;
+  }
+  // B9 diagnosis bullet 2: on a split-origin production deployment
+  // (Vercel frontend + Render backend) with neither VITE_WS_BASE_URL
+  // nor an absolute VITE_API_BASE_URL configured in the build, this
+  // fallback dials the FRONTEND's own origin -- which has no chat
+  // backend listening -- producing a silent, confusing abnormal close
+  // (commonly code 1005) with nothing in the browser console to explain
+  // why. Loudly flag that misconfiguration in production specifically
+  // (dev's relative "/api/v1" default via the Vite proxy is the
+  // expected, correct same-origin case and must not warn).
+  if (env.isProduction) {
+    console.error(
+      "AIRP Assistant: no VITE_WS_BASE_URL (or absolute VITE_API_BASE_URL) is " +
+        "configured for this production build -- the chat socket will dial " +
+        "this frontend's own origin, which has no backend listening. Set " +
+        "VITE_WS_BASE_URL (or VITE_API_BASE_URL) in the Vercel project's " +
+        "environment variables.",
+    );
   }
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   return `${protocol}//${window.location.host}`;
@@ -128,22 +192,69 @@ function isChatStreamEvent(value: unknown): value is ChatStreamEvent {
  * to useAnalysisStream's own effect.
  */
 export function useChatStream(options: UseChatStreamOptions): UseChatStreamResult {
-  const { sessionId, token, baseUrl, enabled = true } = options;
+  const { sessionId, token, baseUrl, enabled = true, initialMessages } = options;
 
   const [messages, setMessages] = useState<ChatWidgetMessage[]>([]);
   const [connectionStatus, setConnectionStatus] = useState<ChatStreamConnectionStatus>("idle");
   const [error, setError] = useState<string | null>(null);
 
-  const socketRef = useRef<WebSocket | null>(null);
-  // Guards against state updates from a socket belonging to a PRIOR
-  // render's effect -- same purpose as useAnalysisStream's own
-  // isCurrentEffectRef.
-  const isCurrentEffectRef = useRef(true);
+  // (B9) Always holds the LATEST `initialMessages` prop, read by the
+  // connect effect below at the moment it (re)runs -- NOT added to
+  // that effect's own dependency array, since `initialMessages` is
+  // typically a freshly-computed array on every render (see
+  // useChatWidget's historyMessages) and must not itself trigger a
+  // reconnect. Declared (and kept updated) before the connect effect
+  // below so React's in-declaration-order effect execution guarantees
+  // this ref is current by the time that effect reads it, even when
+  // both `sessionId` and `initialMessages` change in the same commit
+  // (opening a session picked from the conversation list).
+  const initialMessagesRef = useRef<ChatWidgetMessage[]>(initialMessages ?? []);
+  useEffect(() => {
+    initialMessagesRef.current = initialMessages ?? [];
+  }, [initialMessages]);
+
+  // Guards against state updates from a socket that belonged to a PRIOR
+  // effect run (a scope switch discarding the old session -- see
+  // useChatWidget.ts's "why a session is discarded" note -- or React
+  // 18 StrictMode's dev-only mount->cleanup->mount double-invoke).
+  // Doubles as socketRef: the current effect's own socket instance,
+  // read by sendMessage below.
+  //
+  // BUGFIX (B9, root cause of "Starting a new conversation..." then
+  // "Connection closed unexpectedly (code 1005)"): this used to be a
+  // single shared `useRef(true)` boolean (`isCurrentEffectRef`), set
+  // true at the top of every effect run and false in that same run's
+  // cleanup -- the exact pattern useAnalysisStream.ts's own
+  // currentSocketRef BUGFIX comment already documents as broken and
+  // replaced, for the identical reason, but that fix was never ported
+  // to this sibling hook when it was built. Concretely: switching chat
+  // scope (navigating from one memo to another, or memo <-> portfolio)
+  // makes useChatWidget discard the old session, so this hook's effect
+  // tears down socket A (still finishing its close handshake, over a
+  // real network -- no StrictMode needed to trigger this) while a NEW
+  // effect run opens socket B for the freshly-created session and
+  // resets the SAME shared flag back to true. Socket A's onclose then
+  // fires asynchronously, sees the flag reading true again (set by B's
+  // run, not A's), and incorrectly overwrites the brand-new session's
+  // state with a phantom "Connection closed unexpectedly" error --
+  // exactly the screenshot symptom, both messages rendered together. A
+  // ref holding the CURRENT effect run's own socket instance (compared
+  // by reference, not a shared boolean) makes every handler's
+  // staleness check specific to the exact socket it was attached to,
+  // immune to a later effect resetting a shared flag out from under an
+  // earlier one's in-flight callbacks.
+  const currentSocketRef = useRef<WebSocket | null>(null);
   // Client-local id for the assistant message currently streaming, if
   // any -- set on 'start', cleared on 'done'/'error'. A ref (not
   // state) because onmessage handlers need the LIVE value, not one
   // captured in a stale closure from when the effect first ran.
   const streamingMessageIdRef = useRef<string | null>(null);
+  // (B9) Client-local id of the user message THIS turn just sent,
+  // still awaiting the backend's confirmed real id -- set in
+  // sendMessage, consumed (and cleared) the moment the matching
+  // 'start' event arrives with that id. See ChatWidgetMessage.serverId
+  // and editMessage's own docstrings for why this hand-off exists.
+  const pendingUserLocalIdRef = useRef<string | null>(null);
   const nextLocalIdRef = useRef(0);
 
   const allocateLocalId = useCallback((): string => {
@@ -152,14 +263,15 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamResul
   }, []);
 
   useEffect(() => {
-    isCurrentEffectRef.current = true;
     streamingMessageIdRef.current = null;
+    pendingUserLocalIdRef.current = null;
 
     if (!enabled || sessionId === null || sessionId === "" || token === null || token === "") {
+      currentSocketRef.current = null;
       return undefined;
     }
 
-    setMessages([]);
+    setMessages(initialMessagesRef.current);
     setError(null);
     setConnectionStatus("connecting");
 
@@ -169,15 +281,15 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamResul
     )}`;
 
     const socket = new WebSocket(url);
-    socketRef.current = socket;
+    currentSocketRef.current = socket;
 
     socket.onopen = (): void => {
-      if (!isCurrentEffectRef.current) return;
+      if (currentSocketRef.current !== socket) return;
       setConnectionStatus("open");
     };
 
     socket.onmessage = (messageEvent: MessageEvent<string>): void => {
-      if (!isCurrentEffectRef.current) return;
+      if (currentSocketRef.current !== socket) return;
 
       let parsed: unknown;
       try {
@@ -196,10 +308,34 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamResul
         case "start": {
           const localId = allocateLocalId();
           streamingMessageIdRef.current = localId;
-          setMessages((previous) => [
-            ...previous,
-            { id: localId, role: "assistant", content: "", isStreaming: true, isError: false },
-          ]);
+          // (B9) 'start' also carries the id the backend just
+          // assigned to the user message THIS turn sent -- fill it
+          // into that message's serverId (see ChatWidgetMessage's own
+          // docstring) so it becomes editable.
+          const confirmedUserLocalId = pendingUserLocalIdRef.current;
+          const confirmedUserServerId = parsed.message_id;
+          pendingUserLocalIdRef.current = null;
+          setMessages((previous) => {
+            const withAssistantPlaceholder: ChatWidgetMessage[] = [
+              ...previous,
+              {
+                id: localId,
+                role: "assistant",
+                content: "",
+                isStreaming: true,
+                isError: false,
+                serverId: null,
+              },
+            ];
+            if (confirmedUserLocalId === null || confirmedUserServerId === null) {
+              return withAssistantPlaceholder;
+            }
+            return withAssistantPlaceholder.map((message) =>
+              message.id === confirmedUserLocalId
+                ? { ...message, serverId: confirmedUserServerId }
+                : message,
+            );
+          });
           break;
         }
         case "token": {
@@ -224,11 +360,14 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamResul
           break;
         case "done": {
           const streamingId = streamingMessageIdRef.current;
+          const finishedServerId = parsed.message_id;
           streamingMessageIdRef.current = null;
           if (streamingId === null) break;
           setMessages((previous) =>
             previous.map((message) =>
-              message.id === streamingId ? { ...message, isStreaming: false } : message,
+              message.id === streamingId
+                ? { ...message, isStreaming: false, serverId: finishedServerId }
+                : message,
             ),
           );
           break;
@@ -260,6 +399,7 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamResul
                 content: errorText,
                 isStreaming: false,
                 isError: true,
+                serverId: null,
               },
             ]);
           }
@@ -274,13 +414,13 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamResul
     };
 
     socket.onerror = (): void => {
-      if (!isCurrentEffectRef.current) return;
+      if (currentSocketRef.current !== socket) return;
       setConnectionStatus("error");
       setError("WebSocket connection error.");
     };
 
     socket.onclose = (closeEvent: CloseEvent): void => {
-      if (!isCurrentEffectRef.current) return;
+      if (currentSocketRef.current !== socket) return;
       setConnectionStatus("closed");
       if (closeEvent.code === 4401) {
         setError("Not authorized to use this chat session (invalid or expired token).");
@@ -292,8 +432,9 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamResul
     };
 
     return (): void => {
-      isCurrentEffectRef.current = false;
-      socketRef.current = null;
+      if (currentSocketRef.current === socket) {
+        currentSocketRef.current = null;
+      }
       socket.close();
     };
     // baseUrl is intentionally excluded -- same rationale as
@@ -307,19 +448,24 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamResul
       if (trimmed.length === 0) {
         return;
       }
-      const socket = socketRef.current;
+      const socket = currentSocketRef.current;
       if (socket === null || socket.readyState !== WebSocket.OPEN) {
         return;
       }
 
+      const localId = allocateLocalId();
+      // (B9) Recorded so the 'start' event this turn provokes can fill
+      // in this message's real serverId -- see that case's own comment.
+      pendingUserLocalIdRef.current = localId;
       setMessages((previous) => [
         ...previous,
         {
-          id: allocateLocalId(),
+          id: localId,
           role: "user",
           content: trimmed,
           isStreaming: false,
           isError: false,
+          serverId: null,
         },
       ]);
       socket.send(JSON.stringify({ message: trimmed }));
@@ -327,8 +473,68 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamResul
     [allocateLocalId],
   );
 
+  const [isEditingMessage, setIsEditingMessage] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+
   const isAssistantTyping = messages.some(
     (message) => message.role === "assistant" && message.isStreaming,
+  );
+
+  const editMessage = useCallback(
+    async (localMessageId: string, newContent: string): Promise<boolean> => {
+      const trimmed = newContent.trim();
+      if (trimmed.length === 0) {
+        return false;
+      }
+      if (isAssistantTyping) {
+        setEditError("Please wait for the current reply to finish before editing.");
+        return false;
+      }
+      const target = messages.find((message) => message.id === localMessageId);
+      if (target === undefined || target.role !== "user") {
+        return false;
+      }
+      if (target.serverId === null) {
+        setEditError("This message is not ready to edit yet -- try again in a moment.");
+        return false;
+      }
+      if (sessionId === null || token === null) {
+        return false;
+      }
+
+      setIsEditingMessage(true);
+      setEditError(null);
+      try {
+        await deleteChatMessagesFrom({
+          accessToken: token,
+          sessionId,
+          messageId: target.serverId,
+        });
+      } catch (caught) {
+        setEditError(
+          caught instanceof ChatApiError
+            ? caught.message
+            : "Could not edit that message. Please try again.",
+        );
+        return false;
+      } finally {
+        setIsEditingMessage(false);
+      }
+
+      // Drop the edited message and everything after it, then re-send
+      // the edited text as a fresh turn -- two functional updates
+      // queued in this order within the same commit, so the fresh
+      // turn's user bubble is appended AFTER the truncation, never
+      // before it (see this function's own docstring on
+      // UseChatStreamResult).
+      setMessages((previous) => {
+        const index = previous.findIndex((message) => message.id === localMessageId);
+        return index === -1 ? previous : previous.slice(0, index);
+      });
+      sendMessage(trimmed);
+      return true;
+    },
+    [messages, isAssistantTyping, sessionId, token, sendMessage],
   );
 
   return {
@@ -337,5 +543,8 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamResul
     isAssistantTyping,
     error,
     sendMessage,
+    editMessage,
+    isEditingMessage,
+    editError,
   };
 }

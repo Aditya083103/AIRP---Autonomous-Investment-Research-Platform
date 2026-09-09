@@ -220,20 +220,43 @@ documents, applied at per-turn granularity instead of
 per-connection granularity because chat's database need recurs every
 turn rather than being front-loaded once.
 
-Known scope boundary: portfolio-wide tool-calling is not wired into
-this loop
+Portfolio-wide tool-calling (B9)
 ------------------------------------------------------------------------
-T-101 already built the three portfolio-wide LangChain tools
-(``backend.tools.portfolio_tools.build_portfolio_tools``), but this
-router does not bind them to the streaming LLM call. A
-``session_type='portfolio_wide'`` connection still works end-to-end --
-the guardrail persona and streaming mechanics are fully functional --
-it simply cannot yet answer questions that require looking up the
-user's other analyses or searching uploaded documents. Wiring T-101's
-tools into a streaming tool-calling loop (interleaving tool-call
-events with token events) is materially more scope than "reuse the
-ws_broadcaster pattern for token-by-token streaming" asks for, and is
-called out explicitly here rather than silently left unfinished.
+T-101 built three portfolio-wide LangChain tools
+(``backend.tools.portfolio_tools.build_portfolio_tools``) that this
+router did not originally bind to the streaming LLM call -- a
+``session_type='portfolio_wide'`` connection worked end-to-end for the
+guardrail persona and streaming mechanics, but could not answer a
+question requiring a look-up of the user's OWN other analyses or
+uploaded documents. ``_build_chat_tools`` (B9, below) closes that gap:
+every turn now runs a non-streamed tool-calling decision round
+(``backend.services.chat_llm.run_tool_calling_round``) BEFORE
+streaming begins -- see ``_build_chat_tools``'s and ``_run_one_turn``'s
+own docstrings for the full design (why the round runs inside this
+turn's own DB session block, how a tool-round failure surfaces as an
+error event, and why this is a decide-then-stream split rather than
+interleaving tool-call events with token events mid-stream).
+
+Why 'start' now carries the user message's id (B9 edit-and-resend)
+------------------------------------------------------------------------
+``backend.routers.chat`` (T-103) grew a
+``DELETE /api/v1/chat/sessions/{id}/messages/{message_id}`` endpoint
+(B9) that truncates a session from one message onward -- the
+server-side half of "edit a past message, matching the Claude UX":
+the client deletes the edited message and everything the assistant
+said after it, then simply calls this same streaming endpoint again
+with the edited text, which appends a fresh user turn and generates a
+new reply exactly like any other message. That truncate endpoint is
+addressed BY MESSAGE ID, but this router previously never told the
+client what id its own just-sent user message got -- only an assistant
+reply's id (on 'done') was ever surfaced. A user message sent over a
+live connection therefore had no known server id to later pass to the
+truncate endpoint if the person wanted to edit it, unlike a message
+loaded from ``GET .../messages`` (T-103), which always carries its
+real id. Piggybacking the just-persisted user message's id onto the
+'start' event (sent immediately after that persist, before generation
+even begins) closes that gap with no new event type and no change to
+this loop's shape -- see ``ChatStreamEvent``'s own docstring above.
 
 Design decisions
 ------------------------------------------------------------------------
@@ -247,10 +270,12 @@ import asyncio
 from collections.abc import MutableMapping
 import json
 import logging
-from typing import Any, Optional, TypedDict
+from typing import Any, AsyncIterator, Optional, TypedDict
 import uuid
 
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
+from langchain_core.messages import BaseMessage
+from langchain_core.tools import BaseTool
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -260,7 +285,19 @@ from backend.dependencies.common import get_settings_dependency
 from backend.models.orm import User
 from backend.services.analysis import AnalysisNotReadyError
 from backend.services.auth import InvalidTokenError, decode_access_token
-from backend.services.chat_llm import ChatLLMError, astream_chat
+from backend.services.chat_cache import (
+    PORTFOLIO_SCOPE,
+    build_cache_key,
+    get_cached_reply,
+    set_cached_reply,
+)
+from backend.services.chat_llm import (
+    ChatLLMError,
+    astream_chat_from_messages,
+    build_chat_messages,
+    get_chat_llm,
+    run_tool_calling_round,
+)
 from backend.services.chat_service import build_memo_context
 from backend.services.chat_session_service import (
     MAX_MESSAGES_PAGE_SIZE,
@@ -271,6 +308,9 @@ from backend.services.chat_session_service import (
 )
 from backend.services.preference_extractor import extract_preferences
 from backend.services.preference_service import apply_extracted_preferences
+from backend.tools.portfolio_tools import build_portfolio_tools
+from backend.tools.ratios import fetch_ratios
+from backend.tools.stock_price import fetch_stock_price
 
 logger = logging.getLogger(__name__)
 
@@ -327,12 +367,20 @@ class ChatStreamEvent(TypedDict):
     ``event_type``:
       'start'     -- a new assistant reply has begun generating (sent
                       once per turn, before the first token).
+                      ``message_id`` (B9) is the id of the USER
+                      message this turn just persisted -- see the
+                      module docstring's "Why 'start' now carries the
+                      user message's id" section. This is the ONLY
+                      event in this turn that ever carries a user
+                      message's id; every other non-null
+                      ``message_id`` in this protocol (below) is an
+                      assistant message's.
       'token'     -- one incremental chunk of the assistant's reply.
       'heartbeat' -- no new token in a while; keeps the connection
                       alive during a slow first-token wait. Carries no
                       new content (token == "").
       'done'      -- the reply finished successfully. ``message_id``
-                      is the persisted ChatMessage's id.
+                      is the persisted assistant ChatMessage's id.
       'error'     -- the turn failed (bad client input, or the LLM
                       call itself failed). The connection stays open;
                       the client may send another message.
@@ -635,6 +683,83 @@ async def _turn_loop(
         )
 
 
+def _build_chat_tools(
+    session: AsyncSession, user: User, session_type: str
+) -> list[BaseTool]:
+    """
+    Build the LangChain tools available for one chat turn (B9).
+
+    The live-market-data tools (``fetch_ratios``, ``fetch_stock_price``)
+    are bound for EVERY session type -- a user asking "what's TCS's P/E
+    right now?" is a reasonable question in a memo-scoped conversation
+    too, not just a portfolio-wide one. ``backend.tools.portfolio_tools``
+    ``'s three tools are ADDITIONALLY bound only for a portfolio-wide
+    session -- they read the caller's own analysis history / uploaded
+    documents, which has no meaning scoped to one already-open memo.
+
+    Root cause this closes: chat_stream.py's own module docstring used
+    to document portfolio-wide tool-calling as a deliberately deferred
+    "known scope boundary" -- the guardrail persona and streaming
+    mechanics worked, but the assistant had no way to look up the
+    user's own analyses, so a portfolio-wide question about a specific
+    past analysis produced a false "I don't have that" / "analysis has
+    not been done" even when the user genuinely had one.
+
+    Args:
+        session:      The turn's own AsyncSession -- portfolio_tools'
+                      two DB-backed tools are bound to it via a closure
+                      (see build_portfolio_tools's own docstring for why
+                      user_id/session are never LLM-fillable tool
+                      arguments). Callers MUST run any tool round that
+                      uses these tools while this session is still open
+                      -- see run_tool_calling_round's own docstring.
+        user:         The authenticated chat requester.
+        session_type: ``info.session_type`` -- 'memo_scoped' or
+                      'portfolio_wide'.
+
+    Returns:
+        A list of LangChain tools, never empty (the live-data tools are
+        always included).
+    """
+    tools: list[BaseTool] = [fetch_ratios, fetch_stock_price]
+    if session_type == "portfolio_wide":
+        tools = build_portfolio_tools(session, user.id) + tools
+    return tools
+
+
+async def _reply_token_source(
+    cached_reply: Optional[str],
+    immediate_text: Optional[str],
+    messages: list[BaseMessage],
+    llm: Any,
+) -> AsyncIterator[str]:
+    """
+    Unify the three ways this turn's reply text can become available,
+    behind the SAME async-iterator interface the polling loop below
+    already expects (so that loop -- with its careful non-cancelling
+    disconnect/heartbeat handling -- needs no changes regardless of
+    which source produced the reply):
+
+      1. ``cached_reply`` (B9 reply cache hit) -- yielded once, no LLM
+         call at all.
+      2. ``immediate_text`` (the B9 tool-calling round decided no tool
+         was needed and already has the model's complete reply) --
+         yielded once, no second LLM call.
+      3. Neither: a real token-by-token stream from
+         ``astream_chat_from_messages`` (a fresh generation, or the
+         follow-up call after a tool round appended results to
+         ``messages``).
+    """
+    if cached_reply is not None:
+        yield cached_reply
+        return
+    if immediate_text is not None:
+        yield immediate_text
+        return
+    async for token in astream_chat_from_messages(messages, llm=llm):
+        yield token
+
+
 async def _run_one_turn(
     websocket: WebSocket,
     session_id: uuid.UUID,
@@ -652,7 +777,36 @@ async def _run_one_turn(
     mid-stream disconnect) is handled inline so ``_turn_loop`` can
     always safely continue to the next iteration (or return, for a
     detected disconnect).
+
+    B9 additions:
+      * Reply cache (backend.services.chat_cache) -- an identical
+        question (normalised) asked again within the cache TTL, for the
+        same user and the same session scope (the analysis_id for a
+        memo-scoped session, a fixed placeholder for portfolio-wide),
+        is served from Redis instead of re-invoking the LLM/tools.
+      * Tool-calling (backend.services.chat_llm.run_tool_calling_round)
+        -- see ``_build_chat_tools``'s docstring for the root cause this
+        closes. Deliberately run INSIDE this function's own DB session
+        block (below), even though the rest of that block is unrelated
+        to tools: backend.tools.portfolio_tools' two DB-backed tools are
+        bound to THIS turn's session via a closure and must be executed
+        before it closes -- see backend/routers/chat_stream.py's module
+        docstring for why the session is otherwise closed before
+        streaming begins. A tool-round failure is captured as a
+        ChatLLMError here rather than left to propagate, so it is
+        reported to the client the same way a streaming failure already
+        is, further down.
     """
+    session_scope = (
+        str(info.analysis_id) if info.analysis_id is not None else PORTFOLIO_SCOPE
+    )
+    cache_key = build_cache_key(user.id, session_scope, user_message)
+    cached_reply = get_cached_reply(cache_key)
+
+    messages: list[BaseMessage] = []
+    immediate_text: Optional[str] = None
+    tool_round_error: Optional[ChatLLMError] = None
+
     async with AsyncSessionLocal() as db_session:
         history_page = await get_chat_session_messages(
             db_session,
@@ -702,12 +856,55 @@ async def _run_one_turn(
         extraction = extract_preferences(user_message)
         preferences = await apply_extracted_preferences(db_session, user.id, extraction)
 
-        await append_chat_message(
+        saved_user_message = await append_chat_message(
             db_session, session_id=session_id, role="user", content=user_message
         )
 
+        if cached_reply is None:
+            tools = _build_chat_tools(db_session, user, info.session_type)
+            messages = build_chat_messages(
+                history,
+                user_message,
+                response_style=preferences.chat_response_style,
+                context=context,
+                risk_appetite=preferences.risk_appetite,
+                preferred_sectors=preferences.preferred_sectors,
+                tools_available=bool(tools),
+            )
+            if tools:
+                try:
+                    messages, immediate_text = await run_tool_calling_round(
+                        get_chat_llm(), tools, messages
+                    )
+                except Exception as exc:
+                    logger.exception(
+                        "chat_stream: tool-calling round failed for session_id=%s",
+                        session_id,
+                    )
+                    tool_round_error = ChatLLMError(
+                        "AIRP Assistant failed to generate a response.", cause=exc
+                    )
+
+    if tool_round_error is not None:
+        try:
+            await websocket.send_json(
+                _cast_stream_event(
+                    session_id,
+                    event_type="error",
+                    error=str(tool_round_error),
+                    is_final=True,
+                )
+            )
+        except Exception:  # nosec B110 -- best-effort notify on a failing connection
+            pass
+        return
+
     try:
-        await websocket.send_json(_cast_stream_event(session_id, event_type="start"))
+        await websocket.send_json(
+            _cast_stream_event(
+                session_id, event_type="start", message_id=saved_user_message.id
+            )
+        )
     except Exception:
         return
 
@@ -716,13 +913,8 @@ async def _run_one_turn(
     pending_next: Optional["asyncio.Task[str]"] = None
 
     try:
-        token_iter = astream_chat(
-            history,
-            user_message,
-            response_style=preferences.chat_response_style,
-            context=context,
-            risk_appetite=preferences.risk_appetite,
-            preferred_sectors=preferences.preferred_sectors,
+        token_iter = _reply_token_source(
+            cached_reply, immediate_text, messages, get_chat_llm()
         ).__aiter__()
 
         while True:
@@ -835,6 +1027,14 @@ async def _run_one_turn(
             pending_next.cancel()
 
     full_text = "".join(collected)
+
+    if cached_reply is None and full_text:
+        # Only cache a FRESHLY generated, complete reply -- never a
+        # cache hit re-cached against itself (a no-op, but wasted work),
+        # and never an empty string (would poison the cache with a
+        # blank answer for the next identical question).
+        set_cached_reply(cache_key, full_text)
+
     async with AsyncSessionLocal() as db_session:
         saved = await append_chat_message(
             db_session, session_id=session_id, role="assistant", content=full_text

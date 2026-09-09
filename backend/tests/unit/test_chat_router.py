@@ -60,6 +60,8 @@ from backend.services.chat_session_service import (
     AnalysisNotFoundError,
     AnalysisNotReadyError,
     ChatMessageEntry,
+    ChatMessageNotEditableError,
+    ChatMessageNotFoundError,
     ChatMessagesPage,
     ChatSessionPage,
     ChatSessionSummary,
@@ -84,38 +86,42 @@ def current_user() -> User:
 
 @dataclass
 class _PatchedChatService:
-    """Bundles the three AsyncMocks patched_chat_service installs, so a
+    """Bundles the AsyncMocks patched_chat_service installs, so a
     test can configure return_value/side_effect on exactly the one it
     needs without re-deriving the patch target string itself."""
 
     create_chat_session: AsyncMock
     list_chat_sessions: AsyncMock
     get_chat_session_messages: AsyncMock
+    delete_chat_messages_from: AsyncMock
 
 
 @pytest.fixture(autouse=True)
 def patched_chat_service(monkeypatch: pytest.MonkeyPatch) -> _PatchedChatService:
     """
-    Replace backend.routers.chat's three imported service functions
-    with AsyncMocks for every test in this module, autouse=True so no
-    test can forget it and accidentally require a real database
-    connection. Individual tests retrieve these same mocks via the
-    fixture argument to configure return values / assert call args.
+    Replace backend.routers.chat's imported service functions with
+    AsyncMocks for every test in this module, autouse=True so no test
+    can forget it and accidentally require a real database connection.
+    Individual tests retrieve these same mocks via the fixture argument
+    to configure return values / assert call args.
     """
     import backend.routers.chat as chat_router_module
 
     mock_create = AsyncMock()
     mock_list = AsyncMock()
     mock_messages = AsyncMock()
+    mock_delete = AsyncMock()
 
     monkeypatch.setattr(chat_router_module, "create_chat_session", mock_create)
     monkeypatch.setattr(chat_router_module, "list_chat_sessions", mock_list)
     monkeypatch.setattr(chat_router_module, "get_chat_session_messages", mock_messages)
+    monkeypatch.setattr(chat_router_module, "delete_chat_messages_from", mock_delete)
 
     return _PatchedChatService(
         create_chat_session=mock_create,
         list_chat_sessions=mock_list,
         get_chat_session_messages=mock_messages,
+        delete_chat_messages_from=mock_delete,
     )
 
 
@@ -694,3 +700,112 @@ class TestGetMessagesAuth:
             response = await ac.get(f"/api/v1/chat/sessions/{uuid.uuid4()}/messages")
         assert response.status_code == 401
         patched_chat_service.get_chat_session_messages.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# DELETE /api/v1/chat/sessions/{session_id}/messages/{message_id} (B9)
+# ---------------------------------------------------------------------------
+
+
+class TestDeleteMessagesFromSuccess:
+    @pytest.mark.asyncio
+    async def test_returns_200_with_deleted_count(
+        self, client: httpx.AsyncClient, patched_chat_service: _PatchedChatService
+    ) -> None:
+        patched_chat_service.delete_chat_messages_from.return_value = 3
+        response = await client.delete(
+            f"/api/v1/chat/sessions/{uuid.uuid4()}/messages/{uuid.uuid4()}"
+        )
+        assert response.status_code == 200
+        assert response.json() == {"deleted_count": 3}
+
+    @pytest.mark.asyncio
+    async def test_forwards_session_id_message_id_and_users_id(
+        self,
+        client: httpx.AsyncClient,
+        patched_chat_service: _PatchedChatService,
+        current_user: User,
+    ) -> None:
+        session_id = uuid.uuid4()
+        message_id = uuid.uuid4()
+        patched_chat_service.delete_chat_messages_from.return_value = 1
+
+        await client.delete(f"/api/v1/chat/sessions/{session_id}/messages/{message_id}")
+
+        call_kwargs = patched_chat_service.delete_chat_messages_from.call_args.kwargs
+        assert call_kwargs["session_id"] == session_id
+        assert call_kwargs["message_id"] == message_id
+        assert call_kwargs["user_id"] == current_user.id
+
+
+class TestDeleteMessagesFromNotFound:
+    @pytest.mark.asyncio
+    async def test_unknown_session_returns_404(
+        self, client: httpx.AsyncClient, patched_chat_service: _PatchedChatService
+    ) -> None:
+        patched_chat_service.delete_chat_messages_from.return_value = None
+        response = await client.delete(
+            f"/api/v1/chat/sessions/{uuid.uuid4()}/messages/{uuid.uuid4()}"
+        )
+        assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_unknown_message_id_in_a_real_session_returns_404(
+        self, client: httpx.AsyncClient, patched_chat_service: _PatchedChatService
+    ) -> None:
+        session_id = uuid.uuid4()
+        message_id = uuid.uuid4()
+        patched_chat_service.delete_chat_messages_from.side_effect = (
+            ChatMessageNotFoundError(session_id, message_id)
+        )
+        response = await client.delete(
+            f"/api/v1/chat/sessions/{session_id}/messages/{message_id}"
+        )
+        assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_malformed_message_id_returns_422(
+        self, client: httpx.AsyncClient, patched_chat_service: _PatchedChatService
+    ) -> None:
+        response = await client.delete(
+            f"/api/v1/chat/sessions/{uuid.uuid4()}/messages/not-a-uuid"
+        )
+        assert response.status_code == 422
+        patched_chat_service.delete_chat_messages_from.assert_not_called()
+
+
+class TestDeleteMessagesFromNotEditable:
+    @pytest.mark.asyncio
+    async def test_non_user_message_returns_422(
+        self, client: httpx.AsyncClient, patched_chat_service: _PatchedChatService
+    ) -> None:
+        message_id = uuid.uuid4()
+        patched_chat_service.delete_chat_messages_from.side_effect = (
+            ChatMessageNotEditableError(message_id, "assistant")
+        )
+        response = await client.delete(
+            f"/api/v1/chat/sessions/{uuid.uuid4()}/messages/{message_id}"
+        )
+        assert response.status_code == 422
+        assert "assistant" in response.json()["detail"]
+
+
+class TestDeleteMessagesFromAuth:
+    @pytest.mark.asyncio
+    async def test_requires_authentication(
+        self,
+        test_settings: Settings,
+        patched_chat_service: _PatchedChatService,
+    ) -> None:
+        app: FastAPI = create_app()
+        app.dependency_overrides[get_async_session] = _session_override
+        app.dependency_overrides[get_settings_dependency] = lambda: test_settings
+        transport = httpx.ASGITransport(app=cast(Any, app))
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://testserver"
+        ) as ac:
+            response = await ac.delete(
+                f"/api/v1/chat/sessions/{uuid.uuid4()}/messages/{uuid.uuid4()}"
+            )
+        assert response.status_code == 401
+        patched_chat_service.delete_chat_messages_from.assert_not_called()

@@ -1,10 +1,11 @@
 # backend/routers/chat.py
 """
-AIRP -- Chat Session REST Endpoints (T-103)
+AIRP -- Chat Session REST Endpoints (T-103, extended B9)
 
-POST /api/v1/chat/sessions                          (create a session)
-GET  /api/v1/chat/sessions                           (list my sessions)
-GET  /api/v1/chat/sessions/{session_id}/messages     (list a session's messages)
+POST   /api/v1/chat/sessions                        (create a session)
+GET    /api/v1/chat/sessions                        (list my sessions)
+GET    /api/v1/chat/sessions/{id}/messages           (list a session's messages)
+DELETE /api/v1/chat/sessions/{id}/messages/{msg_id} (B9, edit-and-resend)
 
 T-103 acceptance criteria (from task spec):
   * All endpoints covered by pytest with the existing autouse
@@ -92,6 +93,7 @@ from backend.models.orm import User
 from backend.models.schemas import (
     ChatMessageResponse,
     ChatMessagesResponse,
+    ChatMessagesTruncateResponse,
     ChatSessionCreateRequest,
     ChatSessionListResponse,
     ChatSessionResponse,
@@ -103,7 +105,10 @@ from backend.services.chat_session_service import (
     MAX_SESSIONS_PAGE_SIZE,
     AnalysisNotFoundError,
     AnalysisNotReadyError,
+    ChatMessageNotEditableError,
+    ChatMessageNotFoundError,
     create_chat_session,
+    delete_chat_messages_from,
     get_chat_session_messages,
     list_chat_sessions,
 )
@@ -302,3 +307,64 @@ async def get_chat_session_messages_endpoint(
         offset=page.offset,
         has_more=page.has_more,
     )
+
+
+# ---------------------------------------------------------------------------
+# DELETE /api/v1/chat/sessions/{session_id}/messages/{message_id}  (B9)
+# ---------------------------------------------------------------------------
+
+
+@router.delete(
+    "/sessions/{session_id}/messages/{message_id}",
+    response_model=ChatMessagesTruncateResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Delete one message and everything the AIRP Assistant said after it",
+    description=(
+        "Server-side half of editing a past message (matching the "
+        "Claude UX): deletes message_id AND every message the "
+        "session recorded after it, so the client can then re-send "
+        "the edited text over WS /api/v1/chat/{session_id}/stream "
+        "(T-104) as a fresh turn -- see "
+        "backend/routers/chat_stream.py's module docstring for the "
+        "full edit-and-resend flow. message_id must belong to a "
+        "'user' message in a session the caller owns: returns 404 if "
+        "the session or the message does not exist (or is not the "
+        "caller's), and 422 if message_id refers to something other "
+        "than a 'user' message (only the person's own turns are "
+        "editable)."
+    ),
+)
+async def delete_chat_messages_from_endpoint(
+    session_id: uuid.UUID,
+    message_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_async_session),
+) -> ChatMessagesTruncateResponse:
+    try:
+        deleted_count = await delete_chat_messages_from(
+            session,
+            user_id=current_user.id,
+            session_id=session_id,
+            message_id=message_id,
+        )
+    except ChatMessageNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No message found for message_id={message_id} in this session",
+        ) from exc
+    except ChatMessageNotEditableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"message_id={message_id} has role={exc.role!r}; only 'user' "
+                "messages can be edited"
+            ),
+        ) from exc
+
+    if deleted_count is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No chat session found for the given session_id",
+        )
+
+    return ChatMessagesTruncateResponse(deleted_count=deleted_count)

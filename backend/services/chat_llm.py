@@ -161,13 +161,24 @@ Public API
         build_system_message,
         build_chat_messages,
         invoke_chat,
+        astream_chat,
+        astream_chat_from_messages,
+        run_tool_calling_round,
     )
 """
 
+import json
 import logging
 from typing import Any, AsyncIterator, Optional
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
+from langchain_core.tools import BaseTool
 
 from backend.agents.llm_factory import get_llm
 
@@ -177,6 +188,7 @@ __all__ = [
     "SYSTEM_PROMPT",
     "RESPONSE_STYLE_INSTRUCTIONS",
     "DEFAULT_RESPONSE_STYLE",
+    "LIVE_DATA_TOOL_INSTRUCTION",
     "ChatLLMError",
     "get_chat_llm",
     "build_system_prompt",
@@ -185,6 +197,8 @@ __all__ = [
     "build_personalization_instruction",
     "invoke_chat",
     "astream_chat",
+    "astream_chat_from_messages",
+    "run_tool_calling_round",
 ]
 
 # ---------------------------------------------------------------------------
@@ -290,6 +304,40 @@ RESPONSE_STYLE_INSTRUCTIONS: dict[str, str] = {
 }
 
 DEFAULT_RESPONSE_STYLE = "concise"
+
+#: Appended (B9) only for a call that actually has tools bound
+#: (``build_chat_messages(..., tools_available=True)``) -- portfolio-wide
+#: sessions get the ``backend.tools.portfolio_tools`` functions, and both
+#: session types get the live-market-data tools (``fetch_ratios``,
+#: ``fetch_stock_price``). Kept as a separate, conditionally-appended
+#: block rather than folded into ``SYSTEM_PROMPT`` for the same reason
+#: ``build_personalization_instruction`` is separate: a memo-scoped call
+#: with no tools bound has nothing to gain from instructions about tools
+#: it cannot call, and a shorter prompt for that (more common) case is
+#: strictly better.
+LIVE_DATA_TOOL_INSTRUCTION = """\
+TOOLS AVAILABLE THIS TURN
+You have live data tools bound to this conversation. Use them whenever \
+they would let you answer more precisely than the context already \
+given -- for example, looking up the user's own past analyses, pulling \
+up a specific stored memo, searching their uploaded documents, or \
+fetching a live market ratio (P/E, P/B, ROE, current price, and \
+similar) for a ticker.
+
+HARD RULE -- LABEL LIVE DATA AS LIVE, NEVER AS A STORED VERDICT
+A number a tool fetches live (e.g. today's P/E ratio, today's price) is \
+NOT a stored AIRP analysis and is NEVER a verdict, conviction score, or \
+price target. When you use a live-fetched figure, say plainly that it \
+is a live/current figure (e.g. "as of right now, TCS trades at a P/E of \
+X") and keep it visibly separate from anything that came from a stored \
+AIRP analysis (e.g. "your stored analysis rated TCS a BUY at conviction \
+8/10"). Never blend the two into a single unlabelled number, and never \
+let a live figure imply a new BUY/HOLD/SELL call -- that restriction \
+from the rules above still applies with no exception for tool-fetched \
+data.
+
+If a tool call fails or returns no data, say so plainly rather than \
+guessing or inventing a figure."""
 
 #: Maps a stored ``chat_messages.role`` value to the LangChain message
 #: class it becomes. Deliberately excludes 'system' and 'tool' -- see
@@ -429,6 +477,7 @@ def build_system_prompt(
     context: Optional[str] = None,
     risk_appetite: Optional[str] = None,
     preferred_sectors: Optional[list[str]] = None,
+    tools_available: bool = False,
 ) -> str:
     """
     Build the full system prompt text for one AIRP Assistant call.
@@ -436,10 +485,12 @@ def build_system_prompt(
     Always starts with the objectivity guardrail (``SYSTEM_PROMPT``),
     then the response-style instruction, then the personalization
     instruction (T-106, see ``build_personalization_instruction``),
-    then -- only when provided -- the grounded context block (e.g. a
-    memo-scoped session's ``MemoChatContext.full_context`` from T-100).
-    ``context`` is never validated or summarised here; this function
-    only assembles text the caller already trusts.
+    then -- only when ``tools_available`` -- the live-data-tool
+    instruction (B9, see ``LIVE_DATA_TOOL_INSTRUCTION``), then -- only
+    when provided -- the grounded context block (e.g. a memo-scoped
+    session's ``MemoChatContext.full_context`` from T-100). ``context``
+    is never validated or summarised here; this function only assembles
+    text the caller already trusts.
 
     Args:
         response_style: One of the keys in
@@ -447,14 +498,19 @@ def build_system_prompt(
             ``UserPreferences.chat_response_style`` value). Any other
             value falls back to ``DEFAULT_RESPONSE_STYLE``.
         context: Optional grounded context to append, e.g. a
-            memo-scoped session's rendered analysis, or a short note
-            describing which portfolio-wide tools are available.
+            memo-scoped session's rendered analysis.
         risk_appetite: Forwarded to
             ``build_personalization_instruction`` -- typically a
             ``UserPreferences.risk_appetite`` value (T-106).
         preferred_sectors: Forwarded to
             ``build_personalization_instruction`` -- typically a
             ``UserPreferences.preferred_sectors`` value (T-106).
+        tools_available: (B9) True when this call has one or more
+            LangChain tools bound (portfolio-wide session tools and/or
+            the live-market-data tools) -- appends
+            ``LIVE_DATA_TOOL_INSTRUCTION`` when true. False for a call
+            with no tools bound, keeping that (more common) prompt
+            shorter.
 
     Returns:
         The full system prompt text, ready to wrap in a
@@ -468,6 +524,8 @@ def build_system_prompt(
         style_instruction,
         build_personalization_instruction(risk_appetite, preferred_sectors),
     ]
+    if tools_available:
+        parts.append(LIVE_DATA_TOOL_INSTRUCTION)
     if context:
         parts.append(f"Grounded context for this conversation:\n{context}")
     return "\n\n".join(parts)
@@ -478,11 +536,12 @@ def build_system_message(
     context: Optional[str] = None,
     risk_appetite: Optional[str] = None,
     preferred_sectors: Optional[list[str]] = None,
+    tools_available: bool = False,
 ) -> SystemMessage:
     """Wrap ``build_system_prompt()``'s output in a ``SystemMessage``."""
     return SystemMessage(
         content=build_system_prompt(
-            response_style, context, risk_appetite, preferred_sectors
+            response_style, context, risk_appetite, preferred_sectors, tools_available
         )
     )
 
@@ -495,6 +554,7 @@ def build_chat_messages(
     context: Optional[str] = None,
     risk_appetite: Optional[str] = None,
     preferred_sectors: Optional[list[str]] = None,
+    tools_available: bool = False,
 ) -> list[BaseMessage]:
     """
     Assemble the full message list for one AIRP Assistant LLM call.
@@ -518,13 +578,16 @@ def build_chat_messages(
         context: Forwarded to ``build_system_prompt``.
         risk_appetite: Forwarded to ``build_system_prompt`` (T-106).
         preferred_sectors: Forwarded to ``build_system_prompt`` (T-106).
+        tools_available: Forwarded to ``build_system_prompt`` (B9).
 
     Returns:
         A list of LangChain ``BaseMessage`` objects ready to pass to
         ``llm.invoke(...)``.
     """
     messages: list[BaseMessage] = [
-        build_system_message(response_style, context, risk_appetite, preferred_sectors)
+        build_system_message(
+            response_style, context, risk_appetite, preferred_sectors, tools_available
+        )
     ]
 
     for turn in history:
@@ -621,6 +684,149 @@ def invoke_chat(
 
 
 # ---------------------------------------------------------------------------
+# Tool-calling round (B9)
+# ---------------------------------------------------------------------------
+#
+# Root cause this section fixes: a portfolio-wide chat session's guardrail
+# persona and streaming mechanics were fully wired (T-104), but
+# backend.tools.portfolio_tools.build_portfolio_tools's three tools were
+# never bound to the streaming call at all -- chat_stream.py's own module
+# docstring documented this as a deliberately deferred "known scope
+# boundary". The practical symptom: the assistant had no way to look up
+# the user's own analyses, so any portfolio-wide question about a
+# specific past analysis produced "I don't have that" / "analysis has
+# not been done" even when the user had one -- a false negative, not a
+# genuinely missing analysis.
+#
+# astream_chat's own async generator can stream TEXT token by token, but
+# has no mechanism to execute a tool call mid-stream and feed the result
+# back for a second pass -- most providers emit tool-call deltas with
+# empty text content, so simply handing a .bind_tools()-bound LLM to
+# astream_chat's existing loop would either silently yield nothing (the
+# empty-response ChatLLMError below) or stream a reply the model produced
+# without ever actually calling the tool it needed. _run_tool_calling_round
+# below is the fix: ONE non-streamed decision call (tools bound) up front
+# to let the model decide whether it needs a tool, then either the
+# streaming call proceeds normally (no tool needed) or a follow-up
+# streaming call runs on the updated message history (tool results
+# appended as ToolMessages, tools NOT re-bound) so the model must produce
+# a final answer from what it already has rather than requesting further
+# tool calls -- deliberately one round, not a full agentic loop, to keep
+# a single chat turn's latency and cost bounded.
+
+
+async def run_tool_calling_round(
+    llm: Any,
+    tools: list[BaseTool],
+    messages: list[BaseMessage],
+) -> tuple[list[BaseMessage], Optional[str]]:
+    """
+    Run one non-streamed tool-calling decision round.
+
+    Exposed as a public, standalone function (not folded into
+    ``astream_chat``'s own body) specifically so a caller whose tools
+    need a resource with a narrower lifetime than the token stream --
+    ``backend.tools.portfolio_tools``'s tools need an open
+    ``AsyncSession``, and ``backend/routers/chat_stream.py`` deliberately
+    closes its DB session before streaming begins (see that router's own
+    module docstring) -- can run this decision-and-execution round WHILE
+    that session is still open, then close it, then stream the final
+    answer (via ``astream_chat_from_messages``, which touches no DB at
+    all) afterwards. ``astream_chat`` itself still calls this internally
+    for callers with no such constraint (see its own docstring).
+
+    Args:
+        llm:      The base (not yet tool-bound) LLM client.
+        tools:    Tools to bind for this decision call (portfolio-wide
+                  session tools and/or the live-market-data tools).
+        messages: The full message list built by ``build_chat_messages``
+                  (already includes the guardrail system prompt, history,
+                  and the new user message).
+
+    Returns:
+        ``(messages, text)`` where exactly one of the two return
+        elements carries the useful result:
+
+        * The model needed no tool: ``text`` is its own reply (already
+          complete, non-streamed) and ``messages`` is the SAME list
+          passed in, unchanged -- the caller should yield ``text``
+          directly rather than making a second LLM call.
+        * The model called one or more tools: ``text`` is ``None`` and
+          ``messages`` is the ORIGINAL list plus the model's own
+          tool-calling ``AIMessage`` and one ``ToolMessage`` per call
+          (each tool executed via its own ``.ainvoke()``, exceptions
+          caught and turned into an error-shaped ``ToolMessage`` rather
+          than propagating -- matching the "tools never crash the
+          caller" convention every tool in this codebase already
+          follows) -- the caller should make a second, final streaming
+          call on this updated list, WITHOUT re-binding tools.
+
+    Never raises for a tool-execution failure (see above); DOES let a
+    failure of the decision call itself (``llm.bind_tools(...).ainvoke``)
+    propagate, exactly like a normal ``invoke_chat``/``astream_chat``
+    LLM failure -- the caller's existing ``except Exception`` handling
+    around this call already turns that into a ``ChatLLMError``.
+    """
+    tool_bound_llm = llm.bind_tools(tools)
+    response = await tool_bound_llm.ainvoke(messages)
+
+    tool_calls: list[dict[str, Any]] = list(getattr(response, "tool_calls", None) or [])
+    if not tool_calls:
+        raw_content: Any = (
+            response.content if hasattr(response, "content") else response
+        )
+        text = raw_content if isinstance(raw_content, str) else str(raw_content)
+        return messages, text
+
+    tools_by_name = {t.name: t for t in tools}
+    updated: list[BaseMessage] = [*messages, response]
+
+    for call in tool_calls:
+        tool_name = call.get("name")
+        tool_obj = tools_by_name.get(tool_name) if tool_name else None
+        call_id = str(call.get("id") or "")
+
+        if tool_obj is None:
+            logger.warning(
+                "chat_llm: model requested unknown tool %r -- returning an "
+                "error result instead of executing anything",
+                tool_name,
+            )
+            updated.append(
+                ToolMessage(
+                    content=json.dumps({"error": "unknown_tool", "tool": tool_name}),
+                    tool_call_id=call_id,
+                )
+            )
+            continue
+
+        try:
+            tool_result = await tool_obj.ainvoke(call)
+        except Exception as exc:
+            logger.warning(
+                "chat_llm: tool %s failed: %s -- returning an error result "
+                "instead of failing the whole turn",
+                tool_name,
+                exc,
+            )
+            updated.append(
+                ToolMessage(
+                    content=json.dumps({"error": "tool_failed", "message": str(exc)}),
+                    tool_call_id=call_id,
+                )
+            )
+            continue
+
+        # BaseTool.ainvoke(call) on a ToolCall-shaped dict (name/args/id/
+        # type, exactly what response.tool_calls items already are)
+        # returns a fully-formed ToolMessage directly -- nothing further
+        # to wrap.
+        updated.append(tool_result)
+
+    return updated, None
+
+
+# ---------------------------------------------------------------------------
 # Streaming entry point (T-104)
 # ---------------------------------------------------------------------------
 
@@ -634,6 +840,7 @@ async def astream_chat(
     risk_appetite: Optional[str] = None,
     preferred_sectors: Optional[list[str]] = None,
     llm: Optional[Any] = None,
+    tools: Optional[list[BaseTool]] = None,
 ) -> AsyncIterator[str]:
     """
     Run one AIRP Assistant chat turn and yield the reply token by token.
@@ -668,17 +875,37 @@ async def astream_chat(
         preferred_sectors: Forwarded to ``build_chat_messages`` (T-106).
         llm:            Optional pre-built LLM client. Defaults to
                          ``get_chat_llm()`` when not provided.
+        tools:          (B9) Tools to make available for this turn --
+                         typically ``backend.tools.portfolio_tools.
+                         build_portfolio_tools(...)`` for a
+                         portfolio-wide session, plus the live-market-
+                         data tools, for either session type. When
+                         non-empty, one non-streamed decision call runs
+                         first (see ``_run_tool_calling_round``) to let
+                         the model decide whether it needs a tool before
+                         the actual token stream begins -- this adds one
+                         extra LLM round-trip of latency before the
+                         first token for a tool-eligible turn, in
+                         exchange for the model being able to ground its
+                         answer in real data instead of guessing or
+                         falsely claiming "no analysis". ``None`` or an
+                         empty list (the default) preserves the exact
+                         pre-B9 behaviour: one streaming call, no tools.
 
     Yields:
         Each non-empty text chunk of the assistant's reply, in the
-        order the provider streamed them.
+        order the provider streamed them. When the tool-calling round
+        determined no tool was needed, its own already-complete reply
+        is yielded as a single chunk rather than re-querying the model
+        a second time purely to re-derive the same text token by token.
 
     Raises:
         ChatLLMError: the streaming call itself failed (raised from
             inside the ``async for`` loop, so any tokens already
             yielded before the failure remain valid and already
             delivered to the caller), or the stream produced zero
-            non-empty chunks.
+            non-empty chunks. A failure during the tool-calling decision
+            call itself is wrapped the same way.
     """
     messages = build_chat_messages(
         history,
@@ -687,7 +914,75 @@ async def astream_chat(
         context=context,
         risk_appetite=risk_appetite,
         preferred_sectors=preferred_sectors,
+        tools_available=bool(tools),
     )
+    active_llm = llm if llm is not None else get_chat_llm()
+
+    if tools:
+        try:
+            messages, immediate_text = await run_tool_calling_round(
+                active_llm, tools, messages
+            )
+        except Exception as exc:
+            logger.exception("chat_llm: tool-calling decision round failed")
+            raise ChatLLMError(
+                "AIRP Assistant failed to generate a response.", cause=exc
+            ) from exc
+
+        if immediate_text is not None:
+            if not immediate_text.strip():
+                logger.warning(
+                    "chat_llm: tool-calling round produced an empty response "
+                    "with no tool calls"
+                )
+                raise ChatLLMError("AIRP Assistant returned an empty response.")
+            yield immediate_text
+            return
+
+    async for token in astream_chat_from_messages(messages, llm=active_llm):
+        yield token
+
+
+async def astream_chat_from_messages(
+    messages: list[BaseMessage],
+    *,
+    llm: Optional[Any] = None,
+) -> AsyncIterator[str]:
+    """
+    Stream one LLM reply token by token from an ALREADY-BUILT message list.
+
+    The low-level primitive ``astream_chat`` itself delegates to once it
+    has finished building messages (and running the tool-calling round,
+    if any) -- extracted as its own function for the same reason
+    ``run_tool_calling_round`` is public: a caller whose message-building
+    step needs a resource with a narrower lifetime than the token stream
+    (``backend/routers/chat_stream.py``'s per-turn DB session) can build
+    ``messages`` and run any tool round while that resource is still
+    open, then call THIS function -- which touches no DB, no tools,
+    nothing but the LLM client -- after closing it.
+
+    Touches no history, no context, no tools -- ``messages`` is used
+    exactly as given. Every empty chunk is skipped (some providers emit
+    an empty leading/trailing chunk as part of normal streaming); an
+    ENTIRELY empty response (zero non-empty chunks) is treated as a
+    failure, the same reasoning ``invoke_chat``/``astream_chat`` already
+    document for their own empty-response cases.
+
+    Args:
+        messages: Full message list ready for ``llm.astream(...)`` --
+            typically ``build_chat_messages(...)``'s output, optionally
+            already passed through ``run_tool_calling_round``.
+        llm: Optional pre-built LLM client. Defaults to
+            ``get_chat_llm()`` when not provided.
+
+    Yields:
+        Each non-empty text chunk of the reply, in the order the
+        provider streamed them.
+
+    Raises:
+        ChatLLMError: the streaming call itself failed, or the stream
+            produced zero non-empty chunks.
+    """
     active_llm = llm if llm is not None else get_chat_llm()
 
     yielded_any = False

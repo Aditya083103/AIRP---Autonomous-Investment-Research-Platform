@@ -27,11 +27,22 @@ What is faked vs. real
     T-103's own test_chat_router.py already established for its three
     service-layer calls (itself following test_analysis_router.py's
     patched_pipeline precedent).
-  * backend.routers.chat_stream.astream_chat is patched with a small
-    real async-generator stand-in (not AsyncMock -- see
-    _make_astream_chat below) so ``token_iter = astream_chat(...).
-    __aiter__()`` in the router's real, unmodified source works
-    exactly as it does against the real LangChain streaming call.
+  * backend.routers.chat_stream.astream_chat_from_messages is patched
+    with a small real async-generator stand-in (not AsyncMock -- see
+    _make_astream_chat_from_messages below) so
+    ``token_iter = _reply_token_source(...).__aiter__()`` in the
+    router's real, unmodified source works exactly as it does against
+    the real LangChain streaming call.
+  * backend.routers.chat_stream._build_chat_tools and
+    .run_tool_calling_round (B9) are patched directly -- these tests
+    exercise the ROUTER's own orchestration (does it call the tool
+    round, does it fall through to streaming, does a tool-round failure
+    surface as an error event), not the tool-calling logic itself,
+    which test_chat_llm.py's TestRunToolCallingRound already covers
+    exhaustively. The default stub tool round is a no-op passthrough
+    (returns the SAME messages it was given, with immediate_text=None)
+    so every pre-B9 test's expected token-stream behaviour is
+    unaffected unless a test explicitly overrides it.
 
 A real JWT is created via backend.services.auth.create_access_token
 with test_settings, the same helper test_websocket_router.py already
@@ -67,7 +78,7 @@ from backend.main import create_app
 from backend.models.orm import User
 from backend.services.analysis import AnalysisNotReadyError
 from backend.services.auth import create_access_token
-from backend.services.chat_llm import ChatLLMError
+from backend.services.chat_llm import RESPONSE_STYLE_INSTRUCTIONS, ChatLLMError
 from backend.services.chat_session_service import (
     ChatMessageEntry,
     ChatMessagesPage,
@@ -145,36 +156,49 @@ def _make_empty_history_page(session_id: uuid.UUID) -> ChatMessagesPage:
     )
 
 
-def _make_astream_chat(
+def _make_astream_chat_from_messages(
     tokens: list[str],
     error: Exception | None = None,
-    calls: list[tuple[Any, Any, dict[str, Any]]] | None = None,
+    calls: list[tuple[Any, Any]] | None = None,
 ) -> Any:
     """
     A real async-generator function stand-in for
-    backend.services.chat_llm.astream_chat -- NOT an AsyncMock, since
-    the router calls ``astream_chat(...).__aiter__()`` directly on the
-    return value the way it would a real async generator; AsyncMock's
-    return_value machinery does not make that work transparently, but
-    a plain ``async def ...: yield ...`` function does, by construction.
+    backend.services.chat_llm.astream_chat_from_messages -- NOT an
+    AsyncMock, since the router calls
+    ``_reply_token_source(...).__aiter__()`` (which itself delegates to
+    this function) directly on the return value the way it would a real
+    async generator; AsyncMock's return_value machinery does not make
+    that work transparently, but a plain ``async def ...: yield ...``
+    function does, by construction.
 
-    ``calls``, when provided, records each invocation's
-    (history, user_message, kwargs) so a test can assert on exactly
-    what conversation history/context the router built and passed
-    through, without needing AsyncMock's call-tracking machinery.
+    ``calls``, when provided, records each invocation's ``(messages,
+    llm)`` so a test can assert on exactly what message list (built by
+    the real, unmocked ``build_chat_messages``, optionally rewritten by
+    a mocked ``run_tool_calling_round``) the router constructed, without
+    needing AsyncMock's call-tracking machinery.
     """
 
-    async def _fake_astream_chat(
-        history: Any, user_message: Any, **kwargs: Any
-    ) -> AsyncGenerator[str, None]:
+    async def _fake(messages: Any, *, llm: Any = None) -> AsyncGenerator[str, None]:
         if calls is not None:
-            calls.append((history, user_message, kwargs))
+            calls.append((messages, llm))
         for token in tokens:
             yield token
         if error is not None:
             raise error
 
-    return _fake_astream_chat
+    return _fake
+
+
+def _default_tool_round(llm: Any, tools: Any, messages: Any) -> tuple[Any, None]:
+    """
+    Default stand-in for run_tool_calling_round (B9): a no-op passthrough
+    that returns the SAME messages it was given with immediate_text=None
+    -- i.e. "no tool needed, proceed to the normal token stream" -- so
+    every pre-B9 test's expected start/token.../done behaviour is
+    unaffected by the tool round now always running (see
+    _build_chat_tools's own docstring for why it is never empty).
+    """
+    return messages, None
 
 
 def _make_default_preferences(
@@ -208,9 +232,13 @@ def _patch_chat_stream_services(
     astream_tokens: list[str] | None = None,
     astream_error: Exception | None = None,
     preferences: Any = None,
+    tools: Any = None,
+    tool_round: Any = None,
+    cached_reply: str | None = None,
+    astream_calls: list[tuple[Any, Any]] | None = None,
 ) -> Any:
     """
-    Bundle the 6 module-level patches every test in this file needs,
+    Bundle the module-level patches every test in this file needs,
     matching this router's real import names 1:1. Returns a context
     manager that, on __enter__, yields a plain dict of every mock
     (keyed by attribute name) -- built from individual patch() calls
@@ -221,6 +249,21 @@ def _patch_chat_stream_services(
     ExitStack sidesteps that distinction entirely and guarantees every
     mock this function creates is always reachable from the returned
     dict.
+
+    B9 additions:
+      * ``get_cached_reply`` defaults to returning None (a cache miss)
+        so every pre-B9 test still exercises the real tool-round +
+        streaming path; pass ``cached_reply`` to simulate a cache hit.
+      * ``_build_chat_tools``/``run_tool_calling_round`` are patched to
+        a harmless default (some tools exist, but the round is a no-op
+        passthrough -- see ``_default_tool_round``) so the tool round
+        now always running (B9's tools list is never empty) does not
+        change any pre-B9 test's observed start/token.../done sequence
+        unless a test explicitly overrides ``tools``/``tool_round``.
+      * ``set_cached_reply``/``get_chat_llm`` are patched too, purely so
+        no test in this file (which never wants a real Redis round-trip
+        or a real LLM client construction) can accidentally reach past
+        the mocked layer.
     """
     saved_message = MagicMock()
     saved_message.id = uuid.uuid4()
@@ -255,8 +298,20 @@ def _patch_chat_stream_services(
                 preferences if preferences is not None else _make_default_preferences()
             )
         ),
+        # B9
+        "get_cached_reply": MagicMock(return_value=cached_reply),
+        "set_cached_reply": MagicMock(return_value=None),
+        "_build_chat_tools": MagicMock(
+            return_value=tools if tools is not None else [MagicMock(name="fake_tool")]
+        ),
+        "run_tool_calling_round": AsyncMock(
+            side_effect=tool_round if tool_round is not None else _default_tool_round
+        ),
+        "get_chat_llm": MagicMock(return_value=MagicMock(name="fake_llm")),
     }
-    astream_replacement = _make_astream_chat(astream_tokens or [], astream_error)
+    astream_replacement = _make_astream_chat_from_messages(
+        astream_tokens or [], astream_error, calls=astream_calls
+    )
 
     @contextmanager
     def _apply() -> Generator[dict[str, Any], None, None]:
@@ -267,7 +322,7 @@ def _patch_chat_stream_services(
                 )
             stack.enter_context(
                 patch(
-                    "backend.routers.chat_stream.astream_chat",
+                    "backend.routers.chat_stream.astream_chat_from_messages",
                     new=astream_replacement,
                 )
             )
@@ -427,6 +482,46 @@ class TestIncrementalTokens:
         assert done["message_id"] is not None
         uuid.UUID(done["message_id"])  # must be a well-formed UUID string
 
+    def test_start_event_carries_the_persisted_user_messages_id(
+        self, client: TestClient, auth_token: str, current_user: User
+    ) -> None:
+        """B9 edit-and-resend: 'start' must carry the id
+        append_chat_message just assigned to the USER's turn (not the
+        assistant's, which does not exist yet at 'start' time) -- see
+        chat_stream.py's module docstring, "Why 'start' now carries
+        the user message's id"."""
+        session_id = uuid.uuid4()
+        info = _make_stream_info(session_id, user_id=current_user.id)
+        user_message_id = uuid.uuid4()
+        assistant_message_id = uuid.uuid4()
+
+        def _role_aware_append(*_args: Any, **kwargs: Any) -> MagicMock:
+            saved = MagicMock()
+            saved.id = (
+                user_message_id
+                if kwargs.get("role") == "user"
+                else assistant_message_id
+            )
+            return saved
+
+        with _patch_chat_stream_services(
+            stream_info=info,
+            astream_tokens=["hi"],
+            append_side_effect=_role_aware_append,
+        ):
+            with client.websocket_connect(
+                f"/api/v1/chat/{session_id}/stream?token={auth_token}"
+            ) as ws:
+                ws.send_json({"message": "hello"})
+                start = ws.receive_json()
+                ws.receive_json()  # token
+                done = ws.receive_json()
+
+        assert start["event_type"] == "start"
+        assert start["message_id"] == str(user_message_id)
+        assert done["message_id"] == str(assistant_message_id)
+        assert start["message_id"] != done["message_id"]
+
     def test_tokens_arrive_in_the_order_the_llm_produced_them(
         self, client: TestClient, auth_token: str, current_user: User
     ) -> None:
@@ -454,8 +549,9 @@ class TestIncrementalTokens:
         self, client: TestClient, auth_token: str, current_user: User
     ) -> None:
         """get_chat_session_messages's ChatMessageEntry rows must be
-        converted into plain {"role", "content"} dicts and forwarded to
-        astream_chat as the conversation's prior history."""
+        converted into HumanMessage/AIMessage turns (via the real,
+        unmocked build_chat_messages) and forwarded to
+        astream_chat_from_messages as part of the conversation."""
         session_id = uuid.uuid4()
         info = _make_stream_info(session_id, user_id=current_user.id)
         prior_history = ChatMessagesPage(
@@ -486,46 +582,14 @@ class TestIncrementalTokens:
             limit=200,
             offset=0,
         )
-        recorded_calls: list[tuple[Any, Any, dict[str, Any]]] = []
-        astream_replacement = _make_astream_chat(["Because..."], calls=recorded_calls)
+        recorded_calls: list[tuple[Any, Any]] = []
 
-        with ExitStack() as stack:
-            stack.enter_context(
-                patch(
-                    "backend.routers.chat_stream.get_chat_session_stream_info",
-                    new=AsyncMock(return_value=info),
-                )
-            )
-            stack.enter_context(
-                patch(
-                    "backend.routers.chat_stream.get_chat_session_messages",
-                    new=AsyncMock(return_value=prior_history),
-                )
-            )
-            stack.enter_context(
-                patch(
-                    "backend.routers.chat_stream.build_memo_context",
-                    new=AsyncMock(return_value=None),
-                )
-            )
-            stack.enter_context(
-                patch(
-                    "backend.routers.chat_stream.append_chat_message",
-                    new=AsyncMock(return_value=MagicMock(id=uuid.uuid4())),
-                )
-            )
-            stack.enter_context(
-                patch(
-                    "backend.routers.chat_stream.apply_extracted_preferences",
-                    new=AsyncMock(return_value=_make_default_preferences()),
-                )
-            )
-            stack.enter_context(
-                patch(
-                    "backend.routers.chat_stream.astream_chat",
-                    new=astream_replacement,
-                )
-            )
+        with _patch_chat_stream_services(
+            stream_info=info,
+            history_page=prior_history,
+            astream_tokens=["Because..."],
+            astream_calls=recorded_calls,
+        ):
             with client.websocket_connect(
                 f"/api/v1/chat/{session_id}/stream?token={auth_token}"
             ) as ws:
@@ -535,12 +599,47 @@ class TestIncrementalTokens:
                 ws.receive_json()  # done
 
         assert len(recorded_calls) == 1
-        forwarded_history, forwarded_message, _ = recorded_calls[0]
-        assert forwarded_history == [
-            {"role": "user", "content": "What was the verdict on TCS?"},
-            {"role": "assistant", "content": "AIRP rated TCS a BUY."},
-        ]
-        assert forwarded_message == "Why?"
+        forwarded_messages, _llm = recorded_calls[0]
+        # [SystemMessage, prior user turn, prior assistant turn, new user turn]
+        assert len(forwarded_messages) == 4
+        assert forwarded_messages[1].content == "What was the verdict on TCS?"
+        assert forwarded_messages[2].content == "AIRP rated TCS a BUY."
+        assert forwarded_messages[3].content == "Why?"
+
+    def test_each_turn_requests_the_full_transcript_page_not_a_truncated_one(
+        self, client: TestClient, auth_token: str, current_user: User
+    ) -> None:
+        """B9 follow-up/multi-turn verification: every turn must ask
+        get_chat_session_messages for the FULL MAX_MESSAGES_PAGE_SIZE
+        page (offset 0, no smaller hard-coded cap) so a long-running
+        conversation's earlier turns are never silently dropped from
+        the context a follow-up question is answered against."""
+        from backend.services.chat_session_service import MAX_MESSAGES_PAGE_SIZE
+
+        session_id = uuid.uuid4()
+        info = _make_stream_info(session_id, user_id=current_user.id)
+
+        with _patch_chat_stream_services(
+            stream_info=info, astream_tokens=["ok"]
+        ) as mocks:
+            with client.websocket_connect(
+                f"/api/v1/chat/{session_id}/stream?token={auth_token}"
+            ) as ws:
+                ws.send_json({"message": "first question"})
+                ws.receive_json()  # start
+                ws.receive_json()  # token
+                ws.receive_json()  # done
+
+                ws.send_json({"message": "follow-up question"})
+                ws.receive_json()  # start
+                ws.receive_json()  # token
+                ws.receive_json()  # done
+
+        history_mock = mocks["get_chat_session_messages"]
+        assert history_mock.await_count == 2
+        for call in history_mock.await_args_list:
+            assert call.kwargs["limit"] == MAX_MESSAGES_PAGE_SIZE
+            assert call.kwargs.get("session_id") == session_id
 
 
 # ---------------------------------------------------------------------------
@@ -584,37 +683,29 @@ class TestSlowTokenDoesNotTruncateReply:
         session_id = uuid.uuid4()
         info = _make_stream_info(session_id, user_id=current_user.id)
 
-        async def _slow_astream_chat(
-            history: Any, user_message: Any, **kwargs: Any
+        async def _slow_astream_chat_from_messages(
+            messages: Any, *, llm: Any = None
         ) -> AsyncGenerator[str, None]:
             await asyncio.sleep(0.3)  # several poll intervals
             yield "finally "
             yield "here"
 
-        with patch.multiple(
-            "backend.routers.chat_stream",
-            get_chat_session_stream_info=AsyncMock(return_value=info),
-            get_chat_session_messages=AsyncMock(
-                return_value=_make_empty_history_page(session_id)
-            ),
-            build_memo_context=AsyncMock(return_value=None),
-            append_chat_message=AsyncMock(return_value=MagicMock(id=uuid.uuid4())),
-            apply_extracted_preferences=AsyncMock(
-                return_value=_make_default_preferences()
-            ),
-            astream_chat=_slow_astream_chat,
-        ):
-            with client.websocket_connect(
-                f"/api/v1/chat/{session_id}/stream?token={auth_token}"
-            ) as ws:
-                ws.send_json({"message": "take your time"})
+        with _patch_chat_stream_services(stream_info=info):
+            with patch(
+                "backend.routers.chat_stream.astream_chat_from_messages",
+                new=_slow_astream_chat_from_messages,
+            ):
+                with client.websocket_connect(
+                    f"/api/v1/chat/{session_id}/stream?token={auth_token}"
+                ) as ws:
+                    ws.send_json({"message": "take your time"})
 
-                events = []
-                while True:
-                    event = ws.receive_json()
-                    events.append(event)
-                    if event["event_type"] == "done":
-                        break
+                    events = []
+                    while True:
+                        event = ws.receive_json()
+                        events.append(event)
+                        if event["event_type"] == "done":
+                            break
 
         event_types = [e["event_type"] for e in events]
         tokens = [e["token"] for e in events if e["event_type"] == "token"]
@@ -782,21 +873,12 @@ class TestGracefulReconnect:
             session_type="memo_scoped",
             analysis_id=analysis_id,
         )
-        with patch.multiple(
-            "backend.routers.chat_stream",
-            get_chat_session_stream_info=AsyncMock(return_value=info),
-            get_chat_session_messages=AsyncMock(
-                return_value=_make_empty_history_page(session_id)
-            ),
-            build_memo_context=AsyncMock(
-                side_effect=AnalysisNotReadyError(status="running")
-            ),
-            append_chat_message=AsyncMock(return_value=MagicMock(id=uuid.uuid4())),
-            apply_extracted_preferences=AsyncMock(
-                return_value=_make_default_preferences()
-            ),
-            astream_chat=_make_astream_chat(["ok"]),
-        ):
+        with _patch_chat_stream_services(
+            stream_info=info, astream_tokens=["ok"]
+        ) as mocks:
+            mocks["build_memo_context"].side_effect = AnalysisNotReadyError(
+                status="running"
+            )
             with client.websocket_connect(
                 f"/api/v1/chat/{session_id}/stream?token={auth_token}"
             ) as ws:
@@ -902,53 +984,25 @@ class TestPersonalizationWiring:
     def test_preferences_return_value_forwarded_into_astream_chat(
         self, client: TestClient, auth_token: str, current_user: User
     ) -> None:
+        """response_style/risk_appetite/preferred_sectors now reach the
+        model via the built SystemMessage's content (build_chat_messages
+        -> build_system_prompt), not as separate astream_chat_from_messages
+        kwargs -- assert on that content instead."""
         session_id = uuid.uuid4()
         info = _make_stream_info(session_id, user_id=current_user.id)
-        recorded_calls: list[tuple[Any, Any, dict[str, Any]]] = []
-        astream_replacement = _make_astream_chat(["ok"], calls=recorded_calls)
+        recorded_calls: list[tuple[Any, Any]] = []
         stub_preferences = _make_default_preferences(
             risk_appetite="aggressive",
             preferred_sectors=["IT", "Auto"],
             chat_response_style="detailed",
         )
 
-        with ExitStack() as stack:
-            stack.enter_context(
-                patch(
-                    "backend.routers.chat_stream.get_chat_session_stream_info",
-                    new=AsyncMock(return_value=info),
-                )
-            )
-            stack.enter_context(
-                patch(
-                    "backend.routers.chat_stream.get_chat_session_messages",
-                    new=AsyncMock(return_value=_make_empty_history_page(session_id)),
-                )
-            )
-            stack.enter_context(
-                patch(
-                    "backend.routers.chat_stream.build_memo_context",
-                    new=AsyncMock(return_value=None),
-                )
-            )
-            stack.enter_context(
-                patch(
-                    "backend.routers.chat_stream.append_chat_message",
-                    new=AsyncMock(return_value=MagicMock(id=uuid.uuid4())),
-                )
-            )
-            stack.enter_context(
-                patch(
-                    "backend.routers.chat_stream.apply_extracted_preferences",
-                    new=AsyncMock(return_value=stub_preferences),
-                )
-            )
-            stack.enter_context(
-                patch(
-                    "backend.routers.chat_stream.astream_chat",
-                    new=astream_replacement,
-                )
-            )
+        with _patch_chat_stream_services(
+            stream_info=info,
+            astream_tokens=["ok"],
+            astream_calls=recorded_calls,
+            preferences=stub_preferences,
+        ):
             with client.websocket_connect(
                 f"/api/v1/chat/{session_id}/stream?token={auth_token}"
             ) as ws:
@@ -958,44 +1012,42 @@ class TestPersonalizationWiring:
                 ws.receive_json()  # done
 
         assert len(recorded_calls) == 1
-        _, _, kwargs = recorded_calls[0]
-        assert kwargs["response_style"] == "detailed"
-        assert kwargs["risk_appetite"] == "aggressive"
-        assert kwargs["preferred_sectors"] == ["IT", "Auto"]
+        forwarded_messages, _llm = recorded_calls[0]
+        system_content = forwarded_messages[0].content
+        assert RESPONSE_STYLE_INSTRUCTIONS["detailed"] in system_content
+        assert "risk appetite: aggressive" in system_content
+        assert "IT, Auto" in system_content
 
     def test_default_preferences_stub_forwards_concise_and_unknowns(
         self, client: TestClient, auth_token: str, current_user: User
     ) -> None:
         """When nothing is known yet (a brand-new user's first ever
-        turn), astream_chat still receives concise/None/[] -- exactly
-        what chat_llm.build_personalization_instruction needs to
-        produce the "ask once" instruction."""
+        turn), the built system prompt still carries the concise
+        instruction and the "ask once" personalization block -- exactly
+        what chat_llm.build_personalization_instruction produces for
+        risk_appetite=None/preferred_sectors=[]."""
         session_id = uuid.uuid4()
         info = _make_stream_info(session_id, user_id=current_user.id)
-        recorded_calls: list[tuple[Any, Any, dict[str, Any]]] = []
+        recorded_calls: list[tuple[Any, Any]] = []
         with _patch_chat_stream_services(
-            stream_info=info, astream_tokens=["ok"]
+            stream_info=info, astream_tokens=["ok"], astream_calls=recorded_calls
         ) as mocks:
-            # Swap in a tracking astream_chat replacement without
-            # losing the rest of _patch_chat_stream_services's setup.
-            with patch(
-                "backend.routers.chat_stream.astream_chat",
-                new=_make_astream_chat(["ok"], calls=recorded_calls),
-            ):
-                with client.websocket_connect(
-                    f"/api/v1/chat/{session_id}/stream?token={auth_token}"
-                ) as ws:
-                    ws.send_json({"message": "hello"})
-                    ws.receive_json()  # start
-                    ws.receive_json()  # token
-                    ws.receive_json()  # done
+            with client.websocket_connect(
+                f"/api/v1/chat/{session_id}/stream?token={auth_token}"
+            ) as ws:
+                ws.send_json({"message": "hello"})
+                ws.receive_json()  # start
+                ws.receive_json()  # token
+                ws.receive_json()  # done
 
         assert mocks["apply_extracted_preferences"].await_count == 1
         assert len(recorded_calls) == 1
-        _, _, kwargs = recorded_calls[0]
-        assert kwargs["response_style"] == "concise"
-        assert kwargs["risk_appetite"] is None
-        assert kwargs["preferred_sectors"] == []
+        forwarded_messages, _llm = recorded_calls[0]
+        system_content = forwarded_messages[0].content
+        assert RESPONSE_STYLE_INSTRUCTIONS["concise"] in system_content
+        # build_personalization_instruction's "nothing known yet" branch --
+        # confirms risk_appetite=None/preferred_sectors=[] actually reached it.
+        assert "do not yet know this user's risk appetite" in system_content
 
     def test_apply_extracted_preferences_called_once_per_turn_not_per_connection(
         self, client: TestClient, auth_token: str, current_user: User
@@ -1023,3 +1075,282 @@ class TestPersonalizationWiring:
                 ws.receive_json()
 
         assert mocks["apply_extracted_preferences"].await_count == 2
+
+
+# ---------------------------------------------------------------------------
+# 8. Tool binding (B9) -- _build_chat_tools
+#
+# Root cause this closes: the router used to bind NO tools at all for a
+# portfolio-wide session (a documented "known scope boundary" -- see the
+# module docstring) -- the assistant had no way to look up the user's own
+# analyses, so a portfolio-wide question about a specific past analysis
+# produced a false "analysis has not been done" even when the user had one.
+# ---------------------------------------------------------------------------
+
+
+class TestBuildChatTools:
+    def test_memo_scoped_session_gets_only_the_live_data_tools(self) -> None:
+        from backend.routers.chat_stream import _build_chat_tools
+        from backend.tools.ratios import fetch_ratios
+        from backend.tools.stock_price import fetch_stock_price
+
+        tools = _build_chat_tools(
+            MagicMock(), MagicMock(id=uuid.uuid4()), "memo_scoped"
+        )
+
+        assert tools == [fetch_ratios, fetch_stock_price]
+
+    def test_portfolio_wide_session_gets_portfolio_tools_plus_live_data_tools(
+        self,
+    ) -> None:
+        from backend.routers.chat_stream import _build_chat_tools
+        from backend.tools.ratios import fetch_ratios
+        from backend.tools.stock_price import fetch_stock_price
+
+        fake_session = MagicMock()
+        fake_user = MagicMock(id=uuid.uuid4())
+        portfolio_stub_tools = [MagicMock(name="get_user_analyses")]
+
+        with patch(
+            "backend.routers.chat_stream.build_portfolio_tools",
+            return_value=portfolio_stub_tools,
+        ) as mock_build_portfolio_tools:
+            tools = _build_chat_tools(fake_session, fake_user, "portfolio_wide")
+
+        mock_build_portfolio_tools.assert_called_once_with(fake_session, fake_user.id)
+        assert tools == portfolio_stub_tools + [fetch_ratios, fetch_stock_price]
+
+    def test_tools_are_never_empty_for_either_session_type(self) -> None:
+        from backend.routers.chat_stream import _build_chat_tools
+
+        for session_type in ("memo_scoped", "portfolio_wide"):
+            tools = _build_chat_tools(
+                MagicMock(), MagicMock(id=uuid.uuid4()), session_type
+            )
+            assert len(tools) >= 1
+
+
+# ---------------------------------------------------------------------------
+# 9. Tool-calling round wiring (B9) -- router orchestration only; the tool
+#    round's own execution logic (which tool ran, error handling, message
+#    shape) is unit-tested exhaustively in
+#    test_chat_llm.py::TestRunToolCallingRound.
+# ---------------------------------------------------------------------------
+
+
+class TestToolCallingRoundWiring:
+    def test_run_tool_calling_round_is_invoked_for_a_normal_turn(
+        self, client: TestClient, auth_token: str, current_user: User
+    ) -> None:
+        session_id = uuid.uuid4()
+        info = _make_stream_info(session_id, user_id=current_user.id)
+        with _patch_chat_stream_services(
+            stream_info=info, astream_tokens=["ok"]
+        ) as mocks:
+            with client.websocket_connect(
+                f"/api/v1/chat/{session_id}/stream?token={auth_token}"
+            ) as ws:
+                ws.send_json({"message": "What's TCS's P/E?"})
+                ws.receive_json()
+                ws.receive_json()
+                ws.receive_json()
+
+        mocks["run_tool_calling_round"].assert_awaited_once()
+
+    def test_immediate_text_from_tool_round_is_streamed_with_no_second_llm_call(
+        self, client: TestClient, auth_token: str, current_user: User
+    ) -> None:
+        """When the tool round decides no tool is needed, its own
+        complete text is delivered as the reply -- astream_chat_from_messages
+        (the second, streaming call) is never invoked at all."""
+        session_id = uuid.uuid4()
+        info = _make_stream_info(session_id, user_id=current_user.id)
+
+        def _immediate_text(llm: Any, tools: Any, messages: Any) -> tuple[Any, str]:
+            return messages, "A P/E ratio compares price to earnings."
+
+        astream_calls: list[tuple[Any, Any]] = []
+        with _patch_chat_stream_services(
+            stream_info=info, tool_round=_immediate_text, astream_calls=astream_calls
+        ):
+            with client.websocket_connect(
+                f"/api/v1/chat/{session_id}/stream?token={auth_token}"
+            ) as ws:
+                ws.send_json({"message": "What is a P/E ratio?"})
+                ws.receive_json()  # start
+                token_event = ws.receive_json()
+                assert token_event["event_type"] == "token"
+                assert token_event["token"] == "A P/E ratio compares price to earnings."
+                done = ws.receive_json()
+                assert done["event_type"] == "done"
+
+        assert astream_calls == []
+
+    def test_tool_round_failure_produces_an_error_event_not_a_dead_connection(
+        self, client: TestClient, auth_token: str, current_user: User
+    ) -> None:
+        session_id = uuid.uuid4()
+        info = _make_stream_info(session_id, user_id=current_user.id)
+        call_count = {"n": 0}
+
+        def _raise_once_then_passthrough(
+            llm: Any, tools: Any, messages: Any
+        ) -> tuple[Any, None]:
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                raise RuntimeError("tool exploded")
+            return messages, None
+
+        with _patch_chat_stream_services(
+            stream_info=info,
+            tool_round=_raise_once_then_passthrough,
+            astream_tokens=["ok"],
+        ):
+            with client.websocket_connect(
+                f"/api/v1/chat/{session_id}/stream?token={auth_token}"
+            ) as ws:
+                ws.send_json({"message": "Which of my analyses are BUY?"})
+                error_event = ws.receive_json()
+                assert error_event["event_type"] == "error"
+                assert error_event["is_final"] is True
+
+                # Connection survives -- a second turn still works.
+                ws.send_json({"message": "try again"})
+                start_event = ws.receive_json()
+                assert start_event["event_type"] == "start"
+
+
+# ---------------------------------------------------------------------------
+# 10. Reply cache (B9)
+# ---------------------------------------------------------------------------
+
+
+class TestReplyCache:
+    def test_cache_hit_skips_the_tool_round_and_the_streaming_call(
+        self, client: TestClient, auth_token: str, current_user: User
+    ) -> None:
+        session_id = uuid.uuid4()
+        info = _make_stream_info(session_id, user_id=current_user.id)
+        astream_calls: list[tuple[Any, Any]] = []
+        with _patch_chat_stream_services(
+            stream_info=info,
+            cached_reply="You have 3 BUY calls (cached).",
+            astream_calls=astream_calls,
+        ) as mocks:
+            with client.websocket_connect(
+                f"/api/v1/chat/{session_id}/stream?token={auth_token}"
+            ) as ws:
+                ws.send_json({"message": "Which of my analyses are BUY?"})
+                ws.receive_json()  # start
+                token_event = ws.receive_json()
+                assert token_event["token"] == "You have 3 BUY calls (cached)."
+                done = ws.receive_json()
+                assert done["event_type"] == "done"
+
+        mocks["run_tool_calling_round"].assert_not_called()
+        assert astream_calls == []
+
+    def test_cache_miss_checks_the_cache_then_streams_normally(
+        self, client: TestClient, auth_token: str, current_user: User
+    ) -> None:
+        session_id = uuid.uuid4()
+        info = _make_stream_info(session_id, user_id=current_user.id)
+        with _patch_chat_stream_services(
+            stream_info=info, astream_tokens=["fresh ", "reply"]
+        ) as mocks:
+            with client.websocket_connect(
+                f"/api/v1/chat/{session_id}/stream?token={auth_token}"
+            ) as ws:
+                ws.send_json({"message": "hello"})
+                for _ in range(4):
+                    ws.receive_json()
+
+        mocks["get_cached_reply"].assert_called_once()
+
+    def test_fresh_reply_is_cached_after_a_successful_turn(
+        self, client: TestClient, auth_token: str, current_user: User
+    ) -> None:
+        session_id = uuid.uuid4()
+        info = _make_stream_info(session_id, user_id=current_user.id)
+        with _patch_chat_stream_services(
+            stream_info=info, astream_tokens=["fresh ", "reply"]
+        ) as mocks:
+            with client.websocket_connect(
+                f"/api/v1/chat/{session_id}/stream?token={auth_token}"
+            ) as ws:
+                ws.send_json({"message": "hello"})
+                for _ in range(4):
+                    ws.receive_json()
+
+        mocks["set_cached_reply"].assert_called_once()
+        call_args = mocks["set_cached_reply"].call_args
+        assert call_args.args[1] == "fresh reply"
+
+    def test_a_cache_hit_is_not_re_cached(
+        self, client: TestClient, auth_token: str, current_user: User
+    ) -> None:
+        session_id = uuid.uuid4()
+        info = _make_stream_info(session_id, user_id=current_user.id)
+        with _patch_chat_stream_services(
+            stream_info=info, cached_reply="already cached"
+        ) as mocks:
+            with client.websocket_connect(
+                f"/api/v1/chat/{session_id}/stream?token={auth_token}"
+            ) as ws:
+                ws.send_json({"message": "hello"})
+                for _ in range(3):
+                    ws.receive_json()
+
+        mocks["set_cached_reply"].assert_not_called()
+
+    def test_cache_key_scoped_to_analysis_id_for_a_memo_scoped_session(
+        self, client: TestClient, auth_token: str, current_user: User
+    ) -> None:
+        session_id = uuid.uuid4()
+        analysis_id = uuid.uuid4()
+        info = _make_stream_info(
+            session_id,
+            user_id=current_user.id,
+            session_type="memo_scoped",
+            analysis_id=analysis_id,
+        )
+        with patch(
+            "backend.routers.chat_stream.build_cache_key",
+            new=MagicMock(return_value="fixed-key"),
+        ) as mock_build_key:
+            with _patch_chat_stream_services(stream_info=info, astream_tokens=["ok"]):
+                with client.websocket_connect(
+                    f"/api/v1/chat/{session_id}/stream?token={auth_token}"
+                ) as ws:
+                    ws.send_json({"message": "hi"})
+                    for _ in range(3):
+                        ws.receive_json()
+
+        mock_build_key.assert_called_once()
+        args = mock_build_key.call_args.args
+        assert args[0] == current_user.id
+        assert args[1] == str(analysis_id)
+
+    def test_cache_key_uses_the_portfolio_placeholder_for_a_portfolio_wide_session(
+        self, client: TestClient, auth_token: str, current_user: User
+    ) -> None:
+        from backend.services.chat_cache import PORTFOLIO_SCOPE
+
+        session_id = uuid.uuid4()
+        info = _make_stream_info(
+            session_id, user_id=current_user.id, session_type="portfolio_wide"
+        )
+        with patch(
+            "backend.routers.chat_stream.build_cache_key",
+            new=MagicMock(return_value="fixed-key"),
+        ) as mock_build_key:
+            with _patch_chat_stream_services(stream_info=info, astream_tokens=["ok"]):
+                with client.websocket_connect(
+                    f"/api/v1/chat/{session_id}/stream?token={auth_token}"
+                ) as ws:
+                    ws.send_json({"message": "hi"})
+                    for _ in range(3):
+                        ws.receive_json()
+
+        args = mock_build_key.call_args.args
+        assert args[1] == PORTFOLIO_SCOPE
