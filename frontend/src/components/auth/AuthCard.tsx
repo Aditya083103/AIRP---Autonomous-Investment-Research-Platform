@@ -2,13 +2,17 @@
 // AIRP -- Shared auth-page shell (T-056)
 //
 // Centres a Card with a title, optional subtitle, and the form itself
-// (children) -- the layout LoginPage and RegisterPage both use, kept in
-// one place so the two pages differ only in their form fields and
-// submit handler, not their surrounding chrome.
+// (children) -- the layout LoginPage, RegisterPage, ForgotPasswordPage,
+// and ResetPasswordPage all use, kept in one place so those pages differ
+// only in their form fields and submit handler, not their surrounding
+// chrome. Because of that, a single Reveal wrap here (B10) gives every
+// auth page the same clean fade/rise-in entrance without touching any
+// of the four pages individually.
 
 import { type ReactNode } from "react";
 import { Link } from "react-router-dom";
 
+import { Reveal } from "@/components/motion/Reveal";
 import { Card } from "@/components/ui";
 
 interface AuthCardProps {
@@ -25,7 +29,7 @@ interface AuthCardProps {
 
 export function AuthCard({ title, subtitle, footer, children }: AuthCardProps): JSX.Element {
   return (
-    <div className="mx-auto flex max-w-md flex-col py-12">
+    <Reveal className="mx-auto flex max-w-md flex-col py-12">
       <p className="text-center font-mono text-xs uppercase tracking-[0.2em] text-brand-600">
         AIRP
       </p>
@@ -42,6 +46,6 @@ export function AuthCard({ title, subtitle, footer, children }: AuthCardProps): 
           </Link>
         </p>
       ) : null}
-    </div>
+    </Reveal>
   );
 }

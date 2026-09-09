@@ -6,7 +6,7 @@
 // no real network call is made.
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -86,6 +86,22 @@ function historyResponse(overrides: Record<string, unknown> = {}): unknown {
   };
 }
 
+function stubReducedMotion(): void {
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn().mockImplementation((query: string) => ({
+      matches: true,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })),
+  );
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
 });
@@ -111,16 +127,23 @@ describe("DashboardPage", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(200, historyResponse())));
     renderDashboard();
 
-    expect(await screen.findByText("Infosys")).toBeInTheDocument();
-    expect(screen.getByText("Tata Consultancy Services")).toBeInTheDocument();
+    // (B11) Scoped to the table: DashboardKpiRow's "most recent verdict"
+    // tile also surfaces "Infosys" above the table now, so an unscoped
+    // getByText would be ambiguous -- see HistoryTable.tsx's own
+    // docstring on the data-testid this relies on.
+    const table = await screen.findByTestId("history-table");
+    expect(within(table).getByText("Infosys")).toBeInTheDocument();
+    expect(within(table).getByText("Tata Consultancy Services")).toBeInTheDocument();
   });
 
   it("colour-codes BUY and SELL verdict badges", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(200, historyResponse())));
     renderDashboard();
 
-    const buyBadge = await screen.findByText("BUY");
-    const sellBadge = await screen.findByText("SELL");
+    // (B11) Scoped to the table -- see the previous test's comment.
+    const table = await screen.findByTestId("history-table");
+    const buyBadge = within(table).getByText("BUY");
+    const sellBadge = within(table).getByText("SELL");
     expect(buyBadge.className).toContain("bg-verdict-buy");
     expect(sellBadge.className).toContain("bg-verdict-sell");
   });
@@ -154,18 +177,23 @@ describe("DashboardPage", () => {
     const user = userEvent.setup();
     renderDashboard();
 
-    await screen.findByText("Infosys");
+    const table = await screen.findByTestId("history-table");
     await user.type(screen.getByLabelText("Search by company"), "infosys");
 
-    expect(screen.getByText("Infosys")).toBeInTheDocument();
-    expect(screen.queryByText("Tata Consultancy Services")).not.toBeInTheDocument();
+    // (B11) Scoped to the table -- see "loads and renders history rows"'
+    // comment above. DashboardKpiRow's own "most recent verdict" tile is
+    // unaffected by this client-side filter (it always reads data.items,
+    // not filteredItems -- see DashboardPage.tsx's own docstring), so it
+    // keeps showing "Infosys" regardless of what's typed here.
+    expect(within(table).getByText("Infosys")).toBeInTheDocument();
+    expect(within(table).queryByText("Tata Consultancy Services")).not.toBeInTheDocument();
   });
 
   it("disables Previous on the first page and Next when there is no more data", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(200, historyResponse())));
     renderDashboard();
 
-    await screen.findByText("Infosys");
+    await screen.findByTestId("history-table");
     expect(screen.getByRole("button", { name: "Previous" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Next" })).toBeDisabled();
   });
@@ -178,12 +206,44 @@ describe("DashboardPage", () => {
     const user = userEvent.setup();
     renderDashboard();
 
-    await screen.findByText("Infosys");
+    await screen.findByTestId("history-table");
     await user.click(screen.getByRole("button", { name: "Next" }));
 
     await waitFor(() => {
       const lastCall = fetchMock.mock.calls.at(-1) as [string, RequestInit];
       expect(lastCall[0]).toContain("offset=20");
+    });
+  });
+
+  it("renders the B11 KPI row on the first page with the real total and latest verdict", async () => {
+    stubReducedMotion();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonResponse(200, historyResponse({ total_count: 137 }))),
+    );
+    renderDashboard();
+
+    const kpiRow = await screen.findByTestId("dashboard-kpi-row");
+    expect(within(kpiRow).getByText("137")).toBeInTheDocument();
+    expect(within(kpiRow).getByText("2")).toBeInTheDocument();
+    expect(within(kpiRow).getByText("BUY")).toBeInTheDocument();
+    expect(within(kpiRow).getByText("Infosys")).toBeInTheDocument();
+  });
+
+  it("hides the B11 KPI row once paged away from the first page", async () => {
+    stubReducedMotion();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse(200, historyResponse({ has_more: true })));
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderDashboard();
+
+    await screen.findByTestId("dashboard-kpi-row");
+    await user.click(screen.getByRole("button", { name: "Next" }));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("dashboard-kpi-row")).not.toBeInTheDocument();
     });
   });
 });

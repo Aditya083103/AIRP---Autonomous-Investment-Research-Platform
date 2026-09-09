@@ -4,6 +4,12 @@
 // artwork: no third-party logo assets ship with this component, and a
 // monospace chip row reads as "receipts" (the actual tools used) rather
 // than a decorative logo wall.
+//
+// B10: each chip fades/rises in via Reveal, staggered by its position in
+// STACK -- a quick, low-key cascade across the row rather than the whole
+// row appearing at once.
+
+import { Reveal } from "@/components/motion/Reveal";
 
 const STACK: readonly string[] = [
   "React 18",
@@ -32,12 +38,14 @@ export function TechStackSection(): JSX.Element {
         Built with
       </p>
       <ul className="mt-6 flex flex-wrap items-center justify-center gap-3">
-        {STACK.map((tech) => (
-          <li
-            key={tech}
-            className="rounded-full border border-line bg-surface px-4 py-1.5 font-mono text-xs font-medium text-ink"
-          >
-            {tech}
+        {STACK.map((tech, index) => (
+          <li key={tech}>
+            <Reveal
+              index={index}
+              className="rounded-full border border-line bg-surface px-4 py-1.5 font-mono text-xs font-medium text-ink"
+            >
+              {tech}
+            </Reveal>
           </li>
         ))}
       </ul>

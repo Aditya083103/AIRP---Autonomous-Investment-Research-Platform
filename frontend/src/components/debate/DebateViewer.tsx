@@ -14,8 +14,16 @@
 // has spoken -- an empty round shows a placeholder rather than
 // disappearing, the same way AgentProgressBoard always shows all 8
 // cards regardless of stream progress.
+//
+// B10: each message card fades/rises in via Reveal, staggered by its
+// position within its own round. This is arguably Reveal's best-fitting
+// use in the whole app -- unlike a landing-page grid (everything mounts
+// at once), a debate message mounts exactly once, the moment it first
+// arrives over the stream, so the fade-in reads as "a new voice just
+// spoke" rather than a generic page-load flourish.
 
 import { DebateMessageCard } from "@/components/debate/DebateMessageCard";
+import { Reveal } from "@/components/motion/Reveal";
 import { type AgentStreamEvent } from "@/hooks/useAnalysisStream";
 import { cn } from "@/lib/cn";
 import {
@@ -62,8 +70,10 @@ export function DebateViewer({ events }: DebateViewerProps): JSX.Element {
               {roundMessages.length === 0 ? (
                 <p className="text-sm text-muted">No messages yet in this round.</p>
               ) : (
-                roundMessages.map((message) => (
-                  <DebateMessageCard key={message.id} message={message} />
+                roundMessages.map((message, index) => (
+                  <Reveal key={message.id} index={index}>
+                    <DebateMessageCard message={message} />
+                  </Reveal>
                 ))
               )}
             </div>

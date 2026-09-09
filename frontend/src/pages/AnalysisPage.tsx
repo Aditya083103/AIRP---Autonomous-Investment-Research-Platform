@@ -36,6 +36,12 @@
 // embedded -- a race this form avoids by simply doing the two requests
 // in the order that matters, and refusing to start the analysis at all
 // if the upload the user explicitly asked for fails.
+//
+// B10: each field (and the submit button) fades/rises in via its own
+// Reveal, staggered top-to-bottom -- a complement to RootLayout's
+// page-level PageTransition fade, not a duplicate of it: that fades the
+// whole page in as one block on navigation, this staggers the form's
+// own fields once the page is already there.
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useState } from "react";
@@ -46,6 +52,7 @@ import { AnalysisApiError, startAnalysis, uploadDocument } from "@/api/analysis"
 import { CompanyAutocomplete } from "@/components/analysis/CompanyAutocomplete";
 import { HorizonSelect } from "@/components/analysis/HorizonSelect";
 import { PdfUploadField } from "@/components/analysis/PdfUploadField";
+import { Reveal } from "@/components/motion/Reveal";
 import { Button } from "@/components/ui";
 import { type NseCompany } from "@/data/nseTop50";
 import { useAuth } from "@/hooks/useAuth";
@@ -162,35 +169,41 @@ export function AnalysisPage(): JSX.Element {
       </p>
 
       <form className="mt-8 flex flex-col gap-6" onSubmit={handleSubmit(onSubmit)} noValidate>
-        <Controller
-          control={control}
-          name="companyTicker"
-          render={({ field }) => (
-            <CompanyAutocomplete
-              label="Company"
-              value={selectedCompany}
-              onChange={(company) => {
-                setSelectedCompany(company);
-                field.onChange(company ? company.ticker : "");
-              }}
-              accessToken={accessToken}
-              hint="Search by name or ticker, e.g. 'Infosys' or 'TCS'."
-              {...(errors.companyTicker?.message ? { error: errors.companyTicker.message } : {})}
-            />
-          )}
-        />
+        <Reveal index={0}>
+          <Controller
+            control={control}
+            name="companyTicker"
+            render={({ field }) => (
+              <CompanyAutocomplete
+                label="Company"
+                value={selectedCompany}
+                onChange={(company) => {
+                  setSelectedCompany(company);
+                  field.onChange(company ? company.ticker : "");
+                }}
+                accessToken={accessToken}
+                hint="Search by name or ticker, e.g. 'Infosys' or 'TCS'."
+                {...(errors.companyTicker?.message ? { error: errors.companyTicker.message } : {})}
+              />
+            )}
+          />
+        </Reveal>
 
-        <HorizonSelect
-          label="Analysis horizon"
-          hint="How far back the Technical Analyst looks at price history."
-          {...register("horizon")}
-        />
+        <Reveal index={1}>
+          <HorizonSelect
+            label="Analysis horizon"
+            hint="How far back the Technical Analyst looks at price history."
+            {...register("horizon")}
+          />
+        </Reveal>
 
-        <PdfUploadField
-          file={pdfFile}
-          onChange={handlePdfChange}
-          {...(pdfError ? { error: pdfError } : {})}
-        />
+        <Reveal index={2}>
+          <PdfUploadField
+            file={pdfFile}
+            onChange={handlePdfChange}
+            {...(pdfError ? { error: pdfError } : {})}
+          />
+        </Reveal>
 
         {formError ? (
           <p role="alert" className="text-sm text-verdict-sell">
@@ -198,9 +211,11 @@ export function AnalysisPage(): JSX.Element {
           </p>
         ) : null}
 
-        <Button type="submit" isLoading={isSubmitting} disabled={pdfError !== null} fullWidth>
-          Start Analysis
-        </Button>
+        <Reveal index={3}>
+          <Button type="submit" isLoading={isSubmitting} disabled={pdfError !== null} fullWidth>
+            Start Analysis
+          </Button>
+        </Reveal>
       </form>
     </div>
   );

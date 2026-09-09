@@ -6,7 +6,16 @@
 // keeps #065F46. Grouping into three rounds (parallel research -> debate
 // -> final call) reflects the actual LangGraph execution order, not an
 // arbitrary layout choice.
+//
+// B10: each seat's card is wrapped in Reveal (staggered fade/rise-in by
+// seat number, so the whole 8-seat roster cascades in roughly the order
+// a reader's eye already follows -- round 1 first, seat 8 last) and
+// TiltCard (a subtle pointer-tracked 3D tilt on hover), the same
+// micro-interaction treatment given to every other card grid this unit
+// touches.
 
+import { Reveal } from "@/components/motion/Reveal";
+import { TiltCard } from "@/components/three/TiltCard";
 import { Card } from "@/components/ui";
 import { cn } from "@/lib/cn";
 
@@ -173,7 +182,11 @@ export function CommitteeSection(): JSX.Element {
             </div>
             <div className={cn("mt-4 grid grid-cols-1 gap-5 sm:grid-cols-2", GRID_COLS[round.id])}>
               {round.agents.map((agent) => (
-                <AgentCard key={agent.seat} agent={agent} />
+                <Reveal key={agent.seat} index={agent.seat - 1}>
+                  <TiltCard className="h-full">
+                    <AgentCard agent={agent} />
+                  </TiltCard>
+                </Reveal>
               ))}
             </div>
           </div>

@@ -26,6 +26,12 @@
 // offering an in-place re-run, since two fresh job_ids are needed
 // either way and there is no partial state worth preserving across a
 // full re-run.
+//
+// B11: CompareKpiRow renders above the full ComparisonTable once both
+// sides have a result -- 5 headline cards (verdict, conviction,
+// valuation gap, risk, sentiment) built from src/lib/compare/
+// compareKpis.ts, for an at-a-glance read before the exhaustive
+// row-by-row table below it.
 
 import { useEffect, useState } from "react";
 
@@ -34,6 +40,7 @@ import {
   CompanyAnalysisPanel,
   type CompanyAnalysisPanelResult,
   CompareInputForm,
+  CompareKpiRow,
   ComparisonTable,
 } from "@/components/compare";
 import { Button } from "@/components/ui";
@@ -167,11 +174,19 @@ export function ComparePage(): JSX.Element {
       {stage === "done" && sideA && sideB ? (
         <div className="mt-10">
           {sideA.result && sideB.result ? (
-            <ComparisonTable
-              companyNameA={sideA.company.name}
-              companyNameB={sideB.company.name}
-              rows={buildComparisonRows(sideA.result, sideB.result)}
-            />
+            <div className="space-y-6">
+              <CompareKpiRow
+                companyNameA={sideA.company.name}
+                companyNameB={sideB.company.name}
+                sideA={sideA.result}
+                sideB={sideB.result}
+              />
+              <ComparisonTable
+                companyNameA={sideA.company.name}
+                companyNameB={sideB.company.name}
+                rows={buildComparisonRows(sideA.result, sideB.result)}
+              />
+            </div>
           ) : (
             <p className="text-sm text-verdict-sell" role="alert">
               {!sideA.result && !sideB.result

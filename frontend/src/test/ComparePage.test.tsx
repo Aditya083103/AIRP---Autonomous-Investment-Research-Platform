@@ -7,7 +7,7 @@
 // company's payload regardless of call order.
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -232,6 +232,29 @@ describe("ComparePage", () => {
     // Company A (TCS) has the higher conviction score and BUY verdict.
     expect(screen.getByTestId("cell-verdict-a")).toHaveTextContent("Winner");
     expect(screen.getByTestId("cell-conviction_score-a")).toHaveTextContent("Winner");
+  });
+
+  it("renders the B11 KPI row above the comparison table once both analyses finish", async () => {
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    vi.stubGlobal("fetch", mockFetch());
+    const user = userEvent.setup();
+    renderComparePage();
+
+    await submitComparison(user);
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(2));
+
+    completeJob(JOB_A);
+    completeJob(JOB_B);
+
+    await screen.findByTestId("comparison-table");
+    // Scoped to the KPI row's own testid -- ComparisonTable renders the
+    // same raw verdict text ("BUY"/"HOLD") in its own cells, so an
+    // unscoped getByText("BUY") here would be ambiguous between the two.
+    const kpiRow = screen.getByTestId("compare-kpi-row");
+    expect(within(kpiRow).getByText("BUY")).toBeInTheDocument();
+    expect(within(kpiRow).getByText("HOLD")).toBeInTheDocument();
+    expect(within(kpiRow).getByText("8/10")).toBeInTheDocument();
+    expect(within(kpiRow).getByText("5/10")).toBeInTheDocument();
   });
 
   it("lets the user compare again after seeing results", async () => {

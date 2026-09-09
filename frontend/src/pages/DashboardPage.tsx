@@ -27,10 +27,22 @@
 // onError already puts the same message in a toast automatically, so
 // this inline text is the *persistent* detail for someone who missed
 // the toast, not a duplicate of it.
+//
+// B11: DashboardKpiRow (total analyses, completed-on-this-page, most
+// recent verdict) renders above the search box, but ONLY on the first
+// page (offset === 0) -- "most recent verdict" reads the newest item on
+// the currently-loaded page (see dashboardKpis.ts's own docstring for
+// why that is exact on page one specifically, since the endpoint
+// returns newest-first), and would silently become misleading if shown
+// while paged away to older history. It reads `data.items` directly,
+// never `filteredItems` -- the KPI row summarises the actual page from
+// the server, not whatever the client-side company-name search happens
+// to be filtering the table to underneath it.
 
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
+import { DashboardKpiRow } from "@/components/dashboard/DashboardKpiRow";
 import { HistoryTable } from "@/components/dashboard/HistoryTable";
 import { HistoryTableSkeleton } from "@/components/skeletons";
 import { Button, EmptyState, Input } from "@/components/ui";
@@ -68,6 +80,12 @@ export function DashboardPage(): JSX.Element {
         Welcome back, {user?.display_name ?? user?.email}.
       </h1>
       <p className="mt-2 text-sm text-muted">Your past analyses, newest first.</p>
+
+      {!isLoading && !isError && data && offset === 0 ? (
+        <div className="mt-6">
+          <DashboardKpiRow items={data.items} totalCount={data.total_count} />
+        </div>
+      ) : null}
 
       <div className="mt-8 max-w-xs">
         <Input
