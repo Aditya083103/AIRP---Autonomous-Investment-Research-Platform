@@ -1,14 +1,19 @@
 // frontend/src/api/auth.ts
-// AIRP -- Auth API client (T-056)
+// AIRP -- Auth API client (T-056, extended B6)
 //
-// Thin fetch wrappers around POST /auth/register, POST /auth/login, and
-// POST /auth/logout (backend/routers/auth.py). Every request is sent with
-// `credentials: "include"` so the browser sends/receives the httpOnly
-// cookie those endpoints set (see backend/routers/auth.py's T-056
-// docstring) -- this is required even though the response body's
-// access_token is what the app actually reads (see
-// src/providers/AuthProvider.tsx for why the raw token still has to live
-// in JS memory for src/hooks/useAnalysisStream.ts's WebSocket auth).
+// Thin fetch wrappers around POST /auth/register, POST /auth/login,
+// POST /auth/logout, POST /auth/password-reset/request, and
+// POST /auth/password-reset/confirm (backend/routers/auth.py). Every
+// request is sent with `credentials: "include"` so the browser
+// sends/receives the httpOnly cookie those endpoints set (see
+// backend/routers/auth.py's T-056 docstring) -- this is required even
+// though the response body's access_token is what the app actually
+// reads (see src/providers/AuthProvider.tsx for why the raw token
+// still has to live in JS memory for src/hooks/useAnalysisStream.ts's
+// WebSocket auth). The two password-reset endpoints don't return a
+// token at all (the caller is not authenticated yet/still isn't after
+// a reset -- they go log in separately), but are sent the same way
+// for consistency with every other call in this file.
 
 import { env } from "@/config/env";
 import { type TokenResponse } from "@/types/auth";
@@ -120,4 +125,52 @@ export function loginUser(input: LoginInput): Promise<TokenResponse> {
 /** POST /auth/logout -- clears the httpOnly cookie; no request body. */
 export function logoutUser(): Promise<void> {
   return postAuthJson<void>("/logout");
+}
+
+export interface RequestPasswordResetInput {
+  email: string;
+}
+
+export interface PasswordResetRequestResponse {
+  message: string;
+}
+
+/**
+ * POST /auth/password-reset/request (B6).
+ *
+ * Always resolves with the same generic message whether or not
+ * `email` matches a real account -- see
+ * backend/routers/auth.py's own docstring for why. The caller
+ * (ForgotPasswordPage) should show this success state unconditionally
+ * and never branch on it.
+ */
+export function requestPasswordReset(
+  input: RequestPasswordResetInput,
+): Promise<PasswordResetRequestResponse> {
+  return postAuthJson<PasswordResetRequestResponse>("/password-reset/request", input);
+}
+
+export interface ConfirmPasswordResetInput {
+  token: string;
+  newPassword: string;
+}
+
+export interface PasswordResetConfirmResponse {
+  message: string;
+}
+
+/**
+ * POST /auth/password-reset/confirm (B6).
+ *
+ * Throws AuthApiError(400) for an invalid/expired/already-used token
+ * -- ResetPasswordPage shows that message and lets the person request
+ * a new link rather than retry the same one.
+ */
+export function confirmPasswordReset(
+  input: ConfirmPasswordResetInput,
+): Promise<PasswordResetConfirmResponse> {
+  return postAuthJson<PasswordResetConfirmResponse>("/password-reset/confirm", {
+    token: input.token,
+    new_password: input.newPassword,
+  });
 }

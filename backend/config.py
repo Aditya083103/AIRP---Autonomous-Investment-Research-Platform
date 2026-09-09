@@ -146,6 +146,69 @@ class Settings(BaseSettings):
         ),
     )
 
+    # --- Password reset (B6) ---
+    frontend_base_url: str = Field(
+        default="http://localhost:3000",
+        description=(
+            "Origin used to build the link in a password-reset email "
+            "(e.g. '{frontend_base_url}/reset-password?token=...'). Set "
+            "to the real deployed frontend origin (the Vercel URL) in "
+            "staging/production -- matches frontend/vite.config.ts's dev "
+            "server port (3000) by default, the same default "
+            "CORS_ORIGINS already documents for the identical reason."
+        ),
+    )
+    password_reset_token_expire_minutes: int = Field(
+        default=30,
+        description=(
+            "How long a requested password-reset link stays valid. "
+            "Deliberately much shorter than ACCESS_TOKEN_EXPIRE_MINUTES "
+            "-- a reset link is a one-time bootstrap into the account, "
+            "not an ongoing session, and a short window limits how long "
+            "an intercepted reset email stays dangerous."
+        ),
+    )
+    smtp_host: str = Field(
+        default="",
+        description=(
+            "SMTP server host for sending password-reset emails. Empty "
+            "means no email service is configured -- "
+            "Settings.email_service_configured is then False, and "
+            "POST /auth/password-reset/request degrades to logging the "
+            "reset link (non-production only; see "
+            "backend.routers.auth's own docstring) rather than emailing "
+            "it. Never logs the raw token in production regardless of "
+            "this setting."
+        ),
+    )
+    smtp_port: int = Field(
+        default=587,
+        description="SMTP server port (587 = STARTTLS, the common default).",
+    )
+    smtp_username: str = Field(
+        default="",
+        description="SMTP auth username. Empty for a relay that needs no auth.",
+    )
+    smtp_password: str = Field(
+        default="",
+        description="SMTP auth password. Empty for a relay that needs no auth.",
+    )
+    smtp_from_email: str = Field(
+        default="",
+        description=(
+            "'From' address for password-reset emails. Required (along "
+            "with SMTP_HOST) for Settings.email_service_configured to "
+            "be True."
+        ),
+    )
+    smtp_use_tls: bool = Field(
+        default=True,
+        description=(
+            "Use STARTTLS when connecting to SMTP_HOST. Leave true "
+            "unless the relay explicitly requires plaintext."
+        ),
+    )
+
     # --- 8. External Data APIs ---
     news_api_key: str = Field(
         default="",
@@ -305,6 +368,18 @@ class Settings(BaseSettings):
         if self.llm_provider == "groq":
             return self.groq_api_key
         return self.anthropic_api_key
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def email_service_configured(self) -> bool:
+        """
+        True when there is enough SMTP configuration to actually attempt
+        sending an email (B6). Both a host to connect to and a 'From'
+        address are required -- SMTP_USERNAME/SMTP_PASSWORD are not, so
+        an unauthenticated local/relay SMTP server (a common local-dev
+        setup, e.g. MailHog/Mailpit) still counts as configured.
+        """
+        return bool(self.smtp_host and self.smtp_from_email)
 
     @computed_field  # type: ignore[misc]
     @property

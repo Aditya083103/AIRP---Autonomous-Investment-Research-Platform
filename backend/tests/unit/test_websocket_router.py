@@ -94,12 +94,20 @@ def current_user() -> User:
         email="streamer@example.com",
         password_hash="$2b$12$irrelevant-for-this-test",
         is_active=True,
+        token_version=0,
     )
 
 
 @pytest.fixture
 def auth_token(current_user: User, test_settings: Settings) -> str:
-    token, _ = create_access_token(current_user.id, settings=test_settings)
+    # B6: token_version must match current_user's own value (0) --
+    # _authenticate rejects a mismatch the same way get_current_user
+    # does.
+    token, _ = create_access_token(
+        current_user.id,
+        settings=test_settings,
+        token_version=current_user.token_version,
+    )
     return token
 
 

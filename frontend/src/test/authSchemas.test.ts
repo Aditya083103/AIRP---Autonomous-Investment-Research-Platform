@@ -4,7 +4,12 @@
 
 import { describe, expect, it } from "vitest";
 
-import { loginSchema, registerSchema } from "@/lib/validation/authSchemas";
+import {
+  forgotPasswordSchema,
+  loginSchema,
+  registerSchema,
+  resetPasswordSchema,
+} from "@/lib/validation/authSchemas";
 
 describe("loginSchema", () => {
   it("accepts a valid email and non-empty password", () => {
@@ -76,6 +81,72 @@ describe("registerSchema", () => {
       ...validBase,
       password: blank,
       confirmPassword: blank,
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe("forgotPasswordSchema", () => {
+  it("accepts a valid email", () => {
+    const result = forgotPasswordSchema.safeParse({ email: "a@example.com" });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects an invalid email", () => {
+    const result = forgotPasswordSchema.safeParse({ email: "not-an-email" });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects an empty email", () => {
+    const result = forgotPasswordSchema.safeParse({ email: "" });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe("resetPasswordSchema", () => {
+  const validBase = {
+    newPassword: "correct-horse-battery",
+    confirmNewPassword: "correct-horse-battery",
+  };
+
+  it("accepts matching passwords of valid length", () => {
+    const result = resetPasswordSchema.safeParse(validBase);
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects mismatched passwords, attributed to confirmNewPassword", () => {
+    const result = resetPasswordSchema.safeParse({
+      ...validBase,
+      confirmNewPassword: "something-else",
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0]?.path).toContain("confirmNewPassword");
+    }
+  });
+
+  it("rejects a password shorter than 8 characters", () => {
+    const result = resetPasswordSchema.safeParse({
+      newPassword: "short1",
+      confirmNewPassword: "short1",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a password longer than 72 characters", () => {
+    const tooLong = "a".repeat(73);
+    const result = resetPasswordSchema.safeParse({
+      newPassword: tooLong,
+      confirmNewPassword: tooLong,
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a whitespace-only password", () => {
+    const blank = " ".repeat(10);
+    const result = resetPasswordSchema.safeParse({
+      newPassword: blank,
+      confirmNewPassword: blank,
     });
     expect(result.success).toBe(false);
   });

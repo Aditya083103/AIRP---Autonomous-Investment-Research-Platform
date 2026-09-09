@@ -1,9 +1,11 @@
 // frontend/src/routes/AppRoutes.tsx
 // The route table. A layout route with a home index (the landing page,
 // T-055), a protected /analysis route (the real input form, T-058),
-// /login and /register (T-056), a protected /dashboard (real history
-// table, T-057), a protected /analysis/:jobId/result (T-061) and
-// /analysis/:jobId/memo (T-063), a protected /compare two-company
+// /login and /register (T-056), /forgot-password and /reset-password
+// (B6, also public -- reached before/without an authenticated
+// session, the same as login/register), a protected /dashboard (real
+// history table, T-057), a protected /analysis/:jobId/result (T-061)
+// and /analysis/:jobId/memo (T-063), a protected /compare two-company
 // comparison page (T-064), a PUBLIC /accuracy dashboard (T-092 -- not
 // wrapped in ProtectedRoute, since backend/routers/accuracy.py's
 // GET /summary and GET /history need no signed-in user at all, matching
@@ -20,11 +22,13 @@ import { AnalysisResultPage } from "@/pages/AnalysisResultPage";
 import { ComparePage } from "@/pages/ComparePage";
 import { ComponentsPreviewPage } from "@/pages/ComponentsPreviewPage";
 import { DashboardPage } from "@/pages/DashboardPage";
+import { ForgotPasswordPage } from "@/pages/ForgotPasswordPage";
 import { HomePage } from "@/pages/HomePage";
 import { LoginPage } from "@/pages/LoginPage";
 import { MemoPage } from "@/pages/MemoPage";
 import { NotFoundPage } from "@/pages/NotFoundPage";
 import { RegisterPage } from "@/pages/RegisterPage";
+import { ResetPasswordPage } from "@/pages/ResetPasswordPage";
 
 export function AppRoutes(): JSX.Element {
   return (
@@ -41,6 +45,8 @@ export function AppRoutes(): JSX.Element {
         />
         <Route path="login" element={<LoginPage />} />
         <Route path="register" element={<RegisterPage />} />
+        <Route path="forgot-password" element={<ForgotPasswordPage />} />
+        <Route path="reset-password" element={<ResetPasswordPage />} />
         <Route
           path="dashboard"
           element={

@@ -22,6 +22,7 @@ from __future__ import annotations
 from collections.abc import AsyncGenerator
 from datetime import datetime, timezone
 from typing import Any, cast
+from unittest.mock import AsyncMock, patch
 import uuid
 
 from fastapi import FastAPI
@@ -34,6 +35,10 @@ from backend.db.session import get_async_session
 from backend.dependencies.common import get_settings_dependency
 from backend.main import create_app
 from backend.models.orm import User
+from backend.services.password_reset import (
+    InvalidOrExpiredResetTokenError,
+    PasswordResetRequestResult,
+)
 
 # ---------------------------------------------------------------------------
 # Fake in-memory AsyncSession
@@ -107,6 +112,12 @@ class _FakeAsyncSession:
                 )
             if user.is_active is None:
                 user.is_active = True
+            if user.token_version is None:
+                # B6: users.token_version is server_default='0', same
+                # simulate-it-here treatment as is_active above -- a
+                # real PostgreSQL INSERT fills this in; this fake
+                # session has no database underneath it to do that.
+                user.token_version = 0
             # User.created_at / updated_at are server_default=func.now()
             # columns -- a real PostgreSQL INSERT fills these in at the
             # database, and the ORM only sees the value after
@@ -385,3 +396,209 @@ class TestMe:
         )
         assert response.status_code == 200
         assert response.json()["email"] == "flow@example.com"
+
+
+# ---------------------------------------------------------------------------
+# POST /auth/password-reset/request and POST /auth/password-reset/confirm (B6)
+# ---------------------------------------------------------------------------
+#
+# Unlike the four endpoints above, these two are tested with
+# backend.routers.auth's imported service-layer functions
+# (create_password_reset_request, confirm_password_reset,
+# send_password_reset_email) mocked directly, the SAME pattern every
+# other router test file in this codebase uses (test_chat_router.py,
+# test_companies_router.py, ...) -- the service layer's own real logic
+# already has thorough, unmocked coverage in
+# test_password_reset_service.py; these tests only need to confirm the
+# HTTP-layer wiring (status codes, the anti-enumeration guarantee,
+# exception-to-HTTP-status mapping).
+
+
+async def _make_client_with_settings(
+    fake_session: _FakeAsyncSession, settings: Settings
+) -> httpx.AsyncClient:
+    app: FastAPI = create_app()
+    app.dependency_overrides[get_async_session] = _make_session_override(fake_session)
+    app.dependency_overrides[get_settings_dependency] = lambda: settings
+    transport = httpx.ASGITransport(app=cast(Any, app))
+    return httpx.AsyncClient(transport=transport, base_url="http://testserver")
+
+
+class TestPasswordResetRequest:
+    @pytest.mark.asyncio
+    async def test_returns_200_for_a_known_email(
+        self, client: httpx.AsyncClient
+    ) -> None:
+        result = PasswordResetRequestResult(
+            user=User(id=uuid.uuid4(), email="known@example.com", password_hash="x"),
+            raw_token="raw-token-value",
+            expires_at=datetime.now(timezone.utc),
+        )
+        with patch(
+            "backend.routers.auth.create_password_reset_request",
+            new=AsyncMock(return_value=result),
+        ):
+            response = await client.post(
+                "/auth/password-reset/request", json={"email": "known@example.com"}
+            )
+        assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_returns_the_same_response_for_an_unknown_email(
+        self, client: httpx.AsyncClient
+    ) -> None:
+        """The literal B6 anti-enumeration guarantee: a caller cannot
+        tell 'we sent a link' apart from 'no such account' from the
+        response."""
+        result = PasswordResetRequestResult(
+            user=User(id=uuid.uuid4(), email="known@example.com", password_hash="x"),
+            raw_token="raw-token-value",
+            expires_at=datetime.now(timezone.utc),
+        )
+        with patch(
+            "backend.routers.auth.create_password_reset_request",
+            new=AsyncMock(return_value=result),
+        ):
+            known_response = await client.post(
+                "/auth/password-reset/request", json={"email": "known@example.com"}
+            )
+        with patch(
+            "backend.routers.auth.create_password_reset_request",
+            new=AsyncMock(return_value=None),
+        ):
+            unknown_response = await client.post(
+                "/auth/password-reset/request", json={"email": "unknown@example.com"}
+            )
+
+        assert known_response.status_code == unknown_response.status_code == 200
+        assert known_response.json() == unknown_response.json()
+
+    @pytest.mark.asyncio
+    async def test_sends_an_email_when_email_service_is_configured(
+        self, fake_session: _FakeAsyncSession, test_settings: Settings
+    ) -> None:
+        configured_settings = test_settings.model_copy(
+            update={
+                "smtp_host": "smtp.example.com",
+                "smtp_from_email": "noreply@airp.example.com",
+                "frontend_base_url": "https://airp.example.com",
+            }
+        )
+        assert configured_settings.email_service_configured is True
+
+        result = PasswordResetRequestResult(
+            user=User(id=uuid.uuid4(), email="known@example.com", password_hash="x"),
+            raw_token="raw-token-value",
+            expires_at=datetime.now(timezone.utc),
+        )
+        async with await _make_client_with_settings(
+            fake_session, configured_settings
+        ) as client:
+            with (
+                patch(
+                    "backend.routers.auth.create_password_reset_request",
+                    new=AsyncMock(return_value=result),
+                ),
+                patch(
+                    "backend.routers.auth.send_password_reset_email",
+                    new=AsyncMock(return_value=True),
+                ) as mock_send,
+            ):
+                response = await client.post(
+                    "/auth/password-reset/request", json={"email": "known@example.com"}
+                )
+
+        assert response.status_code == 200
+        mock_send.assert_awaited_once()
+        assert mock_send.await_args is not None
+        call_kwargs = mock_send.await_args.kwargs
+        assert call_kwargs["to_email"] == "known@example.com"
+        assert call_kwargs["reset_url"] == (
+            "https://airp.example.com/reset-password?token=raw-token-value"
+        )
+
+    @pytest.mark.asyncio
+    async def test_does_not_send_an_email_when_not_configured(
+        self, client: httpx.AsyncClient, test_settings: Settings
+    ) -> None:
+        assert test_settings.email_service_configured is False
+        result = PasswordResetRequestResult(
+            user=User(id=uuid.uuid4(), email="known@example.com", password_hash="x"),
+            raw_token="raw-token-value",
+            expires_at=datetime.now(timezone.utc),
+        )
+        with (
+            patch(
+                "backend.routers.auth.create_password_reset_request",
+                new=AsyncMock(return_value=result),
+            ),
+            patch(
+                "backend.routers.auth.send_password_reset_email", new=AsyncMock()
+            ) as mock_send,
+        ):
+            response = await client.post(
+                "/auth/password-reset/request", json={"email": "known@example.com"}
+            )
+
+        assert response.status_code == 200
+        mock_send.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_malformed_email_returns_422(self, client: httpx.AsyncClient) -> None:
+        response = await client.post(
+            "/auth/password-reset/request", json={"email": "not-an-email"}
+        )
+        assert response.status_code == 422
+
+
+class TestPasswordResetConfirm:
+    @pytest.mark.asyncio
+    async def test_valid_token_returns_200(self, client: httpx.AsyncClient) -> None:
+        with patch("backend.routers.auth.confirm_password_reset", new=AsyncMock()):
+            response = await client.post(
+                "/auth/password-reset/confirm",
+                json={"token": "valid-token", "new_password": _VALID_PASSWORD},
+            )
+        assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_invalid_or_expired_token_returns_400(
+        self, client: httpx.AsyncClient
+    ) -> None:
+        with patch(
+            "backend.routers.auth.confirm_password_reset",
+            new=AsyncMock(side_effect=InvalidOrExpiredResetTokenError("bad token")),
+        ):
+            response = await client.post(
+                "/auth/password-reset/confirm",
+                json={"token": "bad-token", "new_password": _VALID_PASSWORD},
+            )
+        assert response.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_password_too_short_returns_422(
+        self, client: httpx.AsyncClient
+    ) -> None:
+        response = await client.post(
+            "/auth/password-reset/confirm",
+            json={"token": "some-token", "new_password": "short"},
+        )
+        assert response.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_whitespace_only_password_returns_422(
+        self, client: httpx.AsyncClient
+    ) -> None:
+        response = await client.post(
+            "/auth/password-reset/confirm",
+            json={"token": "some-token", "new_password": " " * 10},
+        )
+        assert response.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_empty_token_returns_422(self, client: httpx.AsyncClient) -> None:
+        response = await client.post(
+            "/auth/password-reset/confirm",
+            json={"token": "", "new_password": _VALID_PASSWORD},
+        )
+        assert response.status_code == 422

@@ -1,6 +1,6 @@
 # backend/services/auth.py
 """
-AIRP -- Authentication Service (T-046)
+AIRP -- Authentication Service (T-046, extended B6)
 
 Password hashing (bcrypt via passlib) and JWT issuance/verification for
 self-hosted register/login/me endpoints. Pure business logic with no
@@ -8,6 +8,12 @@ FastAPI imports -- the router (backend/routers/auth.py) and the
 get_current_user dependency (backend/dependencies/auth.py) both call
 into this module, so it stays independently testable without spinning
 up an ASGI app.
+
+B6 adds password-reset token generation/hashing
+(generate_password_reset_token / hash_reset_token) and threads a
+``token_version`` claim through JWT issuance/verification -- see each
+function's own docstring, and backend.services.password_reset for the
+request/confirm business logic these two primitives support.
 
 What this module does NOT do:
   * Touch the database directly -- callers pass in/receive plain values
@@ -19,6 +25,8 @@ What this module does NOT do:
 """
 
 from datetime import datetime, timedelta, timezone
+import hashlib
+import secrets
 from typing import Any
 import uuid
 
@@ -35,6 +43,8 @@ __all__ = [
     "verify_password",
     "create_access_token",
     "decode_access_token",
+    "generate_password_reset_token",
+    "hash_reset_token",
 ]
 
 # ---------------------------------------------------------------------------
@@ -107,7 +117,9 @@ class InvalidTokenError(Exception):
 
 
 def create_access_token(
-    user_id: uuid.UUID, settings: Settings | None = None
+    user_id: uuid.UUID,
+    settings: Settings | None = None,
+    token_version: int = 0,
 ) -> tuple[str, int]:
     """
     Return (encoded_jwt, expires_in_minutes) for the given user.
@@ -117,6 +129,15 @@ def create_access_token(
     and get_current_user -- converts it back to a UUID). ``exp`` is a
     standard JWT claim consumed automatically by jose.jwt.decode's
     built-in expiry check.
+
+    ``token_version`` (B6) is embedded as its own claim -- callers
+    (register/login in backend/routers/auth.py) pass the user's
+    CURRENT ``users.token_version`` column value. get_current_user
+    later rejects this token once that column no longer matches (a
+    password reset increments it), which is what invalidates every
+    session issued before a reset. Defaults to 0, matching both the
+    column's own default for a new user and TokenPayload's own default
+    for a token that predates this claim entirely.
 
     settings defaults to the process-wide cached Settings singleton via
     get_settings() when not supplied, so callers in request handlers
@@ -130,6 +151,7 @@ def create_access_token(
     claims: dict[str, Any] = {
         "sub": str(user_id),
         "exp": expire_at,
+        "token_version": token_version,
     }
     encoded = jwt.encode(claims, resolved_settings.secret_key, algorithm=_JWT_ALGORITHM)
     return encoded, expire_minutes
@@ -162,3 +184,42 @@ def decode_access_token(token: str, settings: Settings | None = None) -> TokenPa
         # the wrong type. Still an invalid token from the caller's
         # point of view, not a 500.
         raise InvalidTokenError("token claims are malformed") from exc
+
+
+# ---------------------------------------------------------------------------
+# Password-reset tokens (B6)
+# ---------------------------------------------------------------------------
+
+
+def generate_password_reset_token() -> tuple[str, str]:
+    """
+    Return (raw_token, token_hash) for a new password-reset request.
+
+    ``raw_token`` is 256 bits of randomness from ``secrets.token_urlsafe``
+    -- the value that goes into the emailed (or logged, see
+    backend.services.password_reset) reset link, and the only form the
+    caller ever needs to send anywhere. ``token_hash`` is its SHA-256
+    hex digest, the only form ever persisted (in
+    ``password_reset_tokens.token_hash`` -- see that table's own
+    migration for why SHA-256, not bcrypt, is the correct hash here: a
+    256-bit random value has no brute-forceable low-entropy structure
+    for bcrypt's deliberate slowness to defend, unlike a human-chosen
+    password).
+    """
+    raw_token = secrets.token_urlsafe(32)
+    return raw_token, hash_reset_token(raw_token)
+
+
+def hash_reset_token(raw_token: str) -> str:
+    """
+    Return the SHA-256 hex digest of ``raw_token``.
+
+    Used both to persist a newly-generated token (via
+    generate_password_reset_token, above) and to look one back up by
+    its raw value at confirm time (backend.services.password_reset
+    .confirm_password_reset hashes the token a caller supplies and
+    matches it against ``password_reset_tokens.token_hash`` -- the raw
+    value itself is never stored, so this is the only way to find the
+    row again).
+    """
+    return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()

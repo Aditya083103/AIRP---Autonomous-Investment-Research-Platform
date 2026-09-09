@@ -48,12 +48,13 @@ def _make_session_returning(user: Any) -> AsyncMock:
     return session
 
 
-def _make_active_user(user_id: uuid.UUID | None = None) -> User:
+def _make_active_user(user_id: uuid.UUID | None = None, token_version: int = 0) -> User:
     return User(
         id=user_id if user_id is not None else uuid.uuid4(),
         email="active@example.com",
         password_hash="$2b$12$irrelevant-for-this-test",
         is_active=True,
+        token_version=token_version,
     )
 
 
@@ -69,6 +70,73 @@ class TestGetCurrentUserSuccess:
 
         result = await get_current_user(
             token=token, session=session, settings=test_settings
+        )
+
+        assert result is user
+
+    @pytest.mark.asyncio
+    async def test_matching_nonzero_token_version_is_accepted(
+        self, test_settings: Settings
+    ) -> None:
+        """B6: a token issued AFTER a password reset (token_version=1)
+        against a user row that has also already been reset to
+        token_version=1 must be accepted -- the check is equality, not
+        just 'token_version == 0'."""
+        user_id = uuid.uuid4()
+        user = _make_active_user(user_id, token_version=1)
+        token, _ = create_access_token(user_id, settings=test_settings, token_version=1)
+        session = _make_session_returning(user)
+
+        result = await get_current_user(
+            token=token, session=session, settings=test_settings
+        )
+
+        assert result is user
+
+
+class TestGetCurrentUserTokenVersionMismatch:
+    """B6: a password reset increments users.token_version -- a token
+    issued before the reset must stop working, even though its own
+    signature and expiry are still perfectly valid."""
+
+    @pytest.mark.asyncio
+    async def test_token_issued_before_a_password_reset_is_rejected(
+        self, test_settings: Settings
+    ) -> None:
+        user_id = uuid.uuid4()
+        # Token minted with the OLD token_version (0)...
+        token, _ = create_access_token(user_id, settings=test_settings, token_version=0)
+        # ...but the user row has since moved to token_version=1 (a
+        # password reset happened after this token was issued).
+        user = _make_active_user(user_id, token_version=1)
+        session = _make_session_returning(user)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await get_current_user(token=token, session=session, settings=test_settings)
+        assert exc_info.value.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_token_predating_the_token_version_claim_defaults_to_zero(
+        self, test_settings: Settings
+    ) -> None:
+        """A token minted before B6 shipped carries no token_version
+        claim at all -- TokenPayload defaults it to 0, so it must still
+        validate against an account that has never been reset (whose
+        own column also defaults to 0). No forced mass logout at
+        deploy time."""
+        from jose import jwt as raw_jwt
+
+        user_id = uuid.uuid4()
+        pre_b6_token = raw_jwt.encode(
+            {"sub": str(user_id), "exp": 9999999999},
+            test_settings.secret_key,
+            algorithm="HS256",
+        )
+        user = _make_active_user(user_id, token_version=0)
+        session = _make_session_returning(user)
+
+        result = await get_current_user(
+            token=pre_b6_token, session=session, settings=test_settings
         )
 
         assert result is user

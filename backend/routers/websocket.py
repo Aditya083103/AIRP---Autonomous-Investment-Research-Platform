@@ -164,10 +164,11 @@ async def _authenticate(
 
     Mirrors backend.dependencies.auth.get_current_user's verification
     logic exactly (decode -> parse sub as UUID -> load User -> check
-    is_active) but returns None on any failure instead of raising
-    HTTPException, since a WebSocket route closes the connection with
-    an explicit code rather than relying on FastAPI's HTTP exception
-    handling (which does not apply once the handshake is accepted).
+    is_active -> check token_version, B6) but returns None on any
+    failure instead of raising HTTPException, since a WebSocket route
+    closes the connection with an explicit code rather than relying on
+    FastAPI's HTTP exception handling (which does not apply once the
+    handshake is accepted).
 
     Args:
         token:    Raw bearer token string from the ``token`` query param.
@@ -179,8 +180,9 @@ async def _authenticate(
 
     Returns:
         The authenticated User, or None for any invalid/expired token,
-        a token naming a UUID with no matching row, or a deactivated
-        account.
+        a token naming a UUID with no matching row, a deactivated
+        account, or a token issued before a password reset (B6 --
+        see get_current_user's own comment on this check).
     """
     try:
         payload = decode_access_token(token, settings=settings)
@@ -195,6 +197,8 @@ async def _authenticate(
     result = await session.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
     if user is None or not user.is_active:
+        return None
+    if payload.token_version != user.token_version:
         return None
     return user
 
