@@ -502,26 +502,61 @@ def _score_conviction(
 # Stage 1d -- time horizon
 # ---------------------------------------------------------------------------
 
+# B1 fix: the user's own selected analysis period (state["period"],
+# AnalysisStartRequest.period, one of backend.tools.stock_price.
+# VALID_PERIODS) is now the PRIMARY driver of the displayed holding
+# period. Before this fix, _determine_time_horizon never received the
+# period at all -- it hardcoded "quarterly review (3 months)" for every
+# single HOLD verdict and a flat "12 months" for the BUY/SELL default,
+# regardless of whether the user had selected a 1-month or a 10-year
+# horizon for the analysis.
+_PERIOD_HORIZON_LABELS: dict[str, str] = {
+    "1mo": "~1 month",
+    "3mo": "~3 months",
+    "6mo": "~6 months",
+    "1y": "~1 year",
+    "3y": "~3 years",
+    "5y": "~5 years",
+    "10y": "~10 years",
+}
+
+# Fallback period used only when state["period"] is missing or holds a
+# value outside _PERIOD_HORIZON_LABELS (e.g. a pre-T-085 test fixture) --
+# matches AnalysisStartRequest's own DEFAULT_ANALYSIS_PERIOD.
+_DEFAULT_HORIZON_PERIOD = "1y"
+
 
 def _determine_time_horizon(
     technical: dict[str, Any],
     valuation: dict[str, Any],
     verdict: str,
+    period: str,
 ) -> str:
-    """Choose a holding-period phrase based on what is driving the verdict."""
+    """
+    Choose a holding-period phrase for the Investment Memo.
+
+    The user's selected analysis ``period`` is the primary driver of the
+    displayed magnitude (e.g. selecting '3y' always shows '~3 years',
+    whatever the verdict); the verdict and technicals only refine the
+    surrounding wording -- they never override the period's magnitude.
+    """
+    period_label = _PERIOD_HORIZON_LABELS.get(
+        period, _PERIOD_HORIZON_LABELS[_DEFAULT_HORIZON_PERIOD]
+    )
+
     if verdict == "HOLD":
-        return "quarterly review (3 months)"
+        return f"{period_label} (quarterly review recommended)"
 
     tech_strength = int(technical.get("signal_strength") or 5)
     margin_of_safety = str(valuation.get("margin_of_safety") or "low")
 
     if tech_strength >= 8:
-        return "3-6 months (technically driven, reassess on momentum shift)"
+        return f"{period_label} (technically driven, reassess on momentum shift)"
 
     if verdict == "BUY" and margin_of_safety == "high":
-        return "3-5 years (high margin of safety supports a long hold)"
+        return f"{period_label} (high margin of safety supports a long hold)"
 
-    return "12 months"
+    return period_label
 
 
 # ---------------------------------------------------------------------------
@@ -919,10 +954,17 @@ def _run_portfolio_manager_core(
     debate_rounds: Optional[list[dict[str, Any]]],
     debate_round_count: int,
     critical_flags: Optional[list[str]],
+    period: str = _DEFAULT_HORIZON_PERIOD,
 ) -> InvestmentDecision:
     """
     Run both stages and return a fully-populated InvestmentDecision.
     Never raises -- any failure degrades to a deterministic fallback.
+
+    Args:
+        period: The user's selected analysis horizon (B1) -- one of
+            backend.tools.stock_price.VALID_PERIODS, threaded from
+            InvestmentState["period"]. Defaults to _DEFAULT_HORIZON_PERIOD
+            ('1y') for callers that predate B1.
     """
     fundamental = fundamental or {}
     technical = technical or {}
@@ -953,7 +995,7 @@ def _run_portfolio_manager_core(
         verdict,
         debate_rounds_used,
     )
-    time_horizon = _determine_time_horizon(technical, valuation, verdict)
+    time_horizon = _determine_time_horizon(technical, valuation, verdict, period)
     price_target = _build_price_target(valuation, time_horizon)
     key_risks = _build_key_risks(risk, contrarian, critical_flags)
     key_catalysts = _build_key_catalysts(macro, fundamental, valuation)
@@ -1061,6 +1103,7 @@ def run_portfolio_manager_decision(state: dict[str, Any]) -> dict[str, Any]:
             debate_rounds=state.get("debate_rounds"),
             debate_round_count=state.get("debate_round_count", 0),
             critical_flags=state.get("critical_flags"),
+            period=str(state.get("period") or _DEFAULT_HORIZON_PERIOD),
         )
     except Exception as exc:
         logger.exception("Unhandled error in Portfolio Manager node: ticker=%s", ticker)

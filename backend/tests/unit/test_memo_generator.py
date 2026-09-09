@@ -570,6 +570,24 @@ class TestBuildMemoMarkdown:
         assert isinstance(memo, str)
         assert len(memo) > 0
 
+    def test_period_driven_time_horizon_flows_through_to_the_memo(self) -> None:
+        """
+        B1 acceptance check: the memo is pure pass-through formatting over
+        decision["time_horizon"] -- whatever period-driven text
+        backend.agents.portfolio_manager._determine_time_horizon produced
+        (e.g. selecting a 3-year analysis) must appear in the rendered
+        memo verbatim, not the old hardcoded "12 months"/"quarterly
+        review (3 months)" text.
+        """
+        decision = {
+            **_TCS_DECISION,
+            "time_horizon": "~3 years (high margin of safety supports a long hold)",
+        }
+        memo = _build_memo_markdown(
+            "Tata Consultancy Services", "TCS.NS", decision, "17 Jun 2026"
+        )
+        assert "~3 years" in memo
+
     def test_readable_by_non_technical_reader(self) -> None:
         """
         Acceptance criterion: readable by a non-technical person.
