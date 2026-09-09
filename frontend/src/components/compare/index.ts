@@ -11,4 +11,5 @@ export {
   CompareInputForm,
   type CompareInputFormProps,
 } from "@/components/compare/CompareInputForm";
+export { CompareKpiRow, type CompareKpiRowProps } from "@/components/compare/CompareKpiRow";
 export { ComparisonTable, type ComparisonTableProps } from "@/components/compare/ComparisonTable";

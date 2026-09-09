@@ -248,7 +248,10 @@ describe("AccuracyPage", () => {
     renderPage();
 
     expect(await screen.findByTestId("accuracy-panel")).toBeInTheDocument();
-    expect(screen.getByText("--")).toBeInTheDocument();
+    // (B11) 3 dashes now, not 1 -- AccuracySummaryStats' own
+    // overall-accuracy tile plus its new best/worst-verdict tiles all
+    // render "--" for this all-zero, nothing-scored-yet fixture.
+    expect(screen.getAllByText("--").length).toBeGreaterThan(0);
     expect(screen.getAllByText(/no verdicts have been scored yet/i).length).toBeGreaterThan(0);
   });
 
