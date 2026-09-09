@@ -348,3 +348,227 @@ describe("useChatWidget scope changes", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
+
+// (B9) Conversation list -- revisit and continue a past session. See
+// useChatWidget.ts's own "Conversation list state" section: listing
+// sessions (GET /chat/sessions), resuming one (GET .../messages), and
+// discarding a resumed session back to normal scope-based creation.
+
+function messagesResponse(sessionId: string, overrides: Record<string, unknown> = {}): unknown {
+  return {
+    session_id: sessionId,
+    items: [
+      {
+        id: "msg-1",
+        session_id: sessionId,
+        role: "user",
+        content: "What was the verdict on TCS?",
+        tool_calls: null,
+        tool_name: null,
+        tokens_used: null,
+        created_at: "2026-01-01T00:00:00Z",
+      },
+      {
+        id: "msg-2",
+        session_id: sessionId,
+        role: "assistant",
+        content: "AIRP rated TCS a BUY.",
+        tool_calls: null,
+        tool_name: null,
+        tokens_used: null,
+        created_at: "2026-01-01T00:00:01Z",
+      },
+    ],
+    total_count: 2,
+    limit: 200,
+    offset: 0,
+    has_more: false,
+    ...overrides,
+  };
+}
+
+/** Routes a single global fetch mock to the right canned response by URL/method, mirroring how the real backend's three chat endpoints differ -- avoids one giant if/else duplicated across every test below. */
+function routedFetchMock(options: {
+  listResponse?: unknown;
+  messagesResponses?: Record<string, unknown>;
+  createResponse?: unknown;
+}) {
+  return vi.fn((url: string, init?: RequestInit) => {
+    const method = init?.method ?? "GET";
+    if (method === "POST" && url.includes("/chat/sessions")) {
+      return jsonResponse(201, options.createResponse ?? sessionResponse());
+    }
+    if (url.includes("/messages")) {
+      const match = /\/chat\/sessions\/([^/?]+)\/messages/.exec(url);
+      const sessionId = match?.[1] ?? "session-1";
+      const body = options.messagesResponses?.[sessionId] ?? messagesResponse(sessionId);
+      return jsonResponse(200, body);
+    }
+    return jsonResponse(
+      200,
+      options.listResponse ?? { items: [], total_count: 0, limit: 20, offset: 0, has_more: false },
+    );
+  });
+}
+
+describe("useChatWidget conversation history (B9)", () => {
+  it("does not fetch the session list before the history panel is opened", () => {
+    const fetchMock = routedFetchMock({});
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+
+    renderHook(() => useChatWidget(), { wrapper: createWrapper("/dashboard", AUTHENTICATED) });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("toggleHistory() loads and exposes the caller's past sessions", async () => {
+    const listResponse = {
+      items: [
+        sessionResponse({ id: "session-a", title: "About TCS" }),
+        sessionResponse({ id: "session-b", title: null }),
+      ],
+      total_count: 2,
+      limit: 20,
+      offset: 0,
+      has_more: false,
+    };
+    const fetchMock = routedFetchMock({ listResponse });
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+
+    const { result } = renderHook(() => useChatWidget(), {
+      wrapper: createWrapper("/dashboard", AUTHENTICATED),
+    });
+
+    expect(result.current.isHistoryOpen).toBe(false);
+
+    act(() => {
+      result.current.toggleHistory();
+    });
+
+    expect(result.current.isHistoryOpen).toBe(true);
+    await waitFor(() => expect(result.current.historySessions).toHaveLength(2));
+    expect(result.current.historySessions.map((s) => s.id)).toEqual(["session-a", "session-b"]);
+  });
+
+  it("openHistorySession() resumes a past session's transcript and closes the history panel", async () => {
+    const listResponse = {
+      items: [sessionResponse({ id: "session-a", title: "About TCS" })],
+      total_count: 1,
+      limit: 20,
+      offset: 0,
+      has_more: false,
+    };
+    const fetchMock = routedFetchMock({
+      listResponse,
+      messagesResponses: { "session-a": messagesResponse("session-a") },
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+
+    const { result } = renderHook(() => useChatWidget(), {
+      wrapper: createWrapper("/dashboard", AUTHENTICATED),
+    });
+
+    act(() => {
+      result.current.toggle(); // open widget
+      result.current.toggleHistory();
+    });
+    await waitFor(() => expect(result.current.historySessions).toHaveLength(1));
+
+    act(() => {
+      result.current.openHistorySession("session-a");
+    });
+
+    await waitFor(() => expect(result.current.session?.id).toBe("session-a"));
+    expect(result.current.isHistoryOpen).toBe(false);
+    expect(result.current.messages).toHaveLength(2);
+    expect(result.current.messages[0]).toMatchObject({
+      role: "user",
+      content: "What was the verdict on TCS?",
+    });
+    expect(result.current.messages[1]).toMatchObject({
+      role: "assistant",
+      content: "AIRP rated TCS a BUY.",
+    });
+  });
+
+  it("openHistorySession() surfaces a fetch failure as sessionError without changing the active session", async () => {
+    const listResponse = {
+      items: [sessionResponse({ id: "session-a" })],
+      total_count: 1,
+      limit: 20,
+      offset: 0,
+      has_more: false,
+    };
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      const method = init?.method ?? "GET";
+      if (method === "POST") return jsonResponse(201, sessionResponse());
+      if (url.includes("/messages")) {
+        return jsonResponse(404, { detail: "No chat session found for the given session_id" });
+      }
+      return jsonResponse(200, listResponse);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+
+    const { result } = renderHook(() => useChatWidget(), {
+      wrapper: createWrapper("/dashboard", AUTHENTICATED),
+    });
+
+    act(() => {
+      result.current.toggleHistory();
+    });
+    await waitFor(() => expect(result.current.historySessions).toHaveLength(1));
+
+    act(() => {
+      result.current.openHistorySession("session-a");
+    });
+
+    await waitFor(() =>
+      expect(result.current.sessionError).toBe("No chat session found for the given session_id"),
+    );
+    expect(result.current.session).toBeNull();
+  });
+
+  it("startNewConversation() discards a resumed session and lets the current scope auto-create a fresh one", async () => {
+    const listResponse = {
+      items: [sessionResponse({ id: "session-a" })],
+      total_count: 1,
+      limit: 20,
+      offset: 0,
+      has_more: false,
+    };
+    const fetchMock = routedFetchMock({
+      listResponse,
+      messagesResponses: { "session-a": messagesResponse("session-a") },
+      createResponse: sessionResponse({ id: "session-fresh" }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+
+    const { result } = renderHook(() => useChatWidget(), {
+      wrapper: createWrapper("/dashboard", AUTHENTICATED),
+    });
+
+    act(() => {
+      result.current.toggle();
+      result.current.toggleHistory();
+    });
+    await waitFor(() => expect(result.current.historySessions).toHaveLength(1));
+
+    act(() => {
+      result.current.openHistorySession("session-a");
+    });
+    await waitFor(() => expect(result.current.session?.id).toBe("session-a"));
+    expect(result.current.messages).toHaveLength(2);
+
+    act(() => {
+      result.current.startNewConversation();
+    });
+
+    await waitFor(() => expect(result.current.session?.id).toBe("session-fresh"));
+    expect(result.current.messages).toHaveLength(0);
+  });
+});

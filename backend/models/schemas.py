@@ -59,6 +59,7 @@ __all__ = [
     "ChatSessionListResponse",
     "ChatMessageResponse",
     "ChatMessagesResponse",
+    "ChatMessagesTruncateResponse",
 ]
 
 # ---------------------------------------------------------------------------
@@ -1164,4 +1165,21 @@ class ChatMessagesResponse(BaseModel):
     offset: int = Field(ge=0, description="Number of rows skipped before this page")
     has_more: bool = Field(
         description="True when at least one further row exists beyond this page"
+    )
+
+
+class ChatMessagesTruncateResponse(BaseModel):
+    """
+    Body returned by DELETE /api/v1/chat/sessions/{id}/messages/{id} (B9).
+
+    Confirms how many rows were removed (the edited message itself plus
+    everything the session recorded after it) so the client knows the
+    truncation actually happened before it re-sends the edited text as
+    a fresh turn -- see backend/routers/chat_stream.py's module
+    docstring for the full edit-and-resend flow this backs.
+    """
+
+    deleted_count: int = Field(
+        ge=1,
+        description="Number of chat_messages rows deleted, including message_id itself",
     )

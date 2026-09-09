@@ -39,24 +39,33 @@ from __future__ import annotations
 
 import os
 from typing import Any, cast
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 os.environ.setdefault("ENVIRONMENT", "test")
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage  # noqa: E402
+from langchain_core.messages import (  # noqa: E402
+    AIMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
 import pytest  # noqa: E402
 
 from backend.services.chat_llm import (  # noqa: E402
     DEFAULT_RESPONSE_STYLE,
+    LIVE_DATA_TOOL_INSTRUCTION,
     RESPONSE_STYLE_INSTRUCTIONS,
     SYSTEM_PROMPT,
     ChatLLMError,
+    astream_chat,
+    astream_chat_from_messages,
     build_chat_messages,
     build_personalization_instruction,
     build_system_message,
     build_system_prompt,
     get_chat_llm,
     invoke_chat,
+    run_tool_calling_round,
 )
 
 # ---------------------------------------------------------------------------
@@ -71,6 +80,69 @@ def _make_llm(reply_text: str = "This is a grounded explanation.") -> MagicMock:
     response.content = reply_text
     mock_llm.invoke.return_value = response
     return mock_llm
+
+
+def _make_tool_bound_llm(
+    decision_response: Any,
+    stream_chunks: "list[Any] | None" = None,
+) -> MagicMock:
+    """
+    A MagicMock LLM shaped for run_tool_calling_round /
+    astream_chat_from_messages: ``.bind_tools(...)`` returns a second
+    mock whose ``.ainvoke(...)`` (AsyncMock) resolves to
+    ``decision_response``, and the base mock's own ``.astream(...)``
+    (an async generator) yields ``stream_chunks`` for the follow-up
+    streaming call.
+    """
+    bound = MagicMock()
+    bound.ainvoke = AsyncMock(return_value=decision_response)
+
+    mock_llm = MagicMock()
+    mock_llm.bind_tools = MagicMock(return_value=bound)
+
+    async def _astream(_messages: Any) -> Any:
+        for chunk in stream_chunks or []:
+            yield chunk
+
+    mock_llm.astream = MagicMock(side_effect=_astream)
+    return mock_llm
+
+
+def _text_response(text: str) -> MagicMock:
+    """A response object with .content=text and no tool_calls."""
+    response = MagicMock()
+    response.content = text
+    response.tool_calls = []
+    return response
+
+
+def _tool_call_response(*calls: dict[str, Any]) -> AIMessage:
+    """A real AIMessage carrying the given tool_calls (each a
+    {"name", "args", "id"} dict) -- a real AIMessage rather than a
+    MagicMock so it can be appended into a real message list and
+    inspected the same way production code does."""
+    return AIMessage(
+        content="",
+        tool_calls=[{**call, "type": "tool_call"} for call in calls],
+    )
+
+
+def _make_fake_tool(
+    name: str, result: Any = None, *, raises: Exception | None = None
+) -> MagicMock:
+    """A MagicMock LangChain tool with the given .name, whose .ainvoke(call)
+    either resolves to a ToolMessage(content=result) or raises."""
+    tool = MagicMock()
+    tool.name = name
+    if raises is not None:
+        tool.ainvoke = AsyncMock(side_effect=raises)
+    else:
+        tool.ainvoke = AsyncMock(
+            return_value=ToolMessage(
+                content=str(result), tool_call_id="call-1", name=name
+            )
+        )
+    return tool
 
 
 # ---------------------------------------------------------------------------
@@ -570,3 +642,267 @@ class TestPersonalizationNeverAffectsVerdicts:
             "risk appetite: conservative", "risk appetite: aggressive", 1
         )
         assert prompt_a_with_swap == prompt_b
+
+
+# ---------------------------------------------------------------------------
+# 6. tools_available (B9) -- LIVE_DATA_TOOL_INSTRUCTION only when true
+# ---------------------------------------------------------------------------
+
+
+class TestToolsAvailableInstruction:
+    def test_omitted_by_default(self) -> None:
+        prompt = build_system_prompt()
+        assert LIVE_DATA_TOOL_INSTRUCTION not in prompt
+
+    def test_included_when_tools_available_true(self) -> None:
+        prompt = build_system_prompt(tools_available=True)
+        assert LIVE_DATA_TOOL_INSTRUCTION in prompt
+
+    def test_build_chat_messages_forwards_tools_available(self) -> None:
+        messages = build_chat_messages([], "hi", tools_available=True)
+        assert LIVE_DATA_TOOL_INSTRUCTION in messages[0].content
+
+    def test_build_chat_messages_omits_by_default(self) -> None:
+        messages = build_chat_messages([], "hi")
+        assert LIVE_DATA_TOOL_INSTRUCTION not in messages[0].content
+
+
+# ---------------------------------------------------------------------------
+# 7. run_tool_calling_round (B9)
+# ---------------------------------------------------------------------------
+
+
+class TestRunToolCallingRound:
+    @pytest.mark.asyncio
+    async def test_no_tool_calls_returns_original_messages_and_text(self) -> None:
+        llm = _make_tool_bound_llm(
+            _text_response("No tool needed -- here's the answer.")
+        )
+        messages = build_chat_messages([], "What is a P/E ratio?")
+        tool = _make_fake_tool("fetch_ratios")
+
+        result_messages, text = await run_tool_calling_round(llm, [tool], messages)
+
+        assert text == "No tool needed -- here's the answer."
+        assert result_messages is messages
+        tool.ainvoke.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_binds_the_given_tools(self) -> None:
+        llm = _make_tool_bound_llm(_text_response("ok"))
+        tools = [_make_fake_tool("get_user_analyses"), _make_fake_tool("fetch_ratios")]
+        messages = build_chat_messages([], "hi")
+
+        await run_tool_calling_round(llm, tools, messages)
+
+        llm.bind_tools.assert_called_once_with(tools)
+
+    @pytest.mark.asyncio
+    async def test_single_tool_call_appends_ai_message_and_tool_result(self) -> None:
+        decision = _tool_call_response(
+            {"name": "get_user_analyses", "args": {"verdict": "BUY"}, "id": "call-1"}
+        )
+        llm = _make_tool_bound_llm(decision)
+        tool = _make_fake_tool("get_user_analyses", result='{"count": 2}')
+        messages = build_chat_messages([], "Which of my analyses are BUY?")
+
+        updated, text = await run_tool_calling_round(llm, [tool], messages)
+
+        assert text is None
+        assert len(updated) == len(messages) + 2
+        assert updated[-2] is decision
+        assert isinstance(updated[-1], ToolMessage)
+        assert updated[-1].content == '{"count": 2}'
+        tool.ainvoke.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_multiple_tool_calls_each_get_a_tool_message(self) -> None:
+        decision = _tool_call_response(
+            {"name": "get_user_analyses", "args": {}, "id": "call-1"},
+            {"name": "fetch_ratios", "args": {"ticker": "TCS.NS"}, "id": "call-2"},
+        )
+        llm = _make_tool_bound_llm(decision)
+        tools = [
+            _make_fake_tool("get_user_analyses", result="analyses-result"),
+            _make_fake_tool("fetch_ratios", result="ratios-result"),
+        ]
+        messages = build_chat_messages([], "hi")
+
+        updated, text = await run_tool_calling_round(llm, tools, messages)
+
+        assert text is None
+        tool_messages = [m for m in updated if isinstance(m, ToolMessage)]
+        assert len(tool_messages) == 2
+        assert {m.content for m in tool_messages} == {
+            "analyses-result",
+            "ratios-result",
+        }
+
+    @pytest.mark.asyncio
+    async def test_unknown_tool_name_produces_an_error_tool_message_not_a_crash(
+        self,
+    ) -> None:
+        decision = _tool_call_response(
+            {"name": "not_a_real_tool", "args": {}, "id": "call-1"}
+        )
+        llm = _make_tool_bound_llm(decision)
+        tool = _make_fake_tool("get_user_analyses")
+        messages = build_chat_messages([], "hi")
+
+        updated, text = await run_tool_calling_round(llm, [tool], messages)
+
+        assert text is None
+        tool_message = updated[-1]
+        assert isinstance(tool_message, ToolMessage)
+        assert "unknown_tool" in tool_message.content
+        tool.ainvoke.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_tool_that_raises_produces_an_error_tool_message_not_a_crash(
+        self,
+    ) -> None:
+        decision = _tool_call_response(
+            {"name": "get_user_analyses", "args": {}, "id": "call-1"}
+        )
+        llm = _make_tool_bound_llm(decision)
+        tool = _make_fake_tool("get_user_analyses", raises=RuntimeError("DB down"))
+        messages = build_chat_messages([], "hi")
+
+        updated, text = await run_tool_calling_round(llm, [tool], messages)
+
+        assert text is None
+        tool_message = updated[-1]
+        assert isinstance(tool_message, ToolMessage)
+        assert "tool_failed" in tool_message.content
+        assert "DB down" in tool_message.content
+
+    @pytest.mark.asyncio
+    async def test_decision_call_failure_propagates(self) -> None:
+        llm = MagicMock()
+        bound = MagicMock()
+        bound.ainvoke = AsyncMock(side_effect=RuntimeError("provider down"))
+        llm.bind_tools = MagicMock(return_value=bound)
+        tool = _make_fake_tool("get_user_analyses")
+        messages = build_chat_messages([], "hi")
+
+        with pytest.raises(RuntimeError, match="provider down"):
+            await run_tool_calling_round(llm, [tool], messages)
+
+
+# ---------------------------------------------------------------------------
+# 8. astream_chat_from_messages (B9)
+# ---------------------------------------------------------------------------
+
+
+class TestAstreamChatFromMessages:
+    @pytest.mark.asyncio
+    async def test_yields_each_chunk_in_order(self) -> None:
+        chunks = [_text_response("Hello "), _text_response("world.")]
+        llm = _make_tool_bound_llm(_text_response("unused"), stream_chunks=chunks)
+        messages = build_chat_messages([], "hi")
+
+        tokens = [t async for t in astream_chat_from_messages(messages, llm=llm)]
+
+        assert tokens == ["Hello ", "world."]
+
+    @pytest.mark.asyncio
+    async def test_skips_empty_chunks(self) -> None:
+        chunks = [_text_response(""), _text_response("Real content.")]
+        llm = _make_tool_bound_llm(_text_response("unused"), stream_chunks=chunks)
+        messages = build_chat_messages([], "hi")
+
+        tokens = [t async for t in astream_chat_from_messages(messages, llm=llm)]
+
+        assert tokens == ["Real content."]
+
+    @pytest.mark.asyncio
+    async def test_zero_chunks_raises_chat_llm_error(self) -> None:
+        llm = _make_tool_bound_llm(_text_response("unused"), stream_chunks=[])
+        messages = build_chat_messages([], "hi")
+
+        with pytest.raises(ChatLLMError):
+            async for _ in astream_chat_from_messages(messages, llm=llm):
+                pass
+
+    @pytest.mark.asyncio
+    async def test_streaming_failure_wrapped_in_chat_llm_error(self) -> None:
+        llm = MagicMock()
+
+        async def _boom(_messages: Any) -> Any:
+            raise RuntimeError("stream broke")
+            yield  # pragma: no cover -- unreachable, makes this an async generator
+
+        llm.astream = MagicMock(side_effect=_boom)
+        messages = build_chat_messages([], "hi")
+
+        with pytest.raises(ChatLLMError):
+            async for _ in astream_chat_from_messages(messages, llm=llm):
+                pass
+
+
+# ---------------------------------------------------------------------------
+# 9. astream_chat with tools (B9) -- end-to-end through the public entry point
+# ---------------------------------------------------------------------------
+
+
+class TestAstreamChatWithTools:
+    @pytest.mark.asyncio
+    async def test_no_tools_preserves_pre_b9_streaming_behaviour(self) -> None:
+        chunks = [_text_response("Plain "), _text_response("streamed reply.")]
+        llm = _make_tool_bound_llm(_text_response("unused"), stream_chunks=chunks)
+
+        tokens = [t async for t in astream_chat([], "hi", llm=llm)]
+
+        assert tokens == ["Plain ", "streamed reply."]
+        llm.bind_tools.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_tool_call_round_then_streams_the_final_answer(self) -> None:
+        decision = _tool_call_response(
+            {"name": "get_user_analyses", "args": {"verdict": "BUY"}, "id": "call-1"}
+        )
+        final_chunks = [_text_response("You have "), _text_response("3 BUY calls.")]
+        llm = _make_tool_bound_llm(decision, stream_chunks=final_chunks)
+        tool = _make_fake_tool("get_user_analyses", result='{"count": 3}')
+
+        tokens = [
+            t
+            async for t in astream_chat(
+                [], "Which of my analyses are BUY?", llm=llm, tools=[tool]
+            )
+        ]
+
+        assert tokens == ["You have ", "3 BUY calls."]
+        tool.ainvoke.assert_called_once()
+        # The follow-up streaming call must NOT re-bind tools -- only the
+        # one decision call does.
+        assert llm.bind_tools.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_no_tool_needed_yields_the_decision_calls_own_text_as_one_chunk(
+        self,
+    ) -> None:
+        llm = _make_tool_bound_llm(
+            _text_response("A P/E ratio compares price to earnings.")
+        )
+        tool = _make_fake_tool("fetch_ratios")
+
+        tokens = [
+            t
+            async for t in astream_chat(
+                [], "What is a P/E ratio?", llm=llm, tools=[tool]
+            )
+        ]
+
+        assert tokens == ["A P/E ratio compares price to earnings."]
+        tool.ainvoke.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_empty_tools_list_behaves_like_no_tools(self) -> None:
+        chunks = [_text_response("reply")]
+        llm = _make_tool_bound_llm(_text_response("unused"), stream_chunks=chunks)
+
+        tokens = [t async for t in astream_chat([], "hi", llm=llm, tools=[])]
+
+        assert tokens == ["reply"]
+        llm.bind_tools.assert_not_called()

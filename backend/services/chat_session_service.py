@@ -108,6 +108,10 @@ Public API
         create_chat_session,
         list_chat_sessions,
         get_chat_session_messages,
+        append_chat_message,
+        ChatMessageNotFoundError,
+        ChatMessageNotEditableError,
+        delete_chat_messages_from,
     )
 """
 
@@ -117,7 +121,7 @@ import logging
 from typing import Any, Optional
 import uuid
 
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models.orm import ChatMessage, ChatSession
@@ -142,6 +146,9 @@ __all__ = [
     "ChatSessionStreamInfo",
     "get_chat_session_stream_info",
     "append_chat_message",
+    "ChatMessageNotFoundError",
+    "ChatMessageNotEditableError",
+    "delete_chat_messages_from",
 ]
 
 #: Default / maximum page size for GET /api/v1/chat/sessions. A user's
@@ -184,6 +191,52 @@ class AnalysisNotFoundError(Exception):
         super().__init__(
             f"No analysis found for analysis_id={analysis_id} "
             "(or it belongs to a different user)"
+        )
+
+
+class ChatMessageNotFoundError(Exception):
+    """
+    Raised by ``delete_chat_messages_from`` (B9) when ``message_id`` is
+    not a message of ``session_id`` -- distinct from that function
+    returning ``None`` (session itself not found/not owned), the same
+    404-vs-404-but-more-specific split ``get_chat_session_messages``
+    already has no need for (a whole session either exists for the
+    caller or does not), but a single session can have many messages,
+    so "session is yours, message_id just is not one of its rows" is a
+    genuinely different, independently loggable condition worth its own
+    type even though the router maps both to 404.
+    """
+
+    def __init__(self, session_id: uuid.UUID, message_id: uuid.UUID) -> None:
+        self.session_id = session_id
+        self.message_id = message_id
+        super().__init__(
+            f"No message found for message_id={message_id} in session_id={session_id}"
+        )
+
+
+class ChatMessageNotEditableError(Exception):
+    """
+    Raised by ``delete_chat_messages_from`` (B9) when ``message_id``
+    does not have ``role='user'``.
+
+    The edit-and-resend flow this function backs (see its own
+    docstring) only ever makes sense anchored on something the PERSON
+    said -- editing what the AIRP Assistant itself said has no
+    "re-run from here with different input" meaning the way editing
+    your own question does, and truncating from an assistant/system/
+    tool row would silently delete the person's own subsequent replies
+    too. Kept distinct from ``ChatMessageNotFoundError`` (a 404-shaped
+    condition) since the router maps this one to 400/422 instead --
+    the message unambiguously exists, the request is simply invalid.
+    """
+
+    def __init__(self, message_id: uuid.UUID, role: str) -> None:
+        self.message_id = message_id
+        self.role = role
+        super().__init__(
+            f"message_id={message_id} has role={role!r}; "
+            "only 'user' messages can be edited"
         )
 
 
@@ -675,3 +728,124 @@ async def append_chat_message(
         message.id,
     )
     return message
+
+
+# ---------------------------------------------------------------------------
+# delete_chat_messages_from (DELETE /api/v1/chat/sessions/{id}/messages/{id}, B9)
+# ---------------------------------------------------------------------------
+
+
+async def delete_chat_messages_from(
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    session_id: uuid.UUID,
+    message_id: uuid.UUID,
+) -> Optional[int]:
+    """
+    Delete ``message_id`` and every message that came after it (by
+    ``created_at``) within ``session_id`` -- the server-side half of
+    B9's "edit a past message" affordance (see
+    ``backend/routers/chat_stream.py``'s module docstring, "Why
+    'start' now carries the user message's id", for the full flow).
+
+    Deliberately does NOT regenerate a reply itself: the client is
+    expected to call this endpoint first, then re-send the edited text
+    over the existing ``WS /api/v1/chat/{session_id}/stream`` (T-104)
+    connection exactly like any other message -- that turn loop
+    already does everything a "new" turn needs (persist, stream,
+    persist the reply), so there is no separate regeneration code path
+    to keep in sync with it. This function's only job is making room:
+    remove the stale exchange so the fresh turn is not appended after
+    an outdated one.
+
+    Why ``created_at >=``, not ``id`` order
+    ------------------------------------------------------------------------
+    ``chat_messages`` has no monotonic sequence column -- transcript
+    order is defined by ``created_at`` everywhere else in this module
+    (``get_chat_session_messages``'s own docstring makes the identical
+    choice), and ``id`` is a random UUID with no temporal meaning. Two
+    messages in the same session sharing an IDENTICAL ``created_at`` is
+    not a realistic case in this codebase's actual call pattern: a
+    user turn and its assistant reply are always persisted from TWO
+    SEPARATE ``AsyncSessionLocal()`` blocks (see
+    ``backend/routers/chat_stream.py``'s own "Why a memo-scoped
+    session's grounded context is loaded once per turn" section) --
+    i.e. two separate transactions, each stamped by Postgres's
+    per-transaction ``now()`` -- so consecutive rows are reliably
+    ordered by wall-clock time in practice, the same assumption this
+    module's read path already depends on.
+
+    Args:
+        session:    Active AsyncSession for this request.
+        user_id:    UUID of the authenticated caller.
+        session_id: UUID of the chat session ``message_id`` claims to
+                    belong to.
+        message_id: UUID of the message to edit-from -- this row AND
+                    every later row in the same session are deleted.
+
+    Returns:
+        The number of rows deleted (at least 1 -- ``message_id`` itself
+        always counts), or ``None`` when ``session_id`` does not exist
+        or belongs to a different user (same non-enumeration contract
+        as ``get_chat_session_messages``).
+
+    Raises:
+        ChatMessageNotFoundError:   ``message_id`` is not a message of
+                                     ``session_id``.
+        ChatMessageNotEditableError: ``message_id`` does not have
+                                     ``role='user'``.
+    """
+    owner_result = await session.execute(
+        select(ChatSession.user_id).where(ChatSession.id == session_id)
+    )
+    owner_row = owner_result.scalar_one_or_none()
+
+    if owner_row is None:
+        logger.debug(
+            "delete_chat_messages_from: no chat_sessions row for session_id=%s",
+            session_id,
+        )
+        return None
+
+    if uuid.UUID(str(owner_row)) != user_id:
+        logger.warning(
+            "delete_chat_messages_from: session_id=%s belongs to a "
+            "different user -- returning not-found to requester",
+            session_id,
+        )
+        return None
+
+    target_result = await session.execute(
+        select(ChatMessage.role, ChatMessage.created_at).where(
+            ChatMessage.id == message_id, ChatMessage.session_id == session_id
+        )
+    )
+    target_row = target_result.first()
+    if target_row is None:
+        raise ChatMessageNotFoundError(session_id, message_id)
+
+    role, created_at = target_row
+    if role != "user":
+        raise ChatMessageNotEditableError(message_id, role)
+
+    delete_result = await session.execute(
+        delete(ChatMessage).where(
+            ChatMessage.session_id == session_id,
+            ChatMessage.created_at >= created_at,
+        )
+    )
+    await session.execute(
+        update(ChatSession)
+        .where(ChatSession.id == session_id)
+        .values(updated_at=func.now())
+    )
+    await session.commit()
+
+    deleted_count = delete_result.rowcount or 0
+    logger.info(
+        "delete_chat_messages_from: session_id=%s message_id=%s deleted_count=%d",
+        session_id,
+        message_id,
+        deleted_count,
+    )
+    return deleted_count

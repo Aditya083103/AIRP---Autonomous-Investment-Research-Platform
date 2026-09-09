@@ -72,12 +72,15 @@ from backend.services.analysis import (  # noqa: E402
 from backend.services.chat_session_service import (  # noqa: E402
     AnalysisNotFoundError,
     ChatMessageEntry,
+    ChatMessageNotEditableError,
+    ChatMessageNotFoundError,
     ChatMessagesPage,
     ChatSessionPage,
     ChatSessionStreamInfo,
     ChatSessionSummary,
     append_chat_message,
     create_chat_session,
+    delete_chat_messages_from,
     get_chat_session_messages,
     get_chat_session_stream_info,
     list_chat_sessions,
@@ -690,3 +693,160 @@ class TestAppendChatMessage:
         )
 
         assert session.execute.await_count == 1
+
+
+# ---------------------------------------------------------------------------
+# delete_chat_messages_from (B9 -- edit-and-resend's truncate step)
+# ---------------------------------------------------------------------------
+
+
+def _make_delete_session(
+    owner_id: Optional[uuid.UUID],
+    target_row: Optional[tuple[str, datetime]],
+    deleted_rowcount: Optional[int] = None,
+) -> AsyncMock:
+    """
+    AsyncSession mock for delete_chat_messages_from's up-to-four-call
+    execute() sequence: owner lookup, target-message lookup, the
+    DELETE itself, then the UPDATE chat_sessions.updated_at touch --
+    mirroring _make_count_and_page_session's own "one MagicMock per
+    execute() call, wired via side_effect" approach for a different
+    call sequence.
+    """
+    owner_result = MagicMock()
+    owner_result.scalar_one_or_none = MagicMock(return_value=owner_id)
+
+    target_result = MagicMock()
+    target_result.first = MagicMock(return_value=target_row)
+
+    delete_result = MagicMock()
+    delete_result.rowcount = deleted_rowcount
+
+    update_result = MagicMock()
+
+    session = AsyncMock()
+    session.execute = AsyncMock(
+        side_effect=[owner_result, target_result, delete_result, update_result]
+    )
+    session.commit = AsyncMock()
+    return session
+
+
+class TestDeleteChatMessagesFrom:
+    @pytest.mark.asyncio
+    async def test_returns_none_when_session_does_not_exist(self) -> None:
+        session = AsyncMock()
+        owner_result = MagicMock()
+        owner_result.scalar_one_or_none = MagicMock(return_value=None)
+        session.execute = AsyncMock(return_value=owner_result)
+
+        result = await delete_chat_messages_from(
+            session,
+            user_id=uuid.uuid4(),
+            session_id=uuid.uuid4(),
+            message_id=uuid.uuid4(),
+        )
+
+        assert result is None
+        # Only the owner lookup ran -- no message/delete/update queries
+        # for a session that does not exist.
+        assert session.execute.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_session_belongs_to_a_different_user(self) -> None:
+        owner_id = uuid.uuid4()
+        requester_id = uuid.uuid4()
+        session = AsyncMock()
+        owner_result = MagicMock()
+        owner_result.scalar_one_or_none = MagicMock(return_value=owner_id)
+        session.execute = AsyncMock(return_value=owner_result)
+
+        result = await delete_chat_messages_from(
+            session,
+            user_id=requester_id,
+            session_id=uuid.uuid4(),
+            message_id=uuid.uuid4(),
+        )
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_raises_not_found_when_message_id_is_not_in_the_session(self) -> None:
+        user_id = uuid.uuid4()
+        session = _make_delete_session(owner_id=user_id, target_row=None)
+
+        with pytest.raises(ChatMessageNotFoundError):
+            await delete_chat_messages_from(
+                session,
+                user_id=user_id,
+                session_id=uuid.uuid4(),
+                message_id=uuid.uuid4(),
+            )
+
+        # No DELETE/UPDATE ran -- only the owner and target lookups.
+        assert session.execute.await_count == 2
+        session.commit.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_raises_not_editable_for_an_assistant_message(self) -> None:
+        user_id = uuid.uuid4()
+        session = _make_delete_session(owner_id=user_id, target_row=("assistant", _NOW))
+
+        with pytest.raises(ChatMessageNotEditableError) as excinfo:
+            await delete_chat_messages_from(
+                session,
+                user_id=user_id,
+                session_id=uuid.uuid4(),
+                message_id=uuid.uuid4(),
+            )
+
+        assert excinfo.value.role == "assistant"
+        session.commit.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_raises_not_editable_for_a_system_message(self) -> None:
+        user_id = uuid.uuid4()
+        session = _make_delete_session(owner_id=user_id, target_row=("system", _NOW))
+
+        with pytest.raises(ChatMessageNotEditableError):
+            await delete_chat_messages_from(
+                session,
+                user_id=user_id,
+                session_id=uuid.uuid4(),
+                message_id=uuid.uuid4(),
+            )
+
+    @pytest.mark.asyncio
+    async def test_deletes_target_and_later_messages_for_a_user_message(self) -> None:
+        user_id = uuid.uuid4()
+        session_id = uuid.uuid4()
+        message_id = uuid.uuid4()
+        session = _make_delete_session(
+            owner_id=user_id, target_row=("user", _NOW), deleted_rowcount=3
+        )
+
+        result = await delete_chat_messages_from(
+            session, user_id=user_id, session_id=session_id, message_id=message_id
+        )
+
+        assert result == 3
+        # owner lookup, target lookup, DELETE, UPDATE chat_sessions.
+        assert session.execute.await_count == 4
+        session.commit.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_deleted_count_falls_back_to_zero_when_rowcount_is_none(self) -> None:
+        """Some DB drivers report rowcount=None for certain statement
+        shapes -- deleted_count must degrade to 0 rather than raise or
+        return None (which this function's own return type already
+        reserves for "session not found")."""
+        user_id = uuid.uuid4()
+        session = _make_delete_session(
+            owner_id=user_id, target_row=("user", _NOW), deleted_rowcount=None
+        )
+
+        result = await delete_chat_messages_from(
+            session, user_id=user_id, session_id=uuid.uuid4(), message_id=uuid.uuid4()
+        )
+
+        assert result == 0
