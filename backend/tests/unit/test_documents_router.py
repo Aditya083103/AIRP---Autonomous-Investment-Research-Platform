@@ -46,8 +46,6 @@ from typing import Any, cast
 from unittest.mock import MagicMock, patch
 import uuid
 
-import chromadb
-from chromadb.config import Settings as _ChromaSettings
 from fastapi import FastAPI
 import httpx
 import pytest
@@ -59,6 +57,10 @@ from backend.dependencies.auth import get_current_user
 from backend.dependencies.common import get_settings_dependency
 from backend.main import create_app
 from backend.models.orm import Company, User
+from backend.tests.unit._chroma_test_support import (
+    SHARED_RAW_CLIENT as _SHARED_RAW_CLIENT,
+    MockEmbeddingFunction as _MockEF,
+)
 from backend.tools.earnings_transcript import PDFExtractionError
 
 _SAMPLE_TEXT = (
@@ -146,26 +148,16 @@ def _make_session_override(shared: _FakeDocumentsSession) -> Any:
 
 
 # ---------------------------------------------------------------------------
-# Shared ChromaDB test infrastructure -- mirrors test_chroma_client.py's
-# _MockEF / shared EphemeralClient pattern.
+# Shared ChromaDB test infrastructure -- _MockEF / _SHARED_RAW_CLIENT are
+# imported from _chroma_test_support.py (Section C audit finding, unit 9),
+# not defined here: that module is the ONLY place in the whole test
+# process allowed to call chromadb.EphemeralClient(), since its
+# SharedSystemClient is a process-wide singleton keyed on the identifier
+# "ephemeral" and a second, value-identical-but-distinct Settings object
+# created here would crash pytest collection for the entire suite the
+# moment this file and test_chroma_client.py/test_documents_service.py
+# were collected in the same process. See that module's own docstring.
 # ---------------------------------------------------------------------------
-
-
-class _MockEF:
-    """Fake embedding function satisfying ChromaDB's __call__ signature
-    check, without loading any real sentence-transformer model."""
-
-    def __call__(self, input: list[str]) -> list[list[float]]:  # noqa: A002
-        return [[0.1] * 384 for _ in input]
-
-
-_TEST_CHROMA_SETTINGS = _ChromaSettings(
-    is_persistent=False,
-    allow_reset=True,
-    anonymized_telemetry=False,
-)
-
-_SHARED_RAW_CLIENT: Any = chromadb.EphemeralClient(settings=_TEST_CHROMA_SETTINGS)
 
 
 def _make_chroma_client() -> ChromaClient:

@@ -100,6 +100,56 @@ def _reset_in_flight_analyses_counter() -> Generator[None, None, None]:
     analysis_module._in_flight_analyses = 0
 
 
+@pytest.fixture(autouse=True)
+def _reset_redis_client_state() -> Generator[None, None, None]:
+    """
+    Reset backend.db.redis_client's module-level connection state
+    (Section C audit finding, unit 9) before and after every test.
+
+    backend.db.redis_client._FORCE_DISABLE is computed exactly once, at
+    the module's raw Python import time, as `_is_test_environment()` --
+    which reads os.getenv("ENVIRONMENT"). Whichever backend test file
+    happens to be the FIRST in the whole pytest process to transitively
+    import backend.db.redis_client (a near-universal dependency, pulled
+    in via backend.config/backend.main/most agents and tools) freezes
+    that value for the rest of the process. Every test file in this repo
+    sets ENVIRONMENT=test itself via `os.environ.setdefault(...)` at its
+    own module top, but import order during collection means that
+    setdefault call is not guaranteed to have already run in some OTHER,
+    earlier-collected file by the time that file's own import chain first
+    pulls in redis_client -- if it hasn't, _FORCE_DISABLE freezes as
+    False (the real-process default), and get_redis_client() then
+    attempts (and, in this environment, succeeds at) a REAL connection to
+    whatever REDIS_URL happens to be configured, memoising that live
+    client at module level for the rest of the process. Every later test
+    that calls get_client()/cache_get_json()/cache_set_json() -- directly
+    or via the @cached decorator inside backend.tools.* fetch functions --
+    then silently talks to a real Redis server instead of the hermetic
+    None the "under test env" contract promises, until something calls
+    reset_redis_client() (test_redis_client.py's own local autouse
+    fixture does, but only protects tests within that one file, which
+    happens to collect alphabetically after test_cache.py/
+    test_financials.py/test_news.py -- exactly the three files this bug
+    was observed breaking).
+
+    reset_redis_client() already recomputes _FORCE_DISABLE from
+    _is_test_environment() fresh rather than reusing the frozen value --
+    calling it here, in a global autouse fixture that runs after
+    collection has fully finished (by which point every test file's own
+    os.environ.setdefault("ENVIRONMENT", "test") has unconditionally
+    already run), guarantees the correct value regardless of which file
+    happened to import redis_client first during collection. Mirrors
+    _reset_shared_ticker_cache's and
+    _reset_in_flight_analyses_counter's identical rationale for their own
+    module-level singletons above.
+    """
+    from backend.db.redis_client import reset_redis_client
+
+    reset_redis_client()
+    yield
+    reset_redis_client()
+
+
 # ── Settings Fixture ──────────────────────────────────────────────────────────
 
 
