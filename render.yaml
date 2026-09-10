@@ -142,6 +142,33 @@ services:
         # endpoint entirely (fails closed by design, not a startup error).
         sync: false
 
+      # -- 7b. Password reset (B6) ------------------------------------------
+      - key: FRONTEND_BASE_URL
+        # Real deployed Vercel origin (T-075) -- used to build the link in
+        # a password-reset email. Left as the dev default here on purpose;
+        # MUST be overridden once the Vercel URL is known, the same way
+        # CORS_ORIGINS above is.
+        value: http://localhost:3000
+      - key: PASSWORD_RESET_TOKEN_EXPIRE_MINUTES
+        value: "30"
+      - key: SMTP_HOST
+        # Empty disables real email sending -- backend/routers/auth.py then
+        # logs the reset link instead, but ONLY outside production (see its
+        # own docstring); in production with SMTP_HOST unset, password
+        # reset silently has no way to reach the user at all. Set this
+        # (and SMTP_FROM_EMAIL) for a working password-reset flow.
+        sync: false
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_USERNAME
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: SMTP_FROM_EMAIL
+        sync: false
+      - key: SMTP_USE_TLS
+        value: "true"
+
       # -- 8. External Data APIs --------------------------------------------
       - key: NEWS_API_KEY
         sync: false
