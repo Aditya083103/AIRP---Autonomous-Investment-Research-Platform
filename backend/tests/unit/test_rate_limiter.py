@@ -10,6 +10,7 @@ Test strategy:
   3. RateLimitMiddleware  -- 429 over the limit, /health always exempt
 """
 
+from contextlib import AbstractContextManager
 import os
 import threading
 import time
@@ -204,15 +205,24 @@ class TestConcurrencyThrottle:
         private state: acquiring exactly that many slots must succeed,
         and each acquired slot is independently releasable.
         """
-        acquired: list[object] = []
+        # Typed precisely as what yfinance_throttle.acquire() (a
+        # @contextmanager-decorated method returning Iterator[None])
+        # actually returns, rather than the looser `list[object]`. The
+        # release loop below uses a differently-named variable
+        # (`released_ctx`, not `ctx`) on purpose -- mypy narrows a
+        # variable's type from its first assignment regardless of a
+        # containing list's declared element type, so reusing `ctx` for
+        # both loops left mypy seeing two incompatible types for the
+        # same name (CI: "Incompatible types in assignment").
+        acquired: list[AbstractContextManager[None]] = []
         try:
             for _ in range(YFINANCE_MAX_CONCURRENT_REQUESTS):
                 ctx = yfinance_throttle.acquire()
                 ctx.__enter__()
                 acquired.append(ctx)
         finally:
-            for ctx in acquired:
-                ctx.__exit__(None, None, None)
+            for released_ctx in acquired:
+                released_ctx.__exit__(None, None, None)
 
 
 if __name__ == "__main__":  # pragma: no cover

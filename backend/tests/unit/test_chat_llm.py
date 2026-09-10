@@ -49,6 +49,7 @@ from langchain_core.messages import (  # noqa: E402
     SystemMessage,
     ToolMessage,
 )
+from langchain_core.tools import BaseTool  # noqa: E402
 import pytest  # noqa: E402
 
 from backend.services.chat_llm import (  # noqa: E402
@@ -693,7 +694,17 @@ class TestRunToolCallingRound:
         tools = [_make_fake_tool("get_user_analyses"), _make_fake_tool("fetch_ratios")]
         messages = build_chat_messages([], "hi")
 
-        await run_tool_calling_round(llm, tools, messages)
+        # tools is deliberately list[MagicMock] (_make_fake_tool's own
+        # documented return type) standing in for list[BaseTool] -- a
+        # single literal-list argument (`[tool]`, used at every other
+        # call site in this file) gets bidirectionally inferred against
+        # run_tool_calling_round's own `tools: list[BaseTool]` parameter
+        # and passes without complaint, but a pre-declared variable like
+        # this one is independently inferred as list[MagicMock] first,
+        # which list's invariance then rejects outright. cast() documents
+        # the intentional duck-typing precisely, scoped to this one
+        # argument, rather than suppressing the whole line.
+        await run_tool_calling_round(llm, cast(list[BaseTool], tools), messages)
 
         llm.bind_tools.assert_called_once_with(tools)
 
@@ -728,7 +739,12 @@ class TestRunToolCallingRound:
         ]
         messages = build_chat_messages([], "hi")
 
-        updated, text = await run_tool_calling_round(llm, tools, messages)
+        # See test_binds_the_given_tools's identical cast() for why this
+        # pre-declared `tools` variable (list[MagicMock]) needs it where
+        # every other call site's inline `[tool]` literal does not.
+        updated, text = await run_tool_calling_round(
+            llm, cast(list[BaseTool], tools), messages
+        )
 
         assert text is None
         tool_messages = [m for m in updated if isinstance(m, ToolMessage)]

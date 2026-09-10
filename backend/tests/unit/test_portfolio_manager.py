@@ -148,6 +148,14 @@ _MACRO_UNFAVOURABLE: dict[str, Any] = {
     "summary": "Macro backdrop is deteriorating for cyclical sectors.",
 }
 
+# A typed, named stand-in for "no macro signal" -- used instead of a bare
+# `{}` literal so every column in a parametrised call site is a
+# consistently-typed dict[str, Any], matching every other agent's fixture
+# above. A bare `{}` repeated across multiple rows of the same unpacked
+# tuple loop gives mypy nothing to infer the loop variable's element type
+# from (CI: "Need type annotation for 'macro'").
+_MACRO_NEUTRAL: dict[str, Any] = {}
+
 _RISK_LOW: dict[str, Any] = {
     "risk_score": 3,
     "governance_risk": 2,
@@ -678,7 +686,7 @@ class TestDetermineVerdict:
                 _FUNDAMENTAL_STRONG,
                 _TECHNICAL_BUY_STRONG,
                 _SENTIMENT_POSITIVE,
-                {},
+                _MACRO_NEUTRAL,
                 _RISK_LOW,
                 _CONTRARIAN_MILD,
                 _VALUATION_UNDERVALUED,
@@ -687,12 +695,12 @@ class TestDetermineVerdict:
                 _FUNDAMENTAL_WEAK,
                 _TECHNICAL_SELL_STRONG,
                 _SENTIMENT_NEGATIVE,
-                {},
+                _MACRO_NEUTRAL,
                 _RISK_HIGH,
                 _CONTRARIAN_STRONG,
                 _VALUATION_OVERVALUED,
             ),
-            ({}, {}, {}, {}, {}, {}, {}),
+            ({}, {}, {}, _MACRO_NEUTRAL, {}, {}, {}),
         ]:
             verdict = _determine_verdict(
                 fund, tech, sent, macro, risk, contra, val, critical_flags=[]

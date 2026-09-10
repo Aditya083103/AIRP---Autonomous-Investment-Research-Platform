@@ -502,7 +502,15 @@ class TestStockPriceModelValidation:
 @pytest.fixture(autouse=True)
 def _no_retry_sleep() -> None:
     """Eliminate tenacity's real back-off sleep for this module's tests."""
-    market_data._call_with_retry.retry.sleep = lambda seconds: None
+    # tenacity's @retry decorator genuinely attaches a `.retry`
+    # (BaseRetrying) attribute to the wrapped callable at runtime -- this
+    # is tenacity's own documented pattern for overriding back-off sleep
+    # in tests -- but its type stubs declare the decorator's return type
+    # as a bare Callable, which has no `.retry` attribute statically.
+    # Not fixable from our side: the attribute is real, only mypy's view
+    # of tenacity's decorator type is incomplete.
+    retrying = market_data._call_with_retry.retry  # type: ignore[attr-defined]
+    retrying.sleep = lambda seconds: None
 
 
 class TestFetchFromYfinanceRetryRecovery:
