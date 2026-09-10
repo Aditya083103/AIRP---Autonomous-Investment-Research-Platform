@@ -389,6 +389,23 @@ class _FakeFullSession:
             )
         if user.is_active is None:
             user.is_active = True
+        # Audit finding (Section C, unit 9): B6 added users.token_version
+        # (server_default '0') and test_auth_router.py's own
+        # _FakeAsyncSession.commit() was updated to simulate that
+        # default at the time -- but this file's _FakeFullSession is a
+        # SEPARATE fake (see this class's own module-docstring note on
+        # why: it merges User-table ops with Company/Analysis ORM ops
+        # and raw-SQL query overrides no single existing fake covered),
+        # and was never given the same fix. Without it, a freshly
+        # "inserted" User keeps token_version=None, create_access_token
+        # embeds a literal `token_version: null` claim, TokenPayload's
+        # `token_version: int = Field(default=0, ...)` rejects null for
+        # a strict int (the default only applies when the key is
+        # ABSENT, not when it is present-and-null), decode_access_token
+        # raises InvalidTokenError, and get_current_user 401s on every
+        # single authenticated request in this entire file.
+        if user.token_version is None:
+            user.token_version = 0
         now = datetime.now(timezone.utc)
         if user.created_at is None:
             user.created_at = now

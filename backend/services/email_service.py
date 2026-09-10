@@ -37,8 +37,6 @@ Public API
     from backend.services.email_service import send_password_reset_email
 """
 
-from __future__ import annotations
-
 import asyncio
 from email.message import EmailMessage
 import logging

@@ -50,8 +50,6 @@ Public API
     )
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 
 from backend.data.nse_company_universe import NSE_COMPANY_UNIVERSE, CompanyEntry
