@@ -59,7 +59,30 @@ WORKDIR /app
 # pytest/...) is deliberately never installed in this image; those run
 # in CI on the host runner, not inside the shipped container.
 COPY backend/requirements.txt backend/requirements.txt
+
+# Pre-install a CPU-only torch build BEFORE the requirements.txt install
+# below (found during a full docker-compose smoke test of this image).
+# torch is not a direct dependency here -- it is pulled in transitively
+# by sentence-transformers (line ~116), and requirements.txt never pins
+# it. Left to pip's default resolver, that means torch resolves from
+# PyPI's default (GPU-enabled) build, which drags in ~1 GB+ of NVIDIA
+# CUDA runtime libraries (cudnn, cublas, cufft, curand, ...) that this
+# service can never use -- there is no GPU in this container on any of
+# its actual targets (local Docker dev, Render). That's pure build-time
+# and image-size waste, not a correctness bug, but a substantial one:
+# it roughly doubled this stage's build time and image size for a
+# dependency the app never exercises. Installing the CPU-only wheel
+# first satisfies sentence-transformers' (loose, unpinned) torch
+# requirement before pip ever gets a chance to resolve the GPU variant,
+# so the subsequent `pip install -r requirements.txt` sees torch already
+# present and leaves it alone. Version pinned to exactly the version
+# PyPI's own default resolver picks for sentence-transformers==3.0.1's
+# constraint as of this fix, matching every other line in
+# requirements.txt's "always pin exact versions" convention -- bump this
+# alongside sentence-transformers if its own torch floor ever moves past
+# it.
 RUN pip install --upgrade pip \
+    && pip install torch==2.14.0+cpu --index-url https://download.pytorch.org/whl/cpu \
     && pip install -r backend/requirements.txt
 
 
