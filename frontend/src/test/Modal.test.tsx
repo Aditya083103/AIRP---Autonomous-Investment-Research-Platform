@@ -3,8 +3,9 @@
 // responds to all three documented dismiss paths -- Escape key, backdrop
 // click, and the built-in close button -- each calling the same onClose.
 
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import { Modal } from "@/components/ui/Modal";
@@ -90,5 +91,93 @@ describe("Modal", () => {
     await user.click(screen.getByText("Body content"));
 
     expect(handleClose).not.toHaveBeenCalled();
+  });
+});
+
+describe("Modal focus management (Section C audit finding, deferred from unit 9)", () => {
+  it("restores focus to the element that opened the dialog after it closes", async () => {
+    const user = userEvent.setup();
+
+    function Harness(): JSX.Element {
+      const [isOpen, setIsOpen] = useState(false);
+      return (
+        <div>
+          <button type="button" onClick={() => setIsOpen(true)}>
+            Open dialog
+          </button>
+          <Modal isOpen={isOpen} onClose={() => setIsOpen(false)} title="Delete this analysis?">
+            Body
+          </Modal>
+        </div>
+      );
+    }
+
+    render(<Harness />);
+    const openButton = screen.getByRole("button", { name: "Open dialog" });
+    openButton.focus();
+    expect(openButton).toHaveFocus();
+
+    await user.click(openButton);
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+
+    await user.keyboard("{Escape}");
+
+    await waitFor(() => expect(openButton).toHaveFocus());
+  });
+
+  it("wraps Tab from the last focusable element back to the first, trapping focus inside the dialog", async () => {
+    const user = userEvent.setup();
+    render(
+      <Modal
+        isOpen
+        onClose={vi.fn()}
+        title="Delete this analysis?"
+        footer={
+          <>
+            <button type="button">Cancel</button>
+            <button type="button">Confirm</button>
+          </>
+        }
+      >
+        Body
+      </Modal>,
+    );
+
+    const closeButton = screen.getByRole("button", { name: "Close dialog" });
+    const cancelButton = screen.getByRole("button", { name: "Cancel" });
+    const confirmButton = screen.getByRole("button", { name: "Confirm" });
+
+    confirmButton.focus();
+    expect(confirmButton).toHaveFocus();
+
+    await user.tab();
+    expect(closeButton).toHaveFocus();
+
+    await user.tab({ shift: true });
+    expect(confirmButton).toHaveFocus();
+
+    await user.tab({ shift: true });
+    expect(cancelButton).toHaveFocus();
+  });
+
+  it("does not let Tab escape the dialog into the page behind it", async () => {
+    const user = userEvent.setup();
+    render(
+      <div>
+        <button type="button">Outside button</button>
+        <Modal isOpen onClose={vi.fn()} title="Delete this analysis?">
+          Body
+        </Modal>
+      </div>,
+    );
+
+    const outsideButton = screen.getByRole("button", { name: "Outside button" });
+    const closeButton = screen.getByRole("button", { name: "Close dialog" });
+
+    closeButton.focus();
+    await user.tab();
+
+    expect(outsideButton).not.toHaveFocus();
+    expect(closeButton).toHaveFocus();
   });
 });

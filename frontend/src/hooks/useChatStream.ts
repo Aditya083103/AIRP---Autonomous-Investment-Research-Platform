@@ -49,6 +49,29 @@ export interface ChatStreamEvent {
 /** Connection lifecycle as observed from the browser side. */
 export type ChatStreamConnectionStatus = "idle" | "connecting" | "open" | "closed" | "error";
 
+// Reconnection (Section C, unit 9 audit finding -- this hook was flagged as
+// deferred when useAnalysisStream.ts got its own reconnect logic, pending a
+// dedicated design pass for chat's more complex, stateful, multi-turn
+// connection). Same bounded/backed-off shape as useAnalysisStream.ts
+// (1s/2s/3s, 3 attempts) for the identical reasoning -- a transient network
+// blip or the documented Vite-dev-proxy quirk should not permanently strand
+// the widget, but a genuinely dead backend must still surface as an error
+// rather than retry forever.
+//
+// The one substantive difference from useAnalysisStream: THAT hook resets
+// `events` to `[]` on every connection attempt because the backend replays
+// a job's full event history on every fresh connect. chat_stream.py has no
+// such replay -- it is a persistent, stateful, multi-turn connection, and a
+// resumed session's history is already seeded once via `initialMessages`
+// (GET .../messages) when the session is first opened. Resetting `messages`
+// on a RECONNECT of the same session would silently wipe the transcript the
+// user is looking at. So `messages` is only reset to `initialMessagesRef`
+// when `sessionId`/`token` genuinely change to a new identity (see
+// lastIdentityRef below) -- never on a reconnect-triggered re-run of the
+// SAME session.
+const MAX_RECONNECT_ATTEMPTS = 3;
+const RECONNECT_BASE_DELAY_MS = 1000;
+
 /** One message rendered in the widget's transcript -- both user turns (sent locally) and assistant turns (built up token by token). */
 export interface ChatWidgetMessage {
   /** Client-local id (never the server's UUID -- see LOCAL_ID_PREFIX below). Stable across re-renders, used as the React list key. */
@@ -227,12 +250,36 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamResul
   const pendingUserLocalIdRef = useRef<string | null>(null);
   const nextLocalIdRef = useRef(0);
 
+  // Reconnection bookkeeping -- see the MAX_RECONNECT_ATTEMPTS/
+  // RECONNECT_BASE_DELAY_MS module comment above for the full rationale.
+  // `reconnectNonce` is bumped (by the scheduled setTimeout in onclose
+  // below) to make THIS SAME effect re-run and reopen a socket, exactly
+  // mirroring useAnalysisStream.ts's identical mechanism so this
+  // reconnect attempt inherits every one of the effect's existing
+  // staleness/cleanup guarantees (currentSocketRef above) for free,
+  // rather than a second, parallel connection routine. `lastIdentityRef`
+  // distinguishes "this run is a genuine new session" (sessionId/token
+  // actually changed -- reset the attempt counter AND the transcript)
+  // from "this run is a scheduled reconnect for the SAME session" (leave
+  // both alone).
+  const [reconnectNonce, setReconnectNonce] = useState(0);
+  const reconnectAttemptRef = useRef(0);
+  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastIdentityRef = useRef<string | null>(null);
+
   const allocateLocalId = useCallback((): string => {
     nextLocalIdRef.current += 1;
     return `${LOCAL_ID_PREFIX}${nextLocalIdRef.current}`;
   }, []);
 
   useEffect(() => {
+    const identity = `${sessionId}:${token}`;
+    const isNewIdentity = lastIdentityRef.current !== identity;
+    if (isNewIdentity) {
+      lastIdentityRef.current = identity;
+      reconnectAttemptRef.current = 0;
+    }
+
     streamingMessageIdRef.current = null;
     pendingUserLocalIdRef.current = null;
 
@@ -241,7 +288,13 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamResul
       return undefined;
     }
 
-    setMessages(initialMessagesRef.current);
+    // Only reset the transcript on a genuine new session -- never on a
+    // reconnect-triggered re-run of the SAME session, which would
+    // otherwise silently wipe out everything sent/received since the
+    // widget opened. See the MAX_RECONNECT_ATTEMPTS module comment above.
+    if (isNewIdentity) {
+      setMessages(initialMessagesRef.current);
+    }
     setError(null);
     setConnectionStatus("connecting");
 
@@ -261,6 +314,12 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamResul
 
     socket.onopen = (): void => {
       if (currentSocketRef.current !== socket) return;
+      // A successful connection -- whether the very first one or a
+      // reconnect -- clears the backoff counter, so a LATER disconnect
+      // gets its own full set of MAX_RECONNECT_ATTEMPTS rather than
+      // inheriting a partially-used budget from an unrelated earlier
+      // blip. Mirrors useAnalysisStream.ts's identical reasoning.
+      reconnectAttemptRef.current = 0;
       setConnectionStatus("open");
     };
 
@@ -398,16 +457,68 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamResul
     socket.onclose = (closeEvent: CloseEvent): void => {
       if (currentSocketRef.current !== socket) return;
       setConnectionStatus("closed");
+
+      // A turn that was actively streaming will never receive its
+      // 'done' now -- mark it interrupted rather than leaving it stuck
+      // "isStreaming: true" forever once the widget reconnects (or, if
+      // reconnect attempts are exhausted, forever period). Mirrors the
+      // wording/shape of the existing per-turn 'error' event handling
+      // above for consistency.
+      const interruptedStreamingId = streamingMessageIdRef.current;
+      streamingMessageIdRef.current = null;
+      pendingUserLocalIdRef.current = null;
+      if (interruptedStreamingId !== null) {
+        setMessages((previous) =>
+          previous.map((message) =>
+            message.id === interruptedStreamingId
+              ? {
+                  ...message,
+                  isStreaming: false,
+                  isError: true,
+                  content: "Connection lost before this reply finished.",
+                }
+              : message,
+          ),
+        );
+      }
+
       if (closeEvent.code === 4401) {
         setError("Not authorized to use this chat session (invalid or expired token).");
       } else if (closeEvent.code === 4404) {
         setError("Chat session not found, or it does not belong to you.");
       } else if (closeEvent.code !== 1000) {
-        setError(`Connection closed unexpectedly (code ${closeEvent.code}).`);
+        // The connection ended unexpectedly -- attempt a bounded,
+        // backed-off reconnect (see MAX_RECONNECT_ATTEMPTS/
+        // RECONNECT_BASE_DELAY_MS above) rather than stranding the
+        // widget on a dead connection. Unlike useAnalysisStream, there
+        // is no "already received the terminal event, so any close now
+        // is just normal teardown" case here -- a chat connection has
+        // no terminal event; it is expected to stay open indefinitely
+        // between turns, so ANY non-1000 close while the widget is still
+        // mounted is worth attempting to recover from.
+        if (reconnectAttemptRef.current < MAX_RECONNECT_ATTEMPTS) {
+          reconnectAttemptRef.current += 1;
+          const attempt = reconnectAttemptRef.current;
+          setError(
+            `Connection lost -- reconnecting (attempt ${attempt}/${MAX_RECONNECT_ATTEMPTS})…`,
+          );
+          reconnectTimeoutRef.current = setTimeout(() => {
+            setReconnectNonce((previous) => previous + 1);
+          }, RECONNECT_BASE_DELAY_MS * attempt);
+        } else {
+          setError(
+            `Connection closed unexpectedly (code ${closeEvent.code}) after ` +
+              `${MAX_RECONNECT_ATTEMPTS} reconnect attempts.`,
+          );
+        }
       }
     };
 
     return (): void => {
+      if (reconnectTimeoutRef.current !== null) {
+        clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
+      }
       if (currentSocketRef.current === socket) {
         currentSocketRef.current = null;
       }
@@ -416,7 +527,7 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamResul
     // baseUrl is intentionally excluded -- same rationale as
     // useAnalysisStream's identical exclusion.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId, token, enabled]);
+  }, [sessionId, token, enabled, reconnectNonce]);
 
   const sendMessage = useCallback(
     (text: string): void => {

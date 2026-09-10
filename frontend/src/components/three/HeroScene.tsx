@@ -15,8 +15,14 @@
 //      also naturally keeps three.js out of every component test, with
 //      no need to mock it) and on the rare browser/device without
 //      WebGL.
+//   3. The device does not look low-end/phone-class
+//      (useIsLowEndDevice, Section C audit finding deferred from unit
+//      9) -- nearly every modern phone DOES support WebGL, so gate (2)
+//      alone was letting the full scene load and animate on exactly
+//      the hardware B10's own work order calls out as needing graceful
+//      degradation. See that hook's own docstring for the heuristic.
 //
-// Either gate failing renders StaticHeroFallback instead: a plain CSS
+// Any gate failing renders StaticHeroFallback instead: a plain CSS
 // radial-gradient blob, sized identically to the real canvas via the
 // same `className`, so there is no layout shift between the fallback
 // and the real canvas mounting -- gradient colours come from
@@ -26,6 +32,7 @@
 
 import { Suspense, lazy } from "react";
 
+import { useIsLowEndDevice } from "@/hooks/useIsLowEndDevice";
 import { usePrefersReducedMotion } from "@/hooks/usePrefersReducedMotion";
 import { useWebglSupported } from "@/hooks/useWebglSupported";
 import { cn } from "@/lib/cn";
@@ -54,8 +61,9 @@ function StaticHeroFallback({ className }: { className?: string | undefined }): 
 export function HeroScene({ className }: HeroSceneProps): JSX.Element {
   const prefersReducedMotion = usePrefersReducedMotion();
   const webglSupported = useWebglSupported();
+  const isLowEndDevice = useIsLowEndDevice();
 
-  if (prefersReducedMotion || !webglSupported) {
+  if (prefersReducedMotion || !webglSupported || isLowEndDevice) {
     return <StaticHeroFallback className={className} />;
   }
 

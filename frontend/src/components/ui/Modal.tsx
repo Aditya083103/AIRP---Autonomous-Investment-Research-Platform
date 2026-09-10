@@ -34,6 +34,48 @@ const SIZE_CLASSES: Record<ModalSize, string> = {
   lg: "max-w-2xl",
 };
 
+// Section C audit finding (deferred from unit 9, fixed here): Modal had no
+// focus trap or focus restoration. A keyboard/screen-reader user could Tab
+// straight out of an open dialog into the page behind it (a WCAG 2.4.3 /
+// ARIA APG dialog-pattern violation -- the two things every modal dialog
+// implementation is expected to do), and closing it left focus wherever it
+// happened to be (usually back at the very start of the document, since
+// focus had moved onto the dialog panel) instead of back on the control
+// that opened it.
+const FOCUSABLE_SELECTOR = [
+  "a[href]",
+  "button:not([disabled])",
+  "textarea:not([disabled])",
+  "input:not([disabled])",
+  "select:not([disabled])",
+  '[tabindex]:not([tabindex="-1"])',
+].join(", ");
+
+/**
+ * Focusable descendants of `container`, in DOM (tab) order, excluding
+ * anything explicitly marked hidden.
+ *
+ * Deliberately does NOT use `element.offsetParent !== null` as a
+ * "visually hidden" filter, despite that being the common pattern for
+ * this kind of check: jsdom (this project's test environment) never runs
+ * layout, so `offsetParent` reads `null` for every element regardless of
+ * whether it is actually hidden -- that filter would silently treat this
+ * modal's ENTIRE contents as non-focusable under test while working fine
+ * in a real browser, exactly the kind of environment-specific gap this
+ * whole audit exists to catch (confirmed the hard way: an earlier version
+ * of this trap using that check made every one of this file's own
+ * focus-trap tests below land on the dialog panel instead of its buttons,
+ * despite the buttons being genuinely visible and tabbable in a real
+ * browser). `hidden`/`aria-hidden="true"` are both explicit, DOM-attribute
+ * signals that work identically in jsdom and a real browser, and cover
+ * every case this component's own callers actually rely on.
+ */
+function getFocusableElements(container: HTMLElement): HTMLElement[] {
+  return Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
+    (element) => !element.hasAttribute("hidden") && element.getAttribute("aria-hidden") !== "true",
+  );
+}
+
 /**
  * A centred dialog with a dismissible backdrop. Closes on Escape, on
  * backdrop click, and via the built-in close button -- all three call the
@@ -55,12 +97,56 @@ export function Modal({
       return undefined;
     }
 
+    // Restored on close below -- so a keyboard user (or a screen reader)
+    // lands back exactly where they were before the dialog interrupted
+    // them, typically the button that opened it, rather than at whatever
+    // element the browser's default focus algorithm happens to pick once
+    // the dialog panel itself (which held focus) is removed from the DOM.
+    const previouslyFocusedElement = document.activeElement as HTMLElement | null;
+
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
 
     function handleKeyDown(event: KeyboardEvent): void {
       if (event.key === "Escape") {
         onClose();
+        return;
+      }
+      if (event.key !== "Tab") {
+        return;
+      }
+
+      const panel = panelRef.current;
+      if (panel === null) {
+        return;
+      }
+      const focusable = getFocusableElements(panel);
+      if (focusable.length === 0) {
+        // Nothing focusable inside (e.g. a body-only confirmation with no
+        // footer buttons rendered yet) -- keep focus pinned to the panel
+        // itself rather than letting Tab escape to the page behind it.
+        event.preventDefault();
+        panel.focus();
+        return;
+      }
+
+      const first = focusable[0] as HTMLElement;
+      const last = focusable[focusable.length - 1] as HTMLElement;
+      const active = document.activeElement;
+      // `active === panel` covers the moment right after opening, before
+      // focus has ever moved into a child -- Tab/Shift+Tab from there
+      // must still wrap within the dialog, not fall through to native
+      // "next focusable element in the whole document" behaviour.
+      const isTrapped = active !== null && panel.contains(active) && active !== panel;
+
+      if (event.shiftKey) {
+        if (!isTrapped || active === first) {
+          event.preventDefault();
+          last.focus();
+        }
+      } else if (!isTrapped || active === last) {
+        event.preventDefault();
+        first.focus();
       }
     }
 
@@ -70,6 +156,7 @@ export function Modal({
     return () => {
       document.body.style.overflow = previousOverflow;
       document.removeEventListener("keydown", handleKeyDown);
+      previouslyFocusedElement?.focus();
     };
   }, [isOpen, onClose]);
 

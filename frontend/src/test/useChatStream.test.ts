@@ -124,6 +124,10 @@ function errorEvent(message: string): unknown {
 afterEach(() => {
   FakeWebSocket.instances = [];
   vi.unstubAllGlobals();
+  // Defensive: a test that forgets to call vi.useRealTimers() itself
+  // (or fails before reaching it) would otherwise leak fake-timer state
+  // into whichever test runs next in this file.
+  vi.useRealTimers();
 });
 
 describe("useChatStream connection", () => {
@@ -194,6 +198,205 @@ describe("useChatStream connection", () => {
     await waitFor(() =>
       expect(result.current.error).toBe("Chat session not found, or it does not belong to you."),
     );
+  });
+});
+
+describe("useChatStream reconnection (Section C, unit 9 audit finding)", () => {
+  it("opens a new socket after an unexpected close, once the backoff delay elapses", () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+
+    renderHook(() => useChatStream({ sessionId: "session-1", token: "jwt-token" }));
+    const firstSocket = lastSocket();
+
+    act(() => {
+      firstSocket.emitClose(1006);
+    });
+    expect(FakeWebSocket.instances).toHaveLength(1);
+
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(lastSocket()).not.toBe(firstSocket);
+    vi.useRealTimers();
+  });
+
+  it("a successful reconnect clears the error and reports connectionStatus 'open'", () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+
+    const { result } = renderHook(() =>
+      useChatStream({ sessionId: "session-1", token: "jwt-token" }),
+    );
+
+    act(() => {
+      lastSocket().emitClose(1006);
+    });
+    expect(result.current.error).toContain("reconnecting (attempt 1/3)");
+
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    act(() => {
+      lastSocket().emitOpen();
+    });
+
+    expect(result.current.connectionStatus).toBe("open");
+    vi.useRealTimers();
+  });
+
+  it("preserves the existing transcript across a reconnect of the SAME session (no server-side replay, unlike useAnalysisStream)", () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+
+    const { result } = renderHook(() =>
+      useChatStream({ sessionId: "session-1", token: "jwt-token" }),
+    );
+    act(() => {
+      lastSocket().emitOpen();
+    });
+    act(() => {
+      lastSocket().emitMessage(startEvent("user-msg-1"));
+      lastSocket().emitMessage(tokenEvent("Hello"));
+      lastSocket().emitMessage(doneEvent("assistant-msg-1"));
+    });
+    expect(result.current.messages).toHaveLength(1);
+    expect(result.current.messages[0]?.content).toBe("Hello");
+
+    act(() => {
+      lastSocket().emitClose(1006);
+    });
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    act(() => {
+      lastSocket().emitOpen();
+    });
+
+    // The reconnect must not have wiped the transcript built up before
+    // the drop -- there is no backend replay to deduplicate against, so
+    // resetting messages here (as useAnalysisStream does for `events`)
+    // would just silently lose everything said so far.
+    expect(result.current.messages).toHaveLength(1);
+    expect(result.current.messages[0]?.content).toBe("Hello");
+    vi.useRealTimers();
+  });
+
+  it("marks an in-flight streaming reply as interrupted when the connection drops unexpectedly", () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+
+    const { result } = renderHook(() =>
+      useChatStream({ sessionId: "session-1", token: "jwt-token" }),
+    );
+    act(() => {
+      lastSocket().emitOpen();
+    });
+    act(() => {
+      lastSocket().emitMessage(startEvent());
+      lastSocket().emitMessage(tokenEvent("partial rep"));
+    });
+    expect(result.current.messages[0]?.isStreaming).toBe(true);
+
+    act(() => {
+      lastSocket().emitClose(1006);
+    });
+
+    expect(result.current.messages).toHaveLength(1);
+    expect(result.current.messages[0]?.isStreaming).toBe(false);
+    expect(result.current.messages[0]?.isError).toBe(true);
+    expect(result.current.messages[0]?.content).toBe("Connection lost before this reply finished.");
+    vi.useRealTimers();
+  });
+
+  it("gives up after MAX_RECONNECT_ATTEMPTS and surfaces a terminal error", () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+
+    const { result } = renderHook(() =>
+      useChatStream({ sessionId: "session-1", token: "jwt-token" }),
+    );
+
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      act(() => {
+        lastSocket().emitClose(1006);
+      });
+      expect(result.current.error).toContain(`reconnecting (attempt ${attempt}/3)`);
+      act(() => {
+        vi.advanceTimersByTime(1000 * attempt);
+      });
+    }
+
+    // The 4th close exhausts the budget -- no further socket is opened.
+    const socketCountBeforeFinalClose = FakeWebSocket.instances.length;
+    act(() => {
+      lastSocket().emitClose(1006);
+    });
+    act(() => {
+      vi.advanceTimersByTime(10_000);
+    });
+
+    expect(FakeWebSocket.instances).toHaveLength(socketCountBeforeFinalClose);
+    expect(result.current.error).toBe(
+      "Connection closed unexpectedly (code 1006) after 3 reconnect attempts.",
+    );
+    vi.useRealTimers();
+  });
+
+  it("does not reconnect on a normal close (code 1000)", () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+
+    renderHook(() => useChatStream({ sessionId: "session-1", token: "jwt-token" }));
+    act(() => {
+      lastSocket().emitClose(1000);
+    });
+    act(() => {
+      vi.advanceTimersByTime(10_000);
+    });
+
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    vi.useRealTimers();
+  });
+
+  it("does not reconnect on 4401 (unauthorized) or 4404 (not found) -- both are terminal", () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+
+    renderHook(() => useChatStream({ sessionId: "session-1", token: "jwt-token" }));
+    act(() => {
+      lastSocket().emitClose(4401);
+    });
+    act(() => {
+      vi.advanceTimersByTime(10_000);
+    });
+
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    vi.useRealTimers();
+  });
+
+  it("clears any pending reconnect timer on unmount", () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+
+    const { unmount } = renderHook(() =>
+      useChatStream({ sessionId: "session-1", token: "jwt-token" }),
+    );
+    act(() => {
+      lastSocket().emitClose(1006);
+    });
+
+    unmount();
+    act(() => {
+      vi.advanceTimersByTime(10_000);
+    });
+
+    // No new socket was opened after unmount -- the pending setTimeout
+    // was cleared, not left to fire against an unmounted hook.
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    vi.useRealTimers();
   });
 });
 
