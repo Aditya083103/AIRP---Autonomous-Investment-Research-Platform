@@ -39,7 +39,7 @@
 
 import { useEffect, useRef, useState } from "react";
 
-import { env } from "@/config/env";
+import { env, resolveWebSocketBaseUrl } from "@/config/env";
 
 /**
  * A node has just begun executing -- published before any of its real
@@ -89,6 +89,18 @@ export interface AgentStreamEvent {
 /** Connection lifecycle as observed from the browser side. */
 export type AnalysisStreamConnectionStatus = "idle" | "connecting" | "open" | "closed" | "error";
 
+// Reconnection (Section C, unit 9 audit finding): neither this hook nor
+// its sibling useChatStream.ts had ANY reconnect logic before this fix
+// -- a transient network blip, or the documented Vite-dev-proxy quirk
+// that can surface a clean server-side close as an abnormal one,
+// permanently stranded the live-progress viewer on a dead connection
+// with no way to resume short of a full page reload. Bounded (not
+// infinite -- a genuinely dead backend must still surface as an error,
+// not retry forever) and linearly backed-off (1s, 2s, 3s) so a real
+// outage doesn't hammer the server with immediate retries.
+const MAX_RECONNECT_ATTEMPTS = 3;
+const RECONNECT_BASE_DELAY_MS = 1000;
+
 export interface UseAnalysisStreamOptions {
   /** UUID of the analysis job to stream -- the {job_id} path segment. */
   jobId: string;
@@ -123,19 +135,6 @@ export interface UseAnalysisStreamResult {
   connectionStatus: AnalysisStreamConnectionStatus;
   /** Human-readable error message, if the connection failed or was rejected. */
   error: string | null;
-}
-
-function defaultWebSocketBaseUrl(): string {
-  // T-074 audit finding C1/F1: prefer env.wsBaseUrl (VITE_WS_BASE_URL, or
-  // derived from an absolute VITE_API_BASE_URL) so split-origin deployments
-  // (e.g. Vercel frontend + Render backend) dial the right host. Only when
-  // neither is configured do we fall back to window.location, which is
-  // correct only when the frontend and backend share an origin.
-  if (env.wsBaseUrl) {
-    return env.wsBaseUrl;
-  }
-  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${protocol}//${window.location.host}`;
 }
 
 /**
@@ -229,18 +228,53 @@ export function useAnalysisStream(options: UseAnalysisStreamOptions): UseAnalysi
   // point of view; the analysis is already complete on screen.
   const receivedFinalEventRef = useRef(false);
 
+  // Reconnection bookkeeping. `reconnectNonce` is bumped (by the
+  // scheduled setTimeout in onclose below) to make THIS SAME effect
+  // re-run and reopen a socket -- deliberately reusing the exact
+  // socket-open/cleanup code path a genuine jobId/token change already
+  // takes, rather than a second, parallel connection routine, so every
+  // one of this hook's existing staleness/cleanup guarantees (see
+  // currentSocketRef's own docstring above) apply to a reconnect
+  // attempt for free. `reconnectAttemptRef` must NOT reset every time
+  // this effect re-runs (that would defeat the bounded-attempts cap on
+  // a reconnect-triggered run) -- `lastIdentityRef` distinguishes "this
+  // run is a genuine new subscription" (jobId/token actually changed;
+  // reset the counter) from "this run is a scheduled reconnect for the
+  // SAME subscription" (leave the counter as-is).
+  const [reconnectNonce, setReconnectNonce] = useState(0);
+  const reconnectAttemptRef = useRef(0);
+  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastIdentityRef = useRef<string | null>(null);
+
   useEffect(() => {
+    const identity = `${jobId}:${token}`;
+    if (lastIdentityRef.current !== identity) {
+      lastIdentityRef.current = identity;
+      reconnectAttemptRef.current = 0;
+    }
     receivedFinalEventRef.current = false;
 
     if (!enabled || jobId === "" || token === "") {
       return undefined;
     }
 
+    // Reset on every connection attempt, including a reconnect: the
+    // backend (backend/routers/websocket.py) replays the job's full
+    // completed_nodes history on every fresh connect, specifically to
+    // support reconnection -- preserving the old partial `events` list
+    // here and appending the replay onto it would duplicate every
+    // already-seen event instead of cleanly resuming.
     setEvents([]);
     setError(null);
     setConnectionStatus("connecting");
 
-    const resolvedBaseUrl = baseUrl ?? defaultWebSocketBaseUrl();
+    const resolvedBaseUrl =
+      baseUrl ??
+      resolveWebSocketBaseUrl({
+        wsBaseUrl: env.wsBaseUrl,
+        isProduction: env.isProduction,
+        callerLabel: "Live analysis progress",
+      });
     const url = `${resolvedBaseUrl}/api/v1/analysis/${jobId}/stream?token=${encodeURIComponent(
       token,
     )}`;
@@ -250,6 +284,12 @@ export function useAnalysisStream(options: UseAnalysisStreamOptions): UseAnalysi
 
     socket.onopen = (): void => {
       if (currentSocketRef.current !== socket) return;
+      // A successful connection -- whether the very first one or a
+      // reconnect -- clears the backoff counter, so a LATER disconnect
+      // gets its own full set of MAX_RECONNECT_ATTEMPTS rather than
+      // inheriting a partially-used budget from an unrelated earlier
+      // blip.
+      reconnectAttemptRef.current = 0;
       setConnectionStatus("open");
     };
 
@@ -296,17 +336,39 @@ export function useAnalysisStream(options: UseAnalysisStreamOptions): UseAnalysi
       } else if (closeEvent.code === 4404) {
         setError("Analysis job not found, or it does not belong to you.");
       } else if (closeEvent.code !== 1000 && !receivedFinalEventRef.current) {
-        // Only surface this as an error if the stream ended before the
-        // pipeline actually finished. If the terminal event already
-        // arrived, whatever code the browser reports here (commonly
-        // 1006 through Vite's dev proxy -- see receivedFinalEventRef's
-        // declaration above) is just normal teardown after a completed
-        // analysis, not a disconnect the user needs to know about.
-        setError(`Connection closed unexpectedly (code ${closeEvent.code}).`);
+        // The stream ended unexpectedly before the pipeline finished --
+        // attempt a bounded, backed-off reconnect (see MAX_RECONNECT_
+        // ATTEMPTS/RECONNECT_BASE_DELAY_MS above) rather than stranding
+        // the viewer on a dead connection. If the terminal event had
+        // already arrived, whatever code the browser reports here
+        // (commonly 1006 through Vite's dev proxy -- see
+        // receivedFinalEventRef's declaration above) is just normal
+        // teardown after a completed analysis, not a disconnect worth
+        // reconnecting from at all -- that case never reaches this
+        // branch.
+        if (reconnectAttemptRef.current < MAX_RECONNECT_ATTEMPTS) {
+          reconnectAttemptRef.current += 1;
+          const attempt = reconnectAttemptRef.current;
+          setError(
+            `Connection lost -- reconnecting (attempt ${attempt}/${MAX_RECONNECT_ATTEMPTS})…`,
+          );
+          reconnectTimeoutRef.current = setTimeout(() => {
+            setReconnectNonce((previous) => previous + 1);
+          }, RECONNECT_BASE_DELAY_MS * attempt);
+        } else {
+          setError(
+            `Connection closed unexpectedly (code ${closeEvent.code}) after ` +
+              `${MAX_RECONNECT_ATTEMPTS} reconnect attempts.`,
+          );
+        }
       }
     };
 
     return (): void => {
+      if (reconnectTimeoutRef.current !== null) {
+        clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
+      }
       if (currentSocketRef.current === socket) {
         currentSocketRef.current = null;
       }
@@ -314,11 +376,11 @@ export function useAnalysisStream(options: UseAnalysisStreamOptions): UseAnalysi
     };
     // baseUrl is intentionally excluded from the dependency array below:
     // it is expected to be a stable caller-side constant (or derive
-    // identically every render via defaultWebSocketBaseUrl), and
+    // identically every render via resolveWebSocketBaseUrl), and
     // including it would reconnect on every render for callers who pass
     // a freshly-computed string literal.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [jobId, token, enabled]);
+  }, [jobId, token, enabled, reconnectNonce]);
 
   const lastEvent = events.length > 0 ? events[events.length - 1] : undefined;
 
