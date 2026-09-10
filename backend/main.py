@@ -64,6 +64,52 @@ from backend.services.rate_limiter import RateLimitMiddleware
 
 logger = logging.getLogger(__name__)
 
+
+def configure_logging(log_level: str) -> None:
+    """
+    Apply LOG_LEVEL to the root logger so application log calls are
+    actually emitted somewhere.
+
+    Section C audit finding, found during a live full-system smoke
+    test: backend.config.Settings.log_level (LOG_LEVEL) was read and
+    documented everywhere, but nothing ever actually applied it -- no
+    logging.basicConfig()/dictConfig() call existed anywhere in this
+    codebase. With the root logger left completely unconfigured, every
+    module's `logging.getLogger(__name__).info(...)`/`.debug(...)` call
+    (hundreds of them across backend/routers, backend/agents,
+    backend/graph, ...) was silently dropped in every environment,
+    local dev included -- Python's logging module only falls back to a
+    bare stderr handler (`logging.lastResort`) fixed at WARNING, so
+    only .warning()/.error() calls were ever actually visible. This was
+    caught concretely: POST /auth/password-reset/request's own
+    degraded-path `logger.info("password_reset: no email service
+    configured -- reset URL for %s: %s", ...)`
+    (backend/routers/auth.py) -- the exact mechanism a local developer
+    relies on to complete a password reset without a real SMTP server
+    -- never once appeared in the server's own log output despite
+    firing on every request, because it logs at INFO.
+
+    Called at import time (module scope, below), so it applies
+    identically for every way this module gets loaded -- `uvicorn
+    backend.main:app`, Render's production process, and pytest
+    importing backend.main indirectly through other modules.
+    `logging.basicConfig()` is a documented no-op if the root logger
+    already has a handler (e.g. pytest's own logging plugin got there
+    first), so this cannot fight or duplicate test log capture.
+
+    A separate function (not inlined at module scope) purely so this
+    behaviour is directly unit-testable -- asserting on side effects of
+    a bare module-import statement, executed exactly once per process
+    and cached in sys.modules thereafter, is not practical from a test.
+    """
+    logging.basicConfig(
+        level=log_level,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+
+
+configure_logging(settings.log_level)
+
 # ---------------------------------------------------------------------------
 # App metadata -- drives Swagger UI (/docs) and ReDoc (/redoc)
 # ---------------------------------------------------------------------------

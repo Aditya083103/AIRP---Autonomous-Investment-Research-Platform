@@ -30,13 +30,14 @@ Acceptance criteria verified (from task spec):
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
+import logging
 from typing import Any, cast
 
 import httpx
 import pytest
 
 from backend.config import Settings
-from backend.main import API_TITLE, API_VERSION, create_app
+from backend.main import API_TITLE, API_VERSION, configure_logging, create_app
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -300,3 +301,106 @@ class TestLifespan:
         itself proof startup completed without an exception."""
         response = await client.get("/health")
         assert response.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# configure_logging (Section C audit finding, found during a live
+# full-system smoke test)
+# ---------------------------------------------------------------------------
+#
+# backend.main used to never call logging.basicConfig()/dictConfig() at
+# all -- LOG_LEVEL was read into Settings but never actually applied to
+# the root logger. Every application logger.info()/.debug() call was
+# silently dropped in every real environment (only .warning()/.error()
+# survived, via Python's bare stderr `logging.lastResort` fallback),
+# concretely including the exact log line
+# POST /auth/password-reset/request relies on in local dev to complete
+# a password reset without a real SMTP server. These tests save/restore
+# the root logger's real handlers and level around each test so this
+# suite's own use of pytest's `caplog` machinery elsewhere is
+# unaffected -- caplog attaches its own handler independently of
+# whatever basicConfig() does, which is also precisely why no existing
+# test caught this: caplog works around the very problem being fixed
+# here, so it cannot be used to prove or disprove it.
+class TestConfigureLogging:
+    def _strip_root_handlers(self) -> tuple[list[logging.Handler], int]:
+        root = logging.getLogger()
+        original_handlers = root.handlers[:]
+        original_level = root.level
+        for handler in original_handlers:
+            root.removeHandler(handler)
+        return original_handlers, original_level
+
+    def _restore_root_handlers(
+        self, original_handlers: list[logging.Handler], original_level: int
+    ) -> None:
+        root = logging.getLogger()
+        for handler in root.handlers[:]:
+            root.removeHandler(handler)
+        for handler in original_handlers:
+            root.addHandler(handler)
+        root.setLevel(original_level)
+
+    def test_an_unconfigured_root_logger_has_no_handlers(self) -> None:
+        """Reproduces the pre-fix state directly: with nothing having
+        called basicConfig()/dictConfig(), the root logger has no
+        handlers of its own -- the exact condition that made every
+        application logger.info() call silently disappear (Python's
+        logging module only reaches for `logging.lastResort`, fixed at
+        WARNING, when no handler exists anywhere in the hierarchy)."""
+        original_handlers, original_level = self._strip_root_handlers()
+        try:
+            assert logging.getLogger().handlers == []
+        finally:
+            self._restore_root_handlers(original_handlers, original_level)
+
+    def test_configure_logging_gives_the_root_logger_a_handler(self) -> None:
+        original_handlers, original_level = self._strip_root_handlers()
+        try:
+            configure_logging("INFO")
+            assert logging.getLogger().handlers != []
+        finally:
+            self._restore_root_handlers(original_handlers, original_level)
+
+    def test_configure_logging_makes_info_records_pass_the_effective_level(
+        self,
+    ) -> None:
+        """The root logger's effective level must be INFO or finer for
+        an INFO-level application log call to ever reach a handler at
+        all -- this is the actual mechanism behind the password-reset
+        bug this fix closes."""
+        original_handlers, original_level = self._strip_root_handlers()
+        try:
+            configure_logging("INFO")
+            assert logging.getLogger().getEffectiveLevel() <= logging.INFO
+        finally:
+            self._restore_root_handlers(original_handlers, original_level)
+
+    def test_configure_logging_respects_a_stricter_configured_level(self) -> None:
+        original_handlers, original_level = self._strip_root_handlers()
+        try:
+            configure_logging("WARNING")
+            assert logging.getLogger().getEffectiveLevel() == logging.WARNING
+        finally:
+            self._restore_root_handlers(original_handlers, original_level)
+
+    def test_is_a_documented_noop_when_the_root_logger_already_has_a_handler(
+        self,
+    ) -> None:
+        """basicConfig()'s own contract: it must not clobber a handler
+        pytest's own logging plugin (or any other caller) already
+        attached -- verified here rather than just assumed, since this
+        no-op behaviour is exactly what keeps this fix from fighting
+        caplog-based tests elsewhere in the suite."""
+        root = logging.getLogger()
+        sentinel = logging.NullHandler()
+        original_handlers = root.handlers[:]
+        original_level = root.level
+        for handler in original_handlers:
+            root.removeHandler(handler)
+        root.addHandler(sentinel)
+        try:
+            configure_logging("DEBUG")
+            assert root.handlers == [sentinel]
+        finally:
+            self._restore_root_handlers(original_handlers, original_level)
