@@ -317,6 +317,7 @@ def _determine_verdict(
     fundamental: dict[str, Any],
     technical: dict[str, Any],
     sentiment: dict[str, Any],
+    macro: dict[str, Any],
     risk: dict[str, Any],
     contrarian: dict[str, Any],
     valuation: dict[str, Any],
@@ -340,6 +341,21 @@ def _determine_verdict(
     ``None``, and 5 < 6 would otherwise fire Gate 2 on every
     insufficient-data case that is also flagged overvalued, regardless of
     whether the fundamentals are actually weak.
+
+    Audit finding (Section C, unit 9): ``macro`` previously had a real
+    0.10 base weight in ``_compute_agent_weights`` -- shown to the user
+    on the "How the committee's evidence was weighted" card and in the
+    Investment Memo PDF -- but this function never accepted a ``macro``
+    parameter at all, so a Macro Economist verdict of "unfavourable"
+    contributed nothing here: two companies identical in every other
+    respect but opposite macro environments received the exact same
+    verdict. ``macro_environment`` now contributes ``+-0.75`` (half of
+    ``valuation_verdict``'s ``+-1.5``, matching macro's 0.10 base weight
+    being half of valuation's 0.20), defaulting to 0 for "neutral" or a
+    missing/errored macro output -- the same safe-default pattern
+    ``fund_score``/``tech_signal``/``valuation_verdict`` already use, so
+    a failed Macro Economist run degrades to no influence rather than a
+    crash or a fabricated opinion.
     """
     risk_score = int(risk.get("risk_score") or 5)
     valuation_verdict = str(valuation.get("valuation_verdict") or "fairly_valued")
@@ -378,6 +394,12 @@ def _determine_verdict(
         score += 1.5
     elif valuation_verdict == "overvalued":
         score -= 1.5
+
+    macro_environment = str(macro.get("macro_environment") or "neutral")
+    if macro_environment == "favourable":
+        score += 0.75
+    elif macro_environment == "unfavourable":
+        score -= 0.75
 
     # Bug #12 fix: scale the Risk/Contrarian/critical-flags penalties by
     # data completeness. These are the "always-present bearish inputs"
@@ -454,6 +476,8 @@ def _score_conviction(
     sent_score = float(sentiment.get("sentiment_score") or 0.0)
     valuation_verdict = str(valuation.get("valuation_verdict") or "fairly_valued")
 
+    macro_environment = str(macro.get("macro_environment") or "neutral")
+
     fund_dir = _signal_direction(fund_score - 5)
     tech_dir = 1 if tech_signal == "BUY" else (-1 if tech_signal == "SELL" else 0)
     sent_dir = _signal_direction(sent_score)
@@ -462,8 +486,15 @@ def _score_conviction(
         if valuation_verdict == "undervalued"
         else (-1 if valuation_verdict == "overvalued" else 0)
     )
+    macro_dir = (
+        1
+        if macro_environment == "favourable"
+        else (-1 if macro_environment == "unfavourable" else 0)
+    )
 
-    directions = [d for d in (fund_dir, tech_dir, sent_dir, val_dir) if d != 0]
+    directions = [
+        d for d in (fund_dir, tech_dir, sent_dir, val_dir, macro_dir) if d != 0
+    ]
     if directions:
         agreement_ratio = sum(1 for d in directions if d == directions[0]) / len(
             directions
@@ -982,7 +1013,14 @@ def _run_portfolio_manager_core(
         fundamental, technical, sentiment, macro, risk, contrarian, valuation
     )
     verdict = _determine_verdict(
-        fundamental, technical, sentiment, risk, contrarian, valuation, critical_flags
+        fundamental,
+        technical,
+        sentiment,
+        macro,
+        risk,
+        contrarian,
+        valuation,
+        critical_flags,
     )
     conviction_score = _score_conviction(
         fundamental,
