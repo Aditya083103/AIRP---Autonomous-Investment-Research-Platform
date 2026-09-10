@@ -43,7 +43,15 @@
 // degrades to the old, always-available local list rather than
 // leaving the person with an empty, broken-looking dropdown.
 
-import { useEffect, useId, useMemo, useState, type KeyboardEvent, type UIEvent } from "react";
+import {
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type UIEvent,
+} from "react";
 
 import { CompanyApiError, searchCompanies } from "@/api/companies";
 import { Spinner } from "@/components/ui";
@@ -107,6 +115,21 @@ export function CompanyAutocomplete({
   const [highlightedIndex, setHighlightedIndex] = useState(0);
 
   const debouncedQuery = useDebouncedValue(rawQuery, SEARCH_DEBOUNCE_MS);
+
+  // Audit finding (Section C, unit 9): loadMore's page fetch is
+  // async, so by the time it resolves the person may have already
+  // typed a new query -- the search effect below (which DOES guard
+  // itself with a `cancelled` flag) has already reset serverResults
+  // for that new query. Without this ref, loadMore's own `setServerResults
+  // ((previous) => [...previous, ...page.items])` would append the OLD
+  // query's late-arriving page onto the NEW query's results, corrupting
+  // the visible list. Assigning a ref directly in the render body (not
+  // inside an effect) keeps it synchronously current for every render,
+  // which is what loadMore's post-await staleness check below needs --
+  // an effect-synced ref would still lag by one render during the exact
+  // window this guards against.
+  const debouncedQueryRef = useRef(debouncedQuery);
+  debouncedQueryRef.current = debouncedQuery;
 
   const [serverResults, setServerResults] = useState<NseCompany[]>([]);
   const [nextOffset, setNextOffset] = useState(0);
@@ -186,14 +209,24 @@ export function CompanyAutocomplete({
       return;
     }
     const token = accessToken;
+    const queryAtCallTime = debouncedQuery;
     setIsLoadingMore(true);
     try {
       const page = await searchCompanies({
         accessToken: token,
-        query: debouncedQuery,
+        query: queryAtCallTime,
         limit: SEARCH_PAGE_SIZE,
         offset: nextOffset,
       });
+      if (debouncedQueryRef.current !== queryAtCallTime) {
+        // The query changed while this page was in flight -- the search
+        // effect above already reset serverResults/nextOffset for the
+        // new query, so applying this stale page here would append
+        // results for a query the person has already moved on from.
+        // Discard silently; the new query's own effect/page now owns
+        // the listbox.
+        return;
+      }
       setServerResults((previous) => [
         ...previous,
         ...page.items.map((item) => ({
