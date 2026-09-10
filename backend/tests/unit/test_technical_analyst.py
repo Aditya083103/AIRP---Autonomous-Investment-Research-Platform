@@ -744,6 +744,41 @@ class TestRunTechnicalAnalysisCore:
         assert result.error is None  # graceful degradation
         assert len(result.summary) > 0
 
+    def test_llm_failure_with_zero_rsi_still_includes_full_indicator_detail(
+        self,
+    ) -> None:
+        """
+        Audit finding (Section C, unit 9): the LLM-failure fallback branch
+        used truthy ma50/ma200/rsi checks (`if ma50 and ma200 and rsi`), so
+        a legitimate RSI of exactly 0.0 -- compute_rsi's own documented
+        "all losses, avg_gain == 0" case -- was silently treated the same
+        as a missing value, dropping the MA-50/MA-200/RSI-14 detail from
+        the fallback summary even though every one of them was actually
+        computed and available. A strictly decreasing 260-day close
+        series (no up days at all in the RSI lookback) reproduces the
+        real RSI == 0.0 condition end to end.
+        """
+        decreasing_closes = [3260.0 - float(i) for i in range(260)]
+        price_data = {**_PRICE_DATA_GOOD, "ohlcv": _make_ohlcv(decreasing_closes)}
+        assert compute_rsi(decreasing_closes) == 0.0  # sanity-check the fixture itself
+
+        mock_llm = MagicMock()
+        mock_llm.invoke.side_effect = RuntimeError("Groq timeout")
+        with (
+            patch("backend.agents.technical_analyst.fetch_stock_price") as mock_sp,
+            patch(
+                "backend.agents.technical_analyst.get_llm",
+                return_value=mock_llm,
+            ),
+        ):
+            mock_sp.invoke.return_value = price_data
+            result = _run_technical_analysis_core("x", "TCS", "TCS.NS")
+
+        assert result.error is None
+        assert "RSI-14: 0.0 (oversold)" in result.summary
+        assert "MA-50" in result.summary
+        assert "MA-200" in result.summary
+
     def test_llm_malformed_json_uses_fallback(self) -> None:
         result = self._run(llm_response="Sorry, I can't help with that.")
         assert isinstance(result, TechnicalAnalysis)

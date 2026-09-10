@@ -45,8 +45,6 @@ Public API
     from backend.data.nse_company_universe import CompanyEntry, NSE_COMPANY_UNIVERSE
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 
 __all__ = ["CompanyEntry", "NSE_COMPANY_UNIVERSE"]

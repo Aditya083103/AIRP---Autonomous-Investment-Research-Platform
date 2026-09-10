@@ -387,6 +387,104 @@ describe("CompanyAutocomplete server mode (accessToken set)", () => {
     expect(secondCallUrl).toContain("offset=1");
   });
 
+  it("discards a stale loadMore page that resolves after the query has already changed", async () => {
+    // Audit finding (Section C, unit 9): loadMore's page fetch has no
+    // staleness guard against the query changing while it's in flight.
+    // Reproduces the exact race: scroll near the bottom of the
+    // empty-query results (kicking off a loadMore page that this test
+    // holds open), then type a new query before that page resolves. The
+    // late-arriving page must never be appended to the new query's
+    // results.
+    let resolveStalePage: ((value: Response) => void) | undefined;
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      const parsed = new URL(url, "http://localhost");
+      const offset = parsed.searchParams.get("offset");
+      const q = parsed.searchParams.get("q");
+
+      if (q === null && offset === "0") {
+        return Promise.resolve(
+          jsonResponse(
+            200,
+            searchResponse([{ name: "Adani Enterprises", ticker: "ADANIENT.NS" }], {
+              total_count: 2,
+              has_more: true,
+            }),
+          ),
+        );
+      }
+      if (q === null && offset === "1") {
+        // The stale loadMore page -- held open until this test
+        // explicitly resolves it, after the query has already changed.
+        return new Promise<Response>((resolve) => {
+          resolveStalePage = resolve;
+        });
+      }
+      if (q === "Tata") {
+        return Promise.resolve(
+          jsonResponse(
+            200,
+            searchResponse([{ name: "Tata Motors", ticker: "TATAMOTORS.NS" }], {
+              has_more: false,
+            }),
+          ),
+        );
+      }
+      throw new Error(`Unexpected fetch URL in test: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const user = userEvent.setup();
+    render(
+      <CompanyAutocomplete
+        label="Company"
+        value={null}
+        onChange={vi.fn()}
+        accessToken="jwt-token"
+      />,
+    );
+
+    const input = screen.getByRole("combobox", { name: "Company" });
+    await user.click(input);
+    await waitFor(() =>
+      expect(screen.getByRole("option", { name: /adani enterprises/i })).toBeInTheDocument(),
+    );
+
+    const listbox = screen.getByRole("listbox");
+    Object.defineProperty(listbox, "scrollHeight", { value: 1000, configurable: true });
+    Object.defineProperty(listbox, "clientHeight", { value: 300, configurable: true });
+    Object.defineProperty(listbox, "scrollTop", { value: 690, configurable: true });
+    listbox.dispatchEvent(new Event("scroll", { bubbles: true }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+
+    // The stale page is now in flight. Type a new query before it
+    // resolves -- this fires and resolves a THIRD, independent request.
+    await user.type(input, "Tata");
+    await waitFor(() =>
+      expect(screen.getByRole("option", { name: /tata motors/i })).toBeInTheDocument(),
+    );
+    expect(screen.queryByRole("option", { name: /adani enterprises/i })).not.toBeInTheDocument();
+
+    // Only now does the stale (empty-query, page 2) request resolve.
+    expect(resolveStalePage).toBeDefined();
+    resolveStalePage?.(
+      jsonResponse(
+        200,
+        searchResponse([{ name: "Reliance Industries", ticker: "RELIANCE.NS" }], {
+          offset: 1,
+          has_more: false,
+        }),
+      ),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // The stale page must never have been appended -- only Tata's own
+    // result is visible.
+    expect(screen.getByRole("option", { name: /tata motors/i })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /reliance industries/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /adani enterprises/i })).not.toBeInTheDocument();
+  });
+
   it("does not call onChange with a stale selection when accessToken becomes available mid-session", () => {
     // Regression guard: switching from fallback mode to server mode
     // (e.g. accessToken finishes loading) must not clear an

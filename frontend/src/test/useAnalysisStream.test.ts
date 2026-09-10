@@ -82,6 +82,12 @@ const EVENT_2 = {
 afterEach(() => {
   FakeWebSocket.instances = [];
   vi.unstubAllGlobals();
+  // Defensive: the reconnection describe block below uses fake timers to
+  // deterministically control the setTimeout-based backoff. Restoring
+  // real timers here (a no-op if a test never faked them) guarantees no
+  // fake-timer state leaks into a later test in this file regardless of
+  // which specific test enabled them.
+  vi.useRealTimers();
 });
 
 describe("useAnalysisStream", () => {
@@ -219,7 +225,7 @@ describe("useAnalysisStream", () => {
     expect(socket.closed).toBe(true);
   });
 
-  it("surfaces an error for a non-1000 close before the pipeline finished", async () => {
+  it("schedules a reconnect (not an immediate terminal error) for a non-1000 close before the pipeline finished", async () => {
     vi.stubGlobal("WebSocket", FakeWebSocket);
 
     const { result } = renderHook(() => useAnalysisStream({ jobId: "job-1", token: "jwt-token" }));
@@ -229,7 +235,7 @@ describe("useAnalysisStream", () => {
     });
 
     await waitFor(() =>
-      expect(result.current.error).toBe("Connection closed unexpectedly (code 1006)."),
+      expect(result.current.error).toBe("Connection lost -- reconnecting (attempt 1/3)…"),
     );
   });
 
@@ -322,6 +328,210 @@ describe("useAnalysisStream", () => {
 
       expect(result.current.connectionStatus).toBe("open");
       expect(result.current.error).toBeNull();
+    });
+  });
+
+  describe("reconnection (Section C, unit 9 audit finding)", () => {
+    // Uses fake timers to deterministically control the setTimeout-based
+    // backoff (see RECONNECT_BASE_DELAY_MS in useAnalysisStream.ts)
+    // rather than waiting on real 1s/2s/3s delays. Advancing the fake
+    // timer inside `act()` synchronously fires the scheduled
+    // reconnect-nonce bump, whose resulting re-render (and the effect
+    // re-run it triggers -- closing the old socket, opening a new one)
+    // is flushed before `act()` returns, so no `waitFor` is needed for
+    // the timer-driven steps themselves.
+
+    it("opens a new socket after an unexpected close, once the backoff delay elapses", () => {
+      vi.useFakeTimers();
+      vi.stubGlobal("WebSocket", FakeWebSocket);
+
+      renderHook(() => useAnalysisStream({ jobId: "job-1", token: "jwt-token" }));
+      const firstSocket = lastSocket();
+
+      act(() => {
+        firstSocket.emitClose(1006);
+      });
+      expect(FakeWebSocket.instances).toHaveLength(1); // no reconnect yet
+
+      act(() => {
+        vi.advanceTimersByTime(1000); // attempt 1 -> RECONNECT_BASE_DELAY_MS * 1
+      });
+
+      expect(FakeWebSocket.instances).toHaveLength(2);
+      expect(lastSocket()).not.toBe(firstSocket);
+    });
+
+    it("a successful reconnect clears the error and reports connectionStatus 'open'", () => {
+      vi.useFakeTimers();
+      vi.stubGlobal("WebSocket", FakeWebSocket);
+
+      const { result } = renderHook(() =>
+        useAnalysisStream({ jobId: "job-1", token: "jwt-token" }),
+      );
+
+      act(() => {
+        lastSocket().emitClose(1006);
+      });
+      expect(result.current.error).toBe("Connection lost -- reconnecting (attempt 1/3)…");
+
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+      act(() => {
+        lastSocket().emitOpen();
+      });
+
+      expect(result.current.connectionStatus).toBe("open");
+      expect(result.current.error).toBeNull();
+    });
+
+    it("preserves already-received events across a reconnect's own event replay, without duplicating them", () => {
+      // The backend replays a job's full completed_nodes history on
+      // every fresh connect (including a reconnect) specifically to
+      // support resuming -- so the hook resets `events` to empty right
+      // before opening the new socket, and relies on that replay (not
+      // whatever it already had) to repopulate the list. This test
+      // simulates exactly that: the reconnected socket re-sends EVENT_1,
+      // and it must appear exactly once, not twice.
+      vi.useFakeTimers();
+      vi.stubGlobal("WebSocket", FakeWebSocket);
+
+      const { result } = renderHook(() =>
+        useAnalysisStream({ jobId: "job-1", token: "jwt-token" }),
+      );
+
+      act(() => {
+        lastSocket().emitMessage(EVENT_1);
+      });
+      expect(result.current.events).toHaveLength(1);
+
+      act(() => {
+        lastSocket().emitClose(1006);
+      });
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+
+      // The reconnect already reset `events` to [] as part of opening
+      // the new socket -- confirm that happened before the replay.
+      expect(result.current.events).toHaveLength(0);
+
+      act(() => {
+        lastSocket().emitMessage(EVENT_1); // the backend's replay
+      });
+
+      expect(result.current.events).toHaveLength(1);
+      expect(result.current.events[0]).toEqual(EVENT_1);
+    });
+
+    it("gives up after MAX_RECONNECT_ATTEMPTS and surfaces a terminal error", () => {
+      vi.useFakeTimers();
+      vi.stubGlobal("WebSocket", FakeWebSocket);
+
+      const { result } = renderHook(() =>
+        useAnalysisStream({ jobId: "job-1", token: "jwt-token" }),
+      );
+
+      // Attempt 1: close -> scheduled -> fires -> new socket also fails.
+      act(() => {
+        lastSocket().emitClose(1006);
+      });
+      expect(result.current.error).toBe("Connection lost -- reconnecting (attempt 1/3)…");
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+
+      // Attempt 2.
+      act(() => {
+        lastSocket().emitClose(1006);
+      });
+      expect(result.current.error).toBe("Connection lost -- reconnecting (attempt 2/3)…");
+      act(() => {
+        vi.advanceTimersByTime(2000);
+      });
+
+      // Attempt 3 -- the last one allowed.
+      act(() => {
+        lastSocket().emitClose(1006);
+      });
+      expect(result.current.error).toBe("Connection lost -- reconnecting (attempt 3/3)…");
+      act(() => {
+        vi.advanceTimersByTime(3000);
+      });
+
+      expect(FakeWebSocket.instances).toHaveLength(4); // 1 initial + 3 reconnects
+
+      // A 4th failure exhausts the budget -- no further reconnect is
+      // scheduled, and the error becomes the terminal, non-reconnecting
+      // message the pre-reconnect behaviour always showed.
+      act(() => {
+        lastSocket().emitClose(1006);
+      });
+      expect(result.current.error).toBe(
+        "Connection closed unexpectedly (code 1006) after 3 reconnect attempts.",
+      );
+
+      act(() => {
+        vi.advanceTimersByTime(10_000);
+      });
+      expect(FakeWebSocket.instances).toHaveLength(4); // no further attempt
+    });
+
+    it("does not reconnect on a normal close (code 1000)", () => {
+      vi.useFakeTimers();
+      vi.stubGlobal("WebSocket", FakeWebSocket);
+
+      renderHook(() => useAnalysisStream({ jobId: "job-1", token: "jwt-token" }));
+
+      act(() => {
+        lastSocket().emitClose(1000);
+      });
+      act(() => {
+        vi.advanceTimersByTime(10_000);
+      });
+
+      expect(FakeWebSocket.instances).toHaveLength(1);
+    });
+
+    it("does not reconnect on 4401 (unauthorized) or 4404 (not found) -- both are terminal", () => {
+      vi.useFakeTimers();
+      vi.stubGlobal("WebSocket", FakeWebSocket);
+
+      renderHook(() => useAnalysisStream({ jobId: "job-1", token: "jwt-token" }));
+
+      act(() => {
+        lastSocket().emitClose(4401);
+      });
+      act(() => {
+        vi.advanceTimersByTime(10_000);
+      });
+
+      expect(FakeWebSocket.instances).toHaveLength(1);
+    });
+
+    it("clears any pending reconnect timer on unmount", () => {
+      vi.useFakeTimers();
+      vi.stubGlobal("WebSocket", FakeWebSocket);
+
+      const { unmount } = renderHook(() =>
+        useAnalysisStream({ jobId: "job-1", token: "jwt-token" }),
+      );
+
+      act(() => {
+        lastSocket().emitClose(1006);
+      });
+      expect(FakeWebSocket.instances).toHaveLength(1);
+
+      unmount();
+
+      act(() => {
+        vi.advanceTimersByTime(10_000);
+      });
+
+      // No reconnect fires after unmount -- the pending timer was
+      // cleared by the effect's own cleanup, not left to fire against
+      // an unmounted hook.
+      expect(FakeWebSocket.instances).toHaveLength(1);
     });
   });
 

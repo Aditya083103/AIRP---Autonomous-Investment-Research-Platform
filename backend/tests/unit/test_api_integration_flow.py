@@ -80,8 +80,6 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, patch
 import uuid
 
-import chromadb
-from chromadb.config import Settings as _ChromaSettings
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from fastapi.websockets import WebSocketDisconnect
@@ -96,6 +94,10 @@ from backend.db.session import get_async_session
 from backend.dependencies.common import get_settings_dependency
 from backend.main import create_app
 from backend.models.orm import Analysis, Company, User
+from backend.tests.unit._chroma_test_support import (
+    SHARED_RAW_CLIENT as _SHARED_RAW_CHROMA_CLIENT,
+    MockEmbeddingFunction as _MockEmbeddingFunction,
+)
 from backend.tools.earnings_transcript import PDFExtractionError
 
 # ---------------------------------------------------------------------------
@@ -389,6 +391,23 @@ class _FakeFullSession:
             )
         if user.is_active is None:
             user.is_active = True
+        # Audit finding (Section C, unit 9): B6 added users.token_version
+        # (server_default '0') and test_auth_router.py's own
+        # _FakeAsyncSession.commit() was updated to simulate that
+        # default at the time -- but this file's _FakeFullSession is a
+        # SEPARATE fake (see this class's own module-docstring note on
+        # why: it merges User-table ops with Company/Analysis ORM ops
+        # and raw-SQL query overrides no single existing fake covered),
+        # and was never given the same fix. Without it, a freshly
+        # "inserted" User keeps token_version=None, create_access_token
+        # embeds a literal `token_version: null` claim, TokenPayload's
+        # `token_version: int = Field(default=0, ...)` rejects null for
+        # a strict int (the default only applies when the key is
+        # ABSENT, not when it is present-and-null), decode_access_token
+        # raises InvalidTokenError, and get_current_user 401s on every
+        # single authenticated request in this entire file.
+        if user.token_version is None:
+            user.token_version = 0
         now = datetime.now(timezone.utc)
         if user.created_at is None:
             user.created_at = now
@@ -483,29 +502,20 @@ def _seed_history_row(
 
 
 # ---------------------------------------------------------------------------
-# Shared ChromaDB test infrastructure -- mirrors test_documents_router.py's
-# _MockEF / EphemeralClient pattern, so document upload can be exercised
-# as part of the full session without loading a real embedding model.
+# Shared ChromaDB test infrastructure -- _MockEmbeddingFunction /
+# _SHARED_RAW_CHROMA_CLIENT are imported from _chroma_test_support.py
+# (Section C audit finding, unit 9), not defined here: that module is the
+# ONLY place in the whole test process allowed to call
+# chromadb.EphemeralClient(), since its SharedSystemClient is a
+# process-wide singleton keyed on the identifier "ephemeral" and a second
+# Settings object created here would crash pytest collection for the
+# entire suite the moment this file and test_chroma_client.py /
+# test_documents_router.py / test_documents_service.py were collected in
+# the same process. See that module's own docstring for the full history,
+# including a second, subtler root cause (chromadb.config.Settings's
+# `environment` field reading the ambient `ENVIRONMENT` OS env var this
+# repo's own tests also set).
 # ---------------------------------------------------------------------------
-
-
-class _MockEmbeddingFunction:
-    """Fake embedding function satisfying ChromaDB's __call__ signature
-    check, without loading any real sentence-transformer model."""
-
-    def __call__(self, input: list[str]) -> list[list[float]]:  # noqa: A002
-        return [[0.1] * 384 for _ in input]
-
-
-_TEST_CHROMA_SETTINGS = _ChromaSettings(
-    is_persistent=False,
-    allow_reset=True,
-    anonymized_telemetry=False,
-)
-
-_SHARED_RAW_CHROMA_CLIENT: Any = chromadb.EphemeralClient(
-    settings=_TEST_CHROMA_SETTINGS
-)
 
 
 def _make_chroma_client() -> ChromaClient:

@@ -116,12 +116,18 @@ class TestModelsImport:
 
 
 class TestMetadataTables:
-    def test_all_nine_tables_in_metadata(self) -> None:
+    def test_all_ten_tables_in_metadata(self) -> None:
         # verdict_outcomes added in T-087 (Phase 8, Verdict Accuracy Tracker);
         # see test_verdict_outcomes.py for dedicated coverage of that table.
         # chat_sessions / chat_messages / user_preferences added in T-099
         # (Phase 10, AIRP Assistant); see test_chat_schema.py for dedicated
         # coverage of those three tables.
+        # password_reset_tokens added in B6 (password reset + session
+        # rotation) -- audit finding (Section C, unit 9): this test was
+        # never updated when that table shipped, so it silently expected
+        # 9 tables while Base.metadata actually carried 10 ever since.
+        # See test_password_reset_service.py for dedicated coverage of
+        # that table.
         expected = {
             "users",
             "companies",
@@ -132,12 +138,13 @@ class TestMetadataTables:
             "chat_sessions",
             "chat_messages",
             "user_preferences",
+            "password_reset_tokens",
         }
         actual = set(Base.metadata.tables.keys())
         assert expected == actual
 
     def test_no_extra_tables(self) -> None:
-        assert len(Base.metadata.tables) == 9
+        assert len(Base.metadata.tables) == 10
 
 
 # ---------------------------------------------------------------------------

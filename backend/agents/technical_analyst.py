@@ -675,7 +675,15 @@ def _run_technical_analysis_core(
                 f"RSI-14: {rsi} ({rsi_label}). "
                 f"LLM synthesis unavailable -- review indicators directly."
             )
-            if ma50 and ma200 and rsi
+            # Audit finding (Section C, unit 9): truthiness treated a
+            # legitimate RSI of exactly 0.0 (compute_rsi returns 0.0 when
+            # avg_gain is 0 over the lookback -- a real, valid "zero
+            # momentum" reading, not a missing value) as if it were
+            # absent, silently dropping the MA/RSI detail from this
+            # fallback narrative even though it was computed and
+            # available. `is not None` is the correct "was this actually
+            # computed" check.
+            if ma50 is not None and ma200 is not None and rsi is not None
             else (
                 f"{company_name} shows a {signal} signal "
                 f"(strength {signal_strength}/10). "

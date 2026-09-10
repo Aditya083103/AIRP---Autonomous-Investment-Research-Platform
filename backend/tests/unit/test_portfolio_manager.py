@@ -556,6 +556,7 @@ class TestDetermineVerdict:
             _FUNDAMENTAL_STRONG,
             _TECHNICAL_BUY_STRONG,
             _SENTIMENT_POSITIVE,
+            {},
             _RISK_LOW,
             _CONTRARIAN_MILD,
             _VALUATION_UNDERVALUED,
@@ -568,6 +569,7 @@ class TestDetermineVerdict:
             _FUNDAMENTAL_STRONG,
             _TECHNICAL_BUY_STRONG,
             _SENTIMENT_POSITIVE,
+            {},
             _RISK_HIGH,
             _CONTRARIAN_MILD,
             _VALUATION_UNDERVALUED,
@@ -580,6 +582,7 @@ class TestDetermineVerdict:
             _FUNDAMENTAL_WEAK,
             _TECHNICAL_SELL_STRONG,
             _SENTIMENT_NEGATIVE,
+            {},
             _RISK_LOW,
             _CONTRARIAN_MILD,
             _VALUATION_OVERVALUED,
@@ -604,6 +607,7 @@ class TestDetermineVerdict:
             fundamental_insufficient,
             _TECHNICAL_BUY_STRONG,
             _SENTIMENT_POSITIVE,
+            {},
             _RISK_LOW,
             _CONTRARIAN_MILD,
             _VALUATION_OVERVALUED,
@@ -621,6 +625,7 @@ class TestDetermineVerdict:
             fundamental_weak_explicit,
             _TECHNICAL_SELL_STRONG,
             _SENTIMENT_NEGATIVE,
+            {},
             _RISK_LOW,
             _CONTRARIAN_MILD,
             _VALUATION_OVERVALUED,
@@ -633,6 +638,7 @@ class TestDetermineVerdict:
             _FUNDAMENTAL_WEAK,
             _TECHNICAL_SELL_STRONG,
             _SENTIMENT_NEGATIVE,
+            {},
             _RISK_LOW,
             _CONTRARIAN_MILD,
             _VALUATION_FAIR,
@@ -645,6 +651,7 @@ class TestDetermineVerdict:
             {"score": 5},
             _TECHNICAL_HOLD,
             {"sentiment_score": 0.0},
+            {},
             {"risk_score": 5},
             {"bear_conviction": 4},
             _VALUATION_FAIR,
@@ -657,6 +664,7 @@ class TestDetermineVerdict:
             {"score": 6},
             _TECHNICAL_HOLD,
             {"sentiment_score": 0.1},
+            {},
             {"risk_score": 5},
             _CONTRARIAN_STRONG,
             _VALUATION_FAIR,
@@ -665,11 +673,12 @@ class TestDetermineVerdict:
         assert verdict != "BUY"
 
     def test_verdict_is_always_one_of_three_values(self) -> None:
-        for fund, tech, sent, risk, contra, val in [
+        for fund, tech, sent, macro, risk, contra, val in [
             (
                 _FUNDAMENTAL_STRONG,
                 _TECHNICAL_BUY_STRONG,
                 _SENTIMENT_POSITIVE,
+                {},
                 _RISK_LOW,
                 _CONTRARIAN_MILD,
                 _VALUATION_UNDERVALUED,
@@ -678,16 +687,102 @@ class TestDetermineVerdict:
                 _FUNDAMENTAL_WEAK,
                 _TECHNICAL_SELL_STRONG,
                 _SENTIMENT_NEGATIVE,
+                {},
                 _RISK_HIGH,
                 _CONTRARIAN_STRONG,
                 _VALUATION_OVERVALUED,
             ),
-            ({}, {}, {}, {}, {}, {}),
+            ({}, {}, {}, {}, {}, {}, {}),
         ]:
             verdict = _determine_verdict(
-                fund, tech, sent, risk, contra, val, critical_flags=[]
+                fund, tech, sent, macro, risk, contra, val, critical_flags=[]
             )
             assert verdict in ("BUY", "HOLD", "SELL")
+
+
+class TestDetermineVerdictMacroContribution:
+    """
+    Audit finding (Section C, unit 9): ``macro`` has a real 0.10 base
+    weight in ``_compute_agent_weights`` -- shown to the user as part of
+    "How the committee's evidence was weighted" -- but before this fix,
+    ``_determine_verdict`` never accepted a ``macro`` parameter at all,
+    so a Macro Economist verdict of "unfavourable" contributed nothing
+    to the actual BUY/HOLD/SELL decision: two companies identical in
+    every other respect but opposite macro environments received the
+    exact same verdict. These tests hold every other input fixed at a
+    baseline that lands just inside the HOLD band and prove that only
+    the macro input flips the verdict across the +-1.5 threshold.
+    """
+
+    # Every non-macro input below intentionally contributes exactly the
+    # same amount regardless of macro, so the score is provably fixed
+    # except for macro_environment's own +-0.75:
+    #   fund_score=6         -> (6-5)*0.4        = +0.40
+    #   technical HOLD       ->                     0.00
+    #   sentiment 0.0        -> 0.0*1.5           =  0.00
+    #   valuation fairly_val ->                     0.00
+    #   risk_score=5         -> max(0, 5-5)*0.35  =  0.00
+    #   bear_conviction=1    -> (1-1)*0.1         =  0.00
+    #   critical_flags=[]    ->                     0.00
+    # baseline score (macro neutral) = 0.40 -> comfortably inside HOLD.
+    _NEUTRAL_TALLY_KWARGS: dict[str, Any] = {
+        "fundamental": {"score": 6},
+        "technical": {"signal": "HOLD", "signal_strength": 5},
+        "sentiment": {"sentiment_score": 0.0},
+        "risk": {"risk_score": 5},
+        "contrarian": {"bear_conviction": 1},
+        "valuation": {"valuation_verdict": "fairly_valued"},
+        "critical_flags": [],
+    }
+
+    def test_neutral_macro_does_not_move_a_marginal_score(self) -> None:
+        verdict = _determine_verdict(
+            macro={"macro_environment": "neutral"}, **self._NEUTRAL_TALLY_KWARGS
+        )
+        assert verdict == "HOLD"
+
+    def test_favourable_macro_alone_can_tip_a_marginal_score_to_buy(self) -> None:
+        """
+        Same inputs as the neutral-macro baseline (score 0.40, HOLD) --
+        only macro_environment changes, from "neutral" to "favourable"
+        (+0.75). 0.40 + 0.75 = 1.15... not quite enough on its own, so
+        this fixture nudges fundamental up by one point (score=7,
+        contributing +0.80 instead of +0.40) to land the neutral-macro
+        baseline at HOLD (0.80) and the favourable-macro score at
+        exactly 1.55 -- BUY. Before this fix, macro_environment could
+        not have produced this difference at all: both cases would have
+        resolved to the same verdict as the "neutral" case.
+        """
+        kwargs = {**self._NEUTRAL_TALLY_KWARGS, "fundamental": {"score": 7}}
+        baseline = _determine_verdict(macro={"macro_environment": "neutral"}, **kwargs)
+        assert baseline == "HOLD"
+
+        with_favourable_macro = _determine_verdict(macro=_MACRO_FAVOURABLE, **kwargs)
+        assert with_favourable_macro == "BUY"
+
+    def test_unfavourable_macro_alone_can_tip_a_marginal_score_to_sell(self) -> None:
+        """Mirror image of the favourable-macro test, on the bearish side."""
+        kwargs = {**self._NEUTRAL_TALLY_KWARGS, "fundamental": {"score": 3}}
+        baseline = _determine_verdict(macro={"macro_environment": "neutral"}, **kwargs)
+        assert baseline == "HOLD"
+
+        with_unfavourable_macro = _determine_verdict(
+            macro=_MACRO_UNFAVOURABLE, **kwargs
+        )
+        assert with_unfavourable_macro == "SELL"
+
+    def test_missing_macro_output_defaults_to_neutral_zero_contribution(self) -> None:
+        """
+        A Macro Economist run that errored/produced no output must
+        degrade to zero influence on the verdict -- the same safe-default
+        pattern fund_score/tech_signal/valuation_verdict already use --
+        not crash, and not silently favour either direction.
+        """
+        verdict_missing = _determine_verdict(macro={}, **self._NEUTRAL_TALLY_KWARGS)
+        verdict_explicit_neutral = _determine_verdict(
+            macro={"macro_environment": "neutral"}, **self._NEUTRAL_TALLY_KWARGS
+        )
+        assert verdict_missing == verdict_explicit_neutral == "HOLD"
 
 
 # ---------------------------------------------------------------------------
@@ -731,6 +826,7 @@ class TestDetermineVerdictBuyReachability:
             fundamental=_FUNDAMENTAL_STRONG,
             technical=_TECHNICAL_BUY_STRONG,
             sentiment=_SENTIMENT_POSITIVE,
+            macro={},
             risk=_RISK_LOW,
             contrarian=_CONTRARIAN_MILD,
             valuation=_VALUATION_UNDERVALUED,
@@ -757,6 +853,7 @@ class TestDetermineVerdictBuyReachability:
             fundamental={},
             technical={},
             sentiment={},
+            macro={},
             risk={"risk_score": 6},
             contrarian={"bear_conviction": 6},
             valuation={},
@@ -784,6 +881,7 @@ class TestDetermineVerdictBuyReachability:
             fundamental={},
             technical={},
             sentiment={"sentiment_score": 1.0},
+            macro={},
             risk={"risk_score": 6},
             contrarian={"bear_conviction": 6},
             valuation={},
@@ -802,6 +900,7 @@ class TestDetermineVerdictBuyReachability:
             fundamental=_FUNDAMENTAL_WEAK,
             technical=_TECHNICAL_SELL_STRONG,
             sentiment=_SENTIMENT_NEGATIVE,
+            macro={},
             risk=_RISK_HIGH,
             contrarian=_CONTRARIAN_STRONG,
             valuation=_VALUATION_OVERVALUED,
@@ -887,6 +986,60 @@ class TestScoreConviction:
             debate_rounds_used=1,
         )
         assert degraded_conviction < full_conviction
+
+    def test_macro_direction_now_counts_toward_the_agreement_bonus(self) -> None:
+        """
+        Audit finding (Section C, unit 9): before this fix, ``macro`` was
+        only ever used here to count toward ``error_count`` -- its
+        directional view (favourable/unfavourable) never entered the
+        fund/tech/sentiment/valuation "agreement" calculation that drives
+        the +-2.0 conviction bonus/penalty. This test isolates exactly
+        that: fundamental and technical both point bullish (+1 each) but
+        sentiment and valuation are both neutral (0, excluded from the
+        agreement calculation), so only 2 directions are on the board --
+        one short of the `len(directions) >= 3` bonus threshold. Adding a
+        favourable macro reading is the ONLY thing that supplies the 3rd
+        agreeing direction and unlocks the +2.0 bonus; before this fix,
+        macro could never do that.
+        """
+        fundamental_bullish = {"score": 8}  # fund_dir = +1
+        technical_bullish = {"signal": "BUY"}  # tech_dir = +1
+        sentiment_neutral = {"sentiment_score": 0.0}  # sent_dir = 0 (excluded)
+        valuation_neutral = {
+            "valuation_verdict": "fairly_valued"
+        }  # val_dir = 0 (excluded)
+        risk_neutral = {"risk_score": 5}
+        contrarian_mild = {"bear_conviction": 1}
+
+        conviction_with_neutral_macro = _score_conviction(
+            fundamental_bullish,
+            technical_bullish,
+            sentiment_neutral,
+            {
+                "macro_environment": "neutral"
+            },  # macro_dir = 0 -- only 2 directions total
+            risk_neutral,
+            contrarian_mild,
+            valuation_neutral,
+            verdict="BUY",
+            debate_rounds_used=1,
+        )
+        conviction_with_favourable_macro = _score_conviction(
+            fundamental_bullish,
+            technical_bullish,
+            sentiment_neutral,
+            _MACRO_FAVOURABLE,  # macro_dir = +1 -- the 3rd agreeing direction
+            risk_neutral,
+            contrarian_mild,
+            valuation_neutral,
+            verdict="BUY",
+            debate_rounds_used=1,
+        )
+
+        assert conviction_with_neutral_macro == 6  # 5.0 base + 1.0 (bear_conviction<=3)
+        assert (
+            conviction_with_favourable_macro == 8
+        )  # + 2.0 agreement bonus, unlocked by macro
 
     def test_more_debate_rounds_reduces_conviction(self) -> None:
         one_round = _score_conviction(

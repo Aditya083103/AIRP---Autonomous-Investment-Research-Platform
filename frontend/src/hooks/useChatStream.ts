@@ -34,7 +34,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ChatApiError, deleteChatMessagesFrom } from "@/api/chat";
-import { env } from "@/config/env";
+import { env, resolveWebSocketBaseUrl } from "@/config/env";
 
 /** One push payload received over WS /api/v1/chat/{session_id}/stream. See backend/routers/chat_stream.py's ChatStreamEvent for the authoritative field meanings. */
 export interface ChatStreamEvent {
@@ -130,36 +130,6 @@ export interface UseChatStreamResult {
 }
 
 const LOCAL_ID_PREFIX = "local-";
-
-function defaultWebSocketBaseUrl(): string {
-  // T-074 audit finding C1/F1: see useAnalysisStream.ts's identical helper
-  // for the full rationale -- prefer env.wsBaseUrl so split-origin
-  // deployments dial the right host, falling back to window.location only
-  // when neither VITE_WS_BASE_URL nor an absolute VITE_API_BASE_URL is set.
-  if (env.wsBaseUrl) {
-    return env.wsBaseUrl;
-  }
-  // B9 diagnosis bullet 2: on a split-origin production deployment
-  // (Vercel frontend + Render backend) with neither VITE_WS_BASE_URL
-  // nor an absolute VITE_API_BASE_URL configured in the build, this
-  // fallback dials the FRONTEND's own origin -- which has no chat
-  // backend listening -- producing a silent, confusing abnormal close
-  // (commonly code 1005) with nothing in the browser console to explain
-  // why. Loudly flag that misconfiguration in production specifically
-  // (dev's relative "/api/v1" default via the Vite proxy is the
-  // expected, correct same-origin case and must not warn).
-  if (env.isProduction) {
-    console.error(
-      "AIRP Assistant: no VITE_WS_BASE_URL (or absolute VITE_API_BASE_URL) is " +
-        "configured for this production build -- the chat socket will dial " +
-        "this frontend's own origin, which has no backend listening. Set " +
-        "VITE_WS_BASE_URL (or VITE_API_BASE_URL) in the Vercel project's " +
-        "environment variables.",
-    );
-  }
-  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${protocol}//${window.location.host}`;
-}
 
 /**
  * Narrow an unknown decoded-JSON value to ChatStreamEvent at runtime --
@@ -275,7 +245,13 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamResul
     setError(null);
     setConnectionStatus("connecting");
 
-    const resolvedBaseUrl = baseUrl ?? defaultWebSocketBaseUrl();
+    const resolvedBaseUrl =
+      baseUrl ??
+      resolveWebSocketBaseUrl({
+        wsBaseUrl: env.wsBaseUrl,
+        isProduction: env.isProduction,
+        callerLabel: "AIRP Assistant",
+      });
     const url = `${resolvedBaseUrl}/api/v1/chat/${sessionId}/stream?token=${encodeURIComponent(
       token,
     )}`;

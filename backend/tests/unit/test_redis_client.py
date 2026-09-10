@@ -338,6 +338,67 @@ class TestResetRedisClient:
 
 
 # ---------------------------------------------------------------------------
+# Cross-file pollution recovery (Section C audit finding, unit 9)
+# ---------------------------------------------------------------------------
+#
+# _FORCE_DISABLE (module docstring above) is computed exactly once, at
+# backend.db.redis_client's raw Python import time, from
+# _is_test_environment(). Whichever backend test file happens to be the
+# FIRST in the whole pytest process to transitively import this module
+# (it is pulled in by nearly everything, via backend.config/backend.main/
+# most agents and tools) freezes that value for the rest of the process.
+# If that import happens before ENVIRONMENT=test is actually set in the
+# raw OS environment (every test file sets it via its own
+# `os.environ.setdefault(...)`, but pytest's collection order does not
+# guarantee any particular file's setdefault call has already run before
+# some OTHER file's import chain first reaches this module), _FORCE_DISABLE
+# freezes as False -- the real-process default -- and get_redis_client()
+# then attempts, and in an environment with a real REDIS_URL configured
+# actually succeeds at, a genuine connection. That live client gets
+# memoised at module level and leaks into every subsequent test in the
+# process that touches caching (directly, or via the @cached decorator
+# inside backend.tools.* fetch functions), silently replacing the
+# "always None under test env" contract with a real network call --
+# exactly what broke test_cache.py's TestTestEnvironmentNoOp /
+# TestCachedDecoratorTestEnv and several test_financials.py/test_news.py
+# error-path assertions the first time `pytest backend/tests/unit/` ever
+# completed collection (previously blocked entirely by the unrelated
+# ChromaDB singleton bug fixed alongside this one).
+#
+# test_redis_client.py's own reset_redis_state autouse fixture (above)
+# only protects tests within THIS file; it collects alphabetically after
+# test_cache.py/test_financials.py/test_news.py, so it could never have
+# caught this. The real fix is backend/tests/conftest.py's new
+# _reset_redis_client_state autouse fixture, which calls
+# reset_redis_client() before and after EVERY test in the entire suite --
+# by which point every file's own os.environ.setdefault has unconditionally
+# already run during collection, so _is_test_environment() is always
+# correct regardless of import order. This test proves the recovery
+# mechanism itself: reset_redis_client() restores hermetic test defaults
+# no matter how badly the module's state was polluted beforehand.
+# ---------------------------------------------------------------------------
+
+
+class TestResetRecoversFromCrossFilePollution:
+    def test_reset_recovers_even_from_a_live_looking_memoised_client(self) -> None:
+        # Simulate the worst-case state an import-order race could freeze
+        # at process start: _FORCE_DISABLE latched False (as if this module
+        # was first imported before any test file's own
+        # os.environ.setdefault("ENVIRONMENT", "test") had run) with a
+        # real-looking client already memoised -- exactly what a live
+        # Upstash connection succeeding under this bug would leave behind.
+        rc_mod._FORCE_DISABLE = False
+        rc_mod._client = MagicMock(name="leaked-live-redis-client")
+        rc_mod._client_unavailable = False
+
+        reset_redis_client()
+
+        assert rc_mod._FORCE_DISABLE is True
+        assert rc_mod._client is None
+        assert get_redis_client() is None
+
+
+# ---------------------------------------------------------------------------
 # _is_test_environment() -- the function _FORCE_DISABLE's default is now
 # bound to (see redis_client.py's docstring on _FORCE_DISABLE for the bug
 # this fixes: it used to be a hardcoded `True`, so real uvicorn runs -- which

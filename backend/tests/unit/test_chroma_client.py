@@ -15,16 +15,22 @@ _MockEF
     (*args, **kwargs) and is rejected. A concrete class with the exact
     parameter name 'input' passes the check.
 
-_SHARED_RAW_CLIENT (module-level singleton)
+_SHARED_RAW_CLIENT (module-level singleton, imported from
+_chroma_test_support.py -- Section C audit finding, unit 9)
     EphemeralClient uses SharedSystemClient, a class-level dict keyed on
     the persistence path ("ephemeral" for in-memory). Once the first call
     creates the system with settings A, any subsequent call with different
     settings B raises:
         ValueError: An instance of Chroma already exists for ephemeral
                     with different settings
-    Creating the shared client at MODULE IMPORT TIME with allow_reset=True
-    ensures our settings win the slot before any test can call
-    get_chroma_client() with the library defaults.
+    This file used to create its own module-level singleton directly,
+    but test_documents_router.py and test_documents_service.py each did
+    the same -- three separate, value-identical-but-distinct Settings
+    objects, three separate EphemeralClient() calls. Running any one
+    file alone worked; `pytest backend/tests/unit/` (the whole suite)
+    collected all three in one process and crashed at collection with
+    the ValueError above. All three files now import the one shared
+    instance from _chroma_test_support.py instead.
     _make_client() calls raw.reset() on this singleton so each test
     starts with a clean collection slate.
 
@@ -66,8 +72,6 @@ os.environ.setdefault("ENVIRONMENT", "test")
 from typing import Any  # noqa: E402
 from unittest.mock import ANY, MagicMock, patch  # noqa: E402
 
-import chromadb  # noqa: E402
-from chromadb.config import Settings as _ChromaSettings  # noqa: E402
 import pytest  # noqa: E402
 
 from backend.db.chroma_client import (  # noqa: E402
@@ -90,49 +94,23 @@ from backend.db.chroma_client import (  # noqa: E402
     ingest_transcript,
     semantic_search,
 )
-
-# ---------------------------------------------------------------------------
-# _MockEF — concrete EmbeddingFunction for tests
-# ---------------------------------------------------------------------------
-# ChromaDB 0.5.0 validates __call__ parameter names:
-#   odict_keys(['self', 'input']) is required.
-# A plain class with the exact signature passes; MagicMock does not.
-# ---------------------------------------------------------------------------
-
-
-class _MockEF:
-    """
-    Fake embedding function satisfying ChromaDB's interface validation.
-
-    Returns fixed 384-dim vectors (all-MiniLM-L6-v2 output dimension)
-    without loading any model or making any network call.
-    """
-
-    def __call__(self, input: list[str]) -> list[list[float]]:  # noqa: A002
-        return [[0.1] * 384 for _ in input]
-
-
-# ---------------------------------------------------------------------------
-# Module-level ChromaDB singleton
-# ---------------------------------------------------------------------------
-# EphemeralClient uses SharedSystemClient — a process-wide singleton keyed
-# on the identifier "ephemeral".  The FIRST creation wins; any subsequent
-# creation with different settings raises ValueError.
-#
-# Creating _SHARED_RAW_CLIENT here (at module import time, before any test
-# class is defined) ensures allow_reset=True settings win the "ephemeral"
-# slot before get_chroma_client() is called by TestGetChromaClient with the
-# library's default settings.
-# ---------------------------------------------------------------------------
-
-_TEST_CHROMA_SETTINGS = _ChromaSettings(
-    is_persistent=False,
-    allow_reset=True,
-    anonymized_telemetry=False,
+from backend.tests.unit._chroma_test_support import (  # noqa: E402
+    SHARED_RAW_CLIENT as _SHARED_RAW_CLIENT,
+    MockEmbeddingFunction as _MockEF,
 )
 
-# One real EphemeralClient shared across all tests in this module.
-_SHARED_RAW_CLIENT: Any = chromadb.EphemeralClient(settings=_TEST_CHROMA_SETTINGS)
+# ---------------------------------------------------------------------------
+# _MockEF / _SHARED_RAW_CLIENT
+# ---------------------------------------------------------------------------
+# Imported from _chroma_test_support.py (Section C audit finding, unit 9)
+# rather than defined here -- that module is the ONLY place in the whole
+# test process allowed to call chromadb.EphemeralClient(), since
+# EphemeralClient's SharedSystemClient is a process-wide singleton keyed
+# on the identifier "ephemeral": the FIRST creation wins, and any
+# subsequent creation with a different (even value-identical-but-distinct)
+# Settings object raises ValueError, aborting pytest collection for the
+# entire suite. See that module's own docstring for the full history.
+# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
