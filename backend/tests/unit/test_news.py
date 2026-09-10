@@ -48,6 +48,7 @@ from backend.tools.news import (  # noqa: E402
     NewsArticle,
     NewsResult,
     _call_newsapi,
+    _fetch_news_cached,
     _fetch_news_from_api,
     _parse_articles,
     fetch_news,
@@ -573,3 +574,88 @@ class TestNewsArticleValidation:
             description=None,
         )
         assert a.description is None
+
+
+class TestFetchNewsCacheKeyUniqueness:
+    """
+    Audit finding (Section C, unit 9): ``_fetch_news_cached``'s Redis key
+    previously templated on ``company_name`` alone, even though
+    ``ticker`` (OR'd into the actual NewsAPI search query) and
+    ``max_articles`` (NewsAPI's ``pageSize``) both change the query and
+    therefore the result. Two calls sharing a company_name but differing
+    in ticker or max_articles must resolve to DIFFERENT cache keys --
+    otherwise the second call would silently be served the first call's
+    mismatched result.
+    """
+
+    def _fake_result(self, company_name: str) -> MagicMock:
+        mock_result = MagicMock()
+        mock_result.model_dump.return_value = {
+            "company_name": company_name,
+            "articles": [],
+        }
+        return mock_result
+
+    def test_different_tickers_same_company_name_use_different_cache_keys(
+        self,
+    ) -> None:
+        with (
+            patch("backend.tools.cache.cache_get_json", return_value=None),
+            patch("backend.tools.cache.cache_set_json") as mock_set,
+            patch(
+                "backend.tools.news._fetch_news_from_api",
+                side_effect=lambda **kwargs: self._fake_result(kwargs["company_name"]),
+            ),
+        ):
+            _fetch_news_cached(company_name="Tata Motors", ticker="TATAMOTORS.NS")
+            _fetch_news_cached(company_name="Tata Motors", ticker="TATASTEEL.NS")
+
+        resolved_keys = [call.args[0] for call in mock_set.call_args_list]
+        assert len(resolved_keys) == 2
+        assert resolved_keys[0] != resolved_keys[1]
+        assert "TATAMOTORS.NS" in resolved_keys[0]
+        assert "TATASTEEL.NS" in resolved_keys[1]
+
+    def test_different_max_articles_same_company_and_ticker_use_different_cache_keys(
+        self,
+    ) -> None:
+        with (
+            patch("backend.tools.cache.cache_get_json", return_value=None),
+            patch("backend.tools.cache.cache_set_json") as mock_set,
+            patch(
+                "backend.tools.news._fetch_news_from_api",
+                side_effect=lambda **kwargs: self._fake_result(kwargs["company_name"]),
+            ),
+        ):
+            _fetch_news_cached(
+                company_name="Infosys", ticker="INFY.NS", max_articles=10
+            )
+            _fetch_news_cached(
+                company_name="Infosys", ticker="INFY.NS", max_articles=20
+            )
+
+        resolved_keys = [call.args[0] for call in mock_set.call_args_list]
+        assert len(resolved_keys) == 2
+        assert resolved_keys[0] != resolved_keys[1]
+
+    def test_identical_arguments_reuse_the_same_cache_key(self) -> None:
+        """Sanity check: the fix must not over-scope the key -- the exact
+        same (company_name, ticker, max_articles) triple must still hit
+        the cache on the second call."""
+        with (
+            patch(
+                "backend.tools.cache.cache_get_json",
+                side_effect=[None, {"company_name": "Wipro", "articles": []}],
+            ) as mock_get,
+            patch("backend.tools.cache.cache_set_json"),
+            patch(
+                "backend.tools.news._fetch_news_from_api",
+                side_effect=lambda **kwargs: self._fake_result(kwargs["company_name"]),
+            ) as mock_fetch,
+        ):
+            _fetch_news_cached(company_name="Wipro", ticker="WIPRO.NS", max_articles=15)
+            _fetch_news_cached(company_name="Wipro", ticker="WIPRO.NS", max_articles=15)
+
+        assert mock_fetch.call_count == 1  # second call was a cache hit
+        first_key, second_key = (call.args[0] for call in mock_get.call_args_list)
+        assert first_key == second_key

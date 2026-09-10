@@ -427,7 +427,7 @@ def _fetch_news_from_api(
     )
 
 
-@cached(key="airp:news:{company_name}", ttl=NEWS_TTL)
+@cached(key="airp:news:{company_name}:{ticker}:{max_articles}", ttl=NEWS_TTL)
 def _fetch_news_cached(
     company_name: str,
     ticker: str | None = None,
@@ -439,6 +439,19 @@ def _fetch_news_cached(
     The ``@cached`` decorator handles Redis read-through: hit returns the
     cached dict immediately; miss calls the API, caches the result for
     ``NEWS_TTL`` seconds, and returns it.
+
+    Audit finding (Section C, unit 9): the cache key previously templated
+    on ``company_name`` alone, even though ``ticker`` (OR'd into the
+    NewsAPI search query, see ``_fetch_news_from_api``) and
+    ``max_articles`` (NewsAPI's ``pageSize``) both change the actual
+    query and therefore the result. Two calls sharing a company_name but
+    differing in ticker or max_articles would incorrectly share a cache
+    entry -- the second call would silently get the first call's
+    mismatched result instead of its own. The current sole caller
+    (sentiment_analyst.py) always passes a fixed max_articles and a
+    ticker that moves 1:1 with company_name, so this was latent rather
+    than user-visible, but the key must be scoped to every parameter
+    that affects the query, not just the one that happens to vary today.
     """
     result = _fetch_news_from_api(
         company_name=company_name,
