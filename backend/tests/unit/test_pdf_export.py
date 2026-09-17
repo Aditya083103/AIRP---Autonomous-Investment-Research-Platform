@@ -706,6 +706,30 @@ class TestPdfExportNode:
         result = pdf_export_node(state)
         assert "memo_pdf_path" in result
 
+    def test_never_raises_when_render_memo_pdf_itself_raises_unexpectedly(self) -> None:
+        """
+        FINAL SCAN finding: pdf_export_node's own docstring promises
+        "never raises", but the function previously had no try/except of
+        its own around render_memo_pdf -- safe in practice only because
+        that callee already catches its own internal failures and an
+        outer LangGraph node wrapper (_persist_after) provides a second
+        safety net two layers away. This locks in the fix: even a
+        genuinely unexpected exception from render_memo_pdf itself (not
+        one of the specific failure modes render_memo_pdf already
+        degrades internally) must not propagate out of this function.
+        """
+        state = {
+            "job_id": "test-job-render-raises",
+            "company_name": "Test Corp",
+            "memo_markdown": "# Memo",
+        }
+        with patch(
+            "backend.services.pdf_export.render_memo_pdf",
+            side_effect=RuntimeError("unexpected failure"),
+        ):
+            result = pdf_export_node(state)
+        assert result == {"memo_pdf_path": None}
+
     def test_result_only_contains_memo_pdf_path_key(self) -> None:
         """The node returns a partial-state dict -- exactly one new key."""
         state = {
