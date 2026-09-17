@@ -78,8 +78,13 @@ export function Tooltip({ content, children, placement = "top" }: TooltipProps):
         id={tooltipId}
         role="tooltip"
         className={cn(
-          "absolute z-10 whitespace-nowrap rounded-md bg-ink px-2.5 py-1.5 text-xs",
-          "font-medium text-white shadow-card transition-opacity duration-150",
+          // ISSUE 5: was `bg-ink text-white` -- an intentional "inverted
+          // dark chip" against the light theme's light `ink`. Now that
+          // `ink` IS the (light) foreground colour, that combination is
+          // white-on-white. An elevated `bg-surface` card with a border
+          // reads correctly as a popover in either theme.
+          "absolute z-10 whitespace-nowrap rounded-md border border-line bg-surface px-2.5 py-1.5",
+          "text-xs font-medium text-ink shadow-card transition-opacity duration-150",
           PLACEMENT_CLASSES[placement],
           isVisible ? "visible opacity-100" : "invisible opacity-0",
         )}

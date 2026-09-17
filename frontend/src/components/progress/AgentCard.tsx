@@ -28,10 +28,19 @@ import { usePrefersReducedMotion } from "@/hooks/usePrefersReducedMotion";
 import { type AgentCardViewModel } from "@/lib/agentProgress";
 import { cn } from "@/lib/cn";
 
+// ISSUE 5: brightened one step from CommitteeSection.tsx's original
+// light-mode values (#1D4ED8/#B91C1C/#065F46) -- those were tuned as a
+// thin top-border accent against a WHITE card, where even a fairly dark
+// hue reads clearly. Against this pass's dark `bg-surface` card, the same
+// dark hues lose almost all contrast, so each round's identity colour
+// moves to its brighter Tailwind neighbour (blue-600->blue-400,
+// red-700->red-400, emerald-800->emerald-400) -- same hue, same round
+// mapping as the marketing page's CommitteeSection, still functioning as
+// "this round's colour", just legible on a dark surface.
 const ROUND_ACCENT: Record<1 | 2 | 3, string> = {
-  1: "#1D4ED8",
-  2: "#B91C1C",
-  3: "#065F46",
+  1: "#60A5FA",
+  2: "#F87171",
+  3: "#34D399",
 };
 
 const STATE_LABEL: Record<AgentCardViewModel["state"], string> = {
@@ -44,7 +53,7 @@ const STATE_LABEL: Record<AgentCardViewModel["state"], string> = {
 
 const STATE_BADGE_CLASSES: Record<AgentCardViewModel["state"], string> = {
   waiting: "bg-line text-muted",
-  thinking: "bg-brand-50 text-brand-700",
+  thinking: "bg-brand-500/15 text-brand-300",
   complete: "bg-verdict-buy/15 text-verdict-buy",
   failed: "bg-verdict-sell/15 text-verdict-sell",
   skipped: "bg-line text-muted",

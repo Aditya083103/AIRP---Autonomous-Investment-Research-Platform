@@ -76,7 +76,7 @@ export function AccuracyPage(): JSX.Element {
       </p>
 
       <div
-        className="mt-6 max-w-2xl rounded-card border border-brand-600/20 bg-brand-50 px-4 py-3 text-sm text-ink"
+        className="mt-6 max-w-2xl rounded-card border border-brand-500/30 bg-brand-500/10 px-4 py-3 text-sm text-ink"
         role="note"
         data-testid="accuracy-explainer"
       >
