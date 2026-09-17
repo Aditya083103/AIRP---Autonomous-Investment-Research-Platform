@@ -449,6 +449,131 @@ class TestComputeAgentWeights:
 
 
 # ---------------------------------------------------------------------------
+# Tests: ISSUE 4 -- deliberate rebalancing of adversarial-agent influence.
+#
+# Risk Officer and Contrarian Investor were previously weighted 0.15 each,
+# combining to outweigh Technical + Macro + Sentiment (0.30 combined) on
+# their own -- this skewed the committee toward HOLD/SELL far more often
+# than BUY. This is a rebalancing of how much mathematical pull those two
+# adversarial seats have on the FINAL VERDICT -- it does not change what
+# either agent itself says; their critiques are identical to before.
+# ---------------------------------------------------------------------------
+
+
+class TestIssue4WeightRebalance:
+    def test_risk_and_contrarian_reduced_to_ten_percent_each(self) -> None:
+        assert _BASE_AGENT_WEIGHTS["risk_officer"] == pytest.approx(0.10)
+        assert _BASE_AGENT_WEIGHTS["contrarian_investor"] == pytest.approx(0.10)
+
+    def test_freed_weight_redistributed_to_technical_macro_sentiment(self) -> None:
+        # Old values: technical=0.12, macro=0.10, sentiment=0.08 (sum 0.30).
+        # 0.10 freed from Risk+Contrarian, redistributed proportionally.
+        assert _BASE_AGENT_WEIGHTS["technical_analyst"] == pytest.approx(0.16)
+        assert _BASE_AGENT_WEIGHTS["macro_economist"] == pytest.approx(0.1333, abs=1e-3)
+        assert _BASE_AGENT_WEIGHTS["news_sentiment"] == pytest.approx(0.1067, abs=1e-3)
+
+    def test_weights_still_sum_to_one(self) -> None:
+        assert sum(_BASE_AGENT_WEIGHTS.values()) == pytest.approx(1.0)
+
+    def test_fundamental_and_valuation_remain_the_two_highest_weights(self) -> None:
+        ordered = sorted(_BASE_AGENT_WEIGHTS.values(), reverse=True)
+        assert ordered[0] == ordered[1] == pytest.approx(0.20)
+        assert _BASE_AGENT_WEIGHTS["fundamental_analyst"] == pytest.approx(0.20)
+        assert _BASE_AGENT_WEIGHTS["valuation_agent"] == pytest.approx(0.20)
+        for name, weight in _BASE_AGENT_WEIGHTS.items():
+            if name not in ("fundamental_analyst", "valuation_agent"):
+                assert weight < 0.20
+
+    def test_verdict_scoring_before_after_example_crosses_buy_threshold(self) -> None:
+        """
+        Concrete before/after example locking in the rebalance's real
+        effect on _determine_verdict's point tally (a SEPARATE hardcoded
+        scoring system from _BASE_AGENT_WEIGHTS -- see that function's
+        own ISSUE 4 comment): identical inputs that landed at HOLD under
+        the pre-rebalance coefficients (0.35 / 1.5 / 0.1 / 0.3) now land
+        at BUY under the rebalanced ones (0.2333 / 1.0 / 0.0667 / 0.2).
+
+        Bullish subtotal (unaffected by this rebalance):
+            fund_score=7        -> (7-5)*0.4         = +0.80
+            valuation undervalued ->                   +1.50
+            sentiment=0.1        -> 0.1*1.5           = +0.15
+            (technical HOLD, macro neutral contribute 0)
+            subtotal                                  = +2.45
+
+        Bearish subtotal, OLD coefficients (risk_score=6, bear_conviction=5,
+        1 critical flag, full data completeness):
+            risk:      max(0,6-5)*0.35                = 0.35
+            contrarian: (5-1)*0.1                      = 0.40
+            critical_flags: 1*0.3                      = 0.30
+            total                                      = 1.05
+            old score = 2.45 - 1.05 = 1.40 -> HOLD (below the 1.5 BUY gate)
+
+        Bearish subtotal, NEW (rebalanced) coefficients:
+            risk:      max(0,6-5)*0.2333               = 0.2333
+            contrarian: (5-1)*0.0667                    = 0.2668
+            critical_flags: 1*0.2                       = 0.20
+            total                                       = 0.7001
+            new score = 2.45 - 0.7001 = 1.7499 -> BUY (>= 1.5)
+        """
+        fundamental = {"score": 7}
+        technical = {"signal": "HOLD", "signal_strength": 5}
+        sentiment = {"sentiment_score": 0.1}
+        macro = {"macro_environment": "neutral"}
+        risk = {"risk_score": 6}
+        contrarian = {"bear_conviction": 5}
+        valuation = {"valuation_verdict": "undervalued"}
+        critical_flags = ["ELEVATED_LEVERAGE"]
+
+        # Data completeness is 1.0 (all three yFinance-dependent agents
+        # present), so the bearish coefficients apply at full strength --
+        # exactly the scenario the docstring's arithmetic above assumes.
+        assert _data_completeness(fundamental, technical, valuation) == pytest.approx(
+            1.0
+        )
+
+        verdict = _determine_verdict(
+            fundamental,
+            technical,
+            sentiment,
+            macro,
+            risk,
+            contrarian,
+            valuation,
+            critical_flags=critical_flags,
+        )
+        assert verdict == "BUY"
+
+    def test_hard_gates_are_unaffected_by_the_rebalance(self) -> None:
+        """The two hard gates (prohibitive risk, overvalued + weak
+        fundamentals) exist to catch genuinely dangerous situations and
+        must not be weakened by this rebalance -- both still force SELL
+        unconditionally, regardless of how bullish every other input is."""
+        verdict_prohibitive_risk = _determine_verdict(
+            _FUNDAMENTAL_STRONG,
+            _TECHNICAL_BUY_STRONG,
+            _SENTIMENT_POSITIVE,
+            _MACRO_FAVOURABLE,
+            {"risk_score": 9, "critical_flags": ["SEVERE"]},
+            _CONTRARIAN_MILD,
+            _VALUATION_UNDERVALUED,
+            critical_flags=["SEVERE"],
+        )
+        assert verdict_prohibitive_risk == "SELL"
+
+        verdict_overvalued_weak_fundamentals = _determine_verdict(
+            _FUNDAMENTAL_WEAK,
+            _TECHNICAL_SELL_STRONG,
+            _SENTIMENT_NEGATIVE,
+            _MACRO_FAVOURABLE,
+            _RISK_LOW,
+            _CONTRARIAN_MILD,
+            _VALUATION_OVERVALUED,
+            critical_flags=[],
+        )
+        assert verdict_overvalued_weak_fundamentals == "SELL"
+
+
+# ---------------------------------------------------------------------------
 # Tests: _compute_agent_weights -- adversarial weight cap (bug #9, T-087)
 #
 # Reproduces the "evidence weighting" screenshot from the refinement work
@@ -464,14 +589,17 @@ class TestComputeAgentWeightsAdversarialCap:
         self,
     ) -> None:
         """
-        Before the fix: with fundamental/technical/macro/news all dropped
-        out, redistributing their combined 0.50 base weight over
-        {risk: 0.15, contrarian: 0.15, valuation: 0.20} (total 0.50)
-        pushes risk_officer and contrarian_investor to 0.30 each (60%
-        combined) -- a bearish-looking committee purely from data
-        dropout. After the fix, each adversarial seat is capped at
-        0.15 * 1.5 = 0.225, and the 0.15 combined excess flows to
-        valuation_agent instead.
+        Before the bug #9 fix: with fundamental/technical/macro/news all
+        dropped out, redistributing their combined base weight over just
+        {risk, contrarian, valuation} would push risk_officer and
+        contrarian_investor to a majority combined share -- a
+        bearish-looking committee purely from data dropout. The cap
+        (still ``_BASE_AGENT_WEIGHTS[name] * _MAX_ADVERSARIAL_WEIGHT_
+        MULTIPLIER`` per seat, computed dynamically below rather than a
+        hardcoded literal) keeps working after ISSUE 4 lowered each
+        adversarial seat's base weight to 0.10 -- the cap and the excess
+        redistribution to valuation_agent scale down proportionally with
+        it.
         """
         weights = _compute_agent_weights(
             fundamental={},
