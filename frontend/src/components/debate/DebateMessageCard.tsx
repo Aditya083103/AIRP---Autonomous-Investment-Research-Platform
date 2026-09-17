@@ -16,19 +16,29 @@ import { Badge } from "@/components/ui";
 import { cn } from "@/lib/cn";
 import { type DebateTranscriptMessage } from "@/lib/debateTranscript";
 
+// ISSUE 5: unlike AgentCard.tsx/CommitteeSection.tsx (border-only accents,
+// free to brighten all the way to each hue's -400 shade for maximum pop
+// against the dark canvas), this file's `accent` does DOUBLE DUTY -- also
+// the avatar circle's solid backgroundColor behind white initials text
+// (see the style={{ backgroundColor: accent }} below). A -400 shade is
+// too light for white text to stay readable on. Each colour below moves
+// only one step brighter than its original light-mode value (mostly
+// -700 -> -600, one -500 -> -600) -- enough to read clearly as a
+// left-border accent against a dark card, while staying dark/saturated
+// enough for white avatar-initials text to keep AA-ish contrast.
 /** One accent colour per committee seat -- stable across renders and re-runs. */
 const AGENT_ACCENTS: Record<string, string> = {
-  fundamental_analyst: "#1D4ED8",
-  technical_analyst: "#0EA5E9",
+  fundamental_analyst: "#2563EB",
+  technical_analyst: "#0284C7",
   sentiment_analyst: "#7C3AED",
   macro_economist: "#0D9488",
-  risk_officer: "#B91C1C",
-  contrarian_investor: "#C2410C",
-  valuation_agent: "#A16207",
-  portfolio_manager: "#065F46",
+  risk_officer: "#DC2626",
+  contrarian_investor: "#EA580C",
+  valuation_agent: "#D97706",
+  portfolio_manager: "#059669",
 };
 
-const DEFAULT_ACCENT = "#5B6472";
+const DEFAULT_ACCENT = "#8A93A6";
 
 /** Messages longer than this are collapsed by default, with a toggle to expand. */
 const PREVIEW_CHAR_LIMIT = 160;
@@ -36,7 +46,7 @@ const PREVIEW_CHAR_LIMIT = 160;
 function initialsFor(displayName: string): string {
   const words = displayName.split(" ").filter(Boolean);
   const first = words[0]?.[0] ?? "";
-  const last = words.length > 1 ? (words[words.length - 1]?.[0] ?? "") : "";
+  const last = words.length > 1 ? words[words.length - 1]?.[0] ?? "" : "";
   return `${first}${last}`.toUpperCase();
 }
 

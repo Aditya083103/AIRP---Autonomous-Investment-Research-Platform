@@ -21,3 +21,41 @@
     scroll-behavior: auto;
   }
 }
+
+/* ISSUE 5: React Flow v11's default theme (reactflow/dist/style.css,
+   imported by src/components/graph/{LiveGraphView,PipelineGraphView}.tsx)
+   ships light-mode-only colours for its Controls panel and attribution
+   tag -- stark white squares/pill floating on this pass's dark canvas,
+   the one visible surface in the whole app this token system's Tailwind
+   config cannot reach (React Flow renders its own un-Tailwind-scoped
+   markup). Overridden here, once, by the same three tokens every other
+   surface already uses, rather than passing a style/className prop at
+   every <Controls>/<Background> call site. */
+.react-flow__controls {
+  overflow: hidden;
+  border-radius: 8px;
+  box-shadow: none;
+}
+
+.react-flow__controls-button {
+  border-bottom: 1px solid theme("colors.line");
+  background-color: theme("colors.surface");
+  color: theme("colors.ink");
+}
+
+.react-flow__controls-button:hover {
+  background-color: theme("colors.canvas");
+}
+
+.react-flow__controls-button svg {
+  fill: theme("colors.ink");
+}
+
+.react-flow__attribution {
+  background: theme("colors.surface" / 70%);
+  color: theme("colors.muted");
+}
+
+.react-flow__attribution a {
+  color: theme("colors.muted");
+}

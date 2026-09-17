@@ -371,7 +371,7 @@ export function CompanyAutocomplete({
               onClick={() => selectOption(option)}
               className={cn(
                 "flex cursor-pointer items-baseline justify-between gap-3 px-3 py-2 text-sm",
-                index === highlightedIndex ? "bg-brand-50 text-brand-700" : "text-ink",
+                index === highlightedIndex ? "bg-brand-500/15 text-brand-300" : "text-ink",
               )}
             >
               <span>{option.name}</span>

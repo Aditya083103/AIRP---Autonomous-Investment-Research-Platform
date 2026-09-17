@@ -17,7 +17,10 @@ export interface BadgeProps extends ComponentPropsWithoutRef<"span"> {
 
 const TONE_CLASSES: Record<BadgeTone, string> = {
   neutral: "bg-canvas text-muted",
-  brand: "bg-brand-50 text-brand-700",
+  // ISSUE 5: a light pastel fill (bg-brand-50) reads as a near-white box
+  // on the dark canvas -- a translucent tint of the same brand hue over
+  // the current background reads correctly on any surface.
+  brand: "bg-brand-500/15 text-brand-300",
   buy: "bg-verdict-buy text-white",
   hold: "bg-verdict-hold text-white",
   sell: "bg-verdict-sell text-white",

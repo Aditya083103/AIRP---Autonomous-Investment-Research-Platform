@@ -172,7 +172,14 @@ export function Modal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-ink/50 p-4"
+      // ISSUE 5: was `bg-ink/50` -- a translucent DARK scrim while `ink`
+      // meant near-black (the light theme). `ink` is now the near-white
+      // foreground colour, so that same class would veil the page in
+      // translucent white instead of dimming it. A modal backdrop scrim
+      // conventionally darkens the page in any theme, light or dark, so
+      // this uses a plain black overlay rather than a semantic token
+      // whose meaning just inverted.
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
       onClick={handleBackdropClick}
     >
       <div

@@ -1,11 +1,21 @@
 // frontend/src/components/landing/CommitteeSection.tsx
 // Landing page (T-055) — the "8 agents diagram" acceptance criterion.
-// Deliberately mirrors docs/AIRP_Architecture.drawio rather than inventing
-// a fresh visual language: research agents keep the diagram's #1D4ED8,
-// the debate/challenge agents keep #B91C1C, and the Portfolio Manager
-// keeps #065F46. Grouping into three rounds (parallel research -> debate
-// -> final call) reflects the actual LangGraph execution order, not an
-// arbitrary layout choice.
+// Deliberately mirrors docs/AIRP_Architecture.drawio's hue family rather
+// than inventing a fresh visual language: research agents keep the
+// diagram's blue, the debate/challenge agents keep its red, and the
+// Portfolio Manager keeps its green. Grouping into three rounds
+// (parallel research -> debate -> final call) reflects the actual
+// LangGraph execution order, not an arbitrary layout choice.
+//
+// ISSUE 5: each accent below (#60A5FA/#F87171/#34D399) is one step
+// brighter than the architecture doc's literal fill colour
+// (#1D4ED8/#B91C1C/#065F46) -- those were tuned as a thin border accent
+// against a WHITE card; against this pass's dark `bg-surface` card the
+// same dark hues lose almost all contrast, so each moves to its
+// brighter Tailwind neighbour. Kept identical to
+// src/components/progress/AgentCard.tsx's own ROUND_ACCENT (see that
+// file's own ISSUE 5 comment) so a seat here and its counterpart on the
+// live progress view are still visually the same agent.
 //
 // B10: each seat's card is wrapped in Reveal (staggered fade/rise-in by
 // seat number, so the whole 8-seat roster cascades in roughly the order
@@ -49,7 +59,7 @@ const ROUNDS: readonly CommitteeRound[] = [
           "Revenue growth, profit margins, free cash flow, debt, and balance-sheet health over 4 years.",
         tools: "yFinance, Alpha Vantage",
         output: "FundamentalAnalysis (score 1–10)",
-        accent: "#1D4ED8",
+        accent: "#60A5FA",
       },
       {
         seat: 2,
@@ -57,7 +67,7 @@ const ROUNDS: readonly CommitteeRound[] = [
         mandate: "Price trend, 50d/200d moving averages, RSI, momentum, and 52-week positioning.",
         tools: "yFinance OHLCV",
         output: "TechnicalAnalysis (BUY/HOLD/SELL)",
-        accent: "#1D4ED8",
+        accent: "#60A5FA",
       },
       {
         seat: 3,
@@ -65,7 +75,7 @@ const ROUNDS: readonly CommitteeRound[] = [
         mandate: "Scores the last 30 days of news; flags management conduct and regulatory issues.",
         tools: "NewsAPI, ChromaDB RAG",
         output: "SentimentAnalysis (−1 to +1)",
-        accent: "#1D4ED8",
+        accent: "#60A5FA",
       },
       {
         seat: 4,
@@ -73,7 +83,7 @@ const ROUNDS: readonly CommitteeRound[] = [
         mandate: "RBI rate environment, inflation, GDP growth, and sector tailwinds for India.",
         tools: "RBI scraper, macro DB",
         output: "MacroAnalysis",
-        accent: "#1D4ED8",
+        accent: "#60A5FA",
       },
     ],
   },
@@ -88,7 +98,7 @@ const ROUNDS: readonly CommitteeRound[] = [
         mandate: "Governance failures, fraud indicators, regulatory and concentration risk.",
         tools: "All prior agent outputs",
         output: "RiskAnalysis (score, flags)",
-        accent: "#B91C1C",
+        accent: "#F87171",
       },
       {
         seat: 6,
@@ -97,7 +107,7 @@ const ROUNDS: readonly CommitteeRound[] = [
           "Its only job is to disagree: finds flaws in every bull thesis, challenges assumptions.",
         tools: "Full debate state",
         output: "ContrarianReport (counter-arguments)",
-        accent: "#B91C1C",
+        accent: "#F87171",
       },
       {
         seat: 7,
@@ -105,7 +115,7 @@ const ROUNDS: readonly CommitteeRound[] = [
         mandate: "Runs a DCF model; compares PE/PB/EV-EBITDA against sector peers.",
         tools: "Screener.in, yFinance",
         output: "ValuationOutput (intrinsic value)",
-        accent: "#B91C1C",
+        accent: "#F87171",
       },
     ],
   },
@@ -120,7 +130,7 @@ const ROUNDS: readonly CommitteeRound[] = [
         mandate: "Weighs the full debate and writes the Investment Memo.",
         tools: "Full pipeline state",
         output: "InvestmentDecision (BUY/HOLD/SELL, memo)",
-        accent: "#065F46",
+        accent: "#34D399",
       },
     ],
   },

@@ -74,8 +74,13 @@ import {
 
 const NODE_TYPES: NodeTypes = { pipelineNode: LiveGraphNode };
 
-/** The DEBATE_AGAIN edge's stroke colour -- matches T-094's own static styling for this edge. */
-const DEBATE_LOOP_COLOR = "#7C3AED";
+/**
+ * The DEBATE_AGAIN edge's stroke colour -- matches T-094's own static
+ * styling for this edge. ISSUE 5: brand-400 (one step brighter than the
+ * original brand-500) for extra contrast as a thin SVG line stroke
+ * against this pass's dark canvas.
+ */
+const DEBATE_LOOP_COLOR = "#8B6BF0";
 
 function describeConnection(
   connectionStatus: AnalysisStreamConnectionStatus,

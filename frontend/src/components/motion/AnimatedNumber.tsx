@@ -22,6 +22,7 @@ import { animate, useMotionValue } from "framer-motion";
 import { useEffect, useState } from "react";
 
 import { usePrefersReducedMotion } from "@/hooks/usePrefersReducedMotion";
+import { cn } from "@/lib/cn";
 
 export interface AnimatedNumberProps {
   /** The number to display. Animates up from 0 on mount, then tweens to each new value. */
@@ -63,5 +64,9 @@ export function AnimatedNumber({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- motionValue is a stable ref; format is expected to be referentially stable per caller (a plain function, not recreated per render in this codebase's usage).
   }, [value, prefersReducedMotion]);
 
-  return <span className={className}>{displayText}</span>;
+  // tabular-nums (a premium-broker-UI baseline, not an opt-in per caller)
+  // -- a counting/tweening number must never reflow its own width as
+  // digits change, which proportional figures do (a "1" is narrower than
+  // an "8"). Always applied, merged with any caller className via cn().
+  return <span className={cn("tabular-nums", className)}>{displayText}</span>;
 }
