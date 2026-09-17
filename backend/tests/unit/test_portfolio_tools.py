@@ -202,13 +202,58 @@ class TestGetUserAnalysesCore:
         assert bound_params["user_id"] == str(user_id)
 
     @pytest.mark.asyncio
-    async def test_ticker_filter_passed_through_unmodified(self) -> None:
+    async def test_ticker_filter_is_normalised_stripped_and_uppercased(self) -> None:
         session = _make_session_returning_rows([])
 
-        await _get_user_analyses_core(session, uuid.uuid4(), ticker="TCS.NS")
+        await _get_user_analyses_core(session, uuid.uuid4(), ticker="  tcs.ns  ")
 
         bound_params = session.execute.call_args.args[1]
         assert bound_params["ticker"] == "TCS.NS"
+
+    @pytest.mark.asyncio
+    async def test_ticker_bare_strips_trailing_exchange_suffix(self) -> None:
+        """
+        Bug 3 fix: partial ticker matching needs a bare-symbol candidate
+        (no ".NS"/".BO") so a caller-supplied ticker with an exchange
+        suffix still matches the ``companies.ticker`` column, which
+        never stores the suffix.
+        """
+        session = _make_session_returning_rows([])
+
+        await _get_user_analyses_core(session, uuid.uuid4(), ticker="MUTHOOTFIN.NS")
+
+        bound_params = session.execute.call_args.args[1]
+        assert bound_params["ticker"] == "MUTHOOTFIN.NS"
+        assert bound_params["ticker_bare"] == "MUTHOOTFIN"
+
+    @pytest.mark.asyncio
+    async def test_ticker_bare_equals_ticker_when_no_suffix(self) -> None:
+        session = _make_session_returning_rows([])
+
+        await _get_user_analyses_core(session, uuid.uuid4(), ticker="Muthoot Finance")
+
+        bound_params = session.execute.call_args.args[1]
+        assert bound_params["ticker"] == "MUTHOOT FINANCE"
+        assert bound_params["ticker_bare"] == "MUTHOOT FINANCE"
+
+    @pytest.mark.asyncio
+    async def test_query_uses_wildcarded_ilike_not_exact_equality(self) -> None:
+        """
+        Bug 3 regression guard: the query text itself must wildcard the
+        bound ticker/name values (``'%' || :ticker || '%'``) -- binding
+        ``:ticker`` directly to ``ILIKE`` (no wildcards) is
+        case-insensitive EQUALITY in Postgres, not partial matching,
+        which was the root cause of the chatbot reporting "no analysis
+        found" for a company it had actually analysed.
+        """
+        session = _make_session_returning_rows([])
+
+        await _get_user_analyses_core(session, uuid.uuid4(), ticker="Muthoot")
+
+        query_text = str(session.execute.call_args.args[0])
+        assert "'%' || :ticker || '%'" in query_text
+        assert "'%' || :ticker_bare || '%'" in query_text
+        assert "c.name ILIKE" in query_text
 
     @pytest.mark.asyncio
     async def test_no_filters_binds_none(self) -> None:
@@ -219,6 +264,7 @@ class TestGetUserAnalysesCore:
         bound_params = session.execute.call_args.args[1]
         assert bound_params["verdict"] is None
         assert bound_params["ticker"] is None
+        assert bound_params["ticker_bare"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -317,13 +363,31 @@ class TestGetMemoByTickerCore:
         assert result["error"] == "no_decision"
 
     @pytest.mark.asyncio
-    async def test_ticker_is_stripped_before_binding(self) -> None:
+    async def test_ticker_is_stripped_and_uppercased_before_binding(self) -> None:
         session = _make_session_returning_row(None)
 
-        await _get_memo_by_ticker_core(session, uuid.uuid4(), ticker="  TCS.NS  ")
+        await _get_memo_by_ticker_core(session, uuid.uuid4(), ticker="  tcs.ns  ")
 
         bound_params = session.execute.call_args.args[1]
         assert bound_params["ticker"] == "TCS.NS"
+        assert bound_params["ticker_bare"] == "TCS"
+
+    @pytest.mark.asyncio
+    async def test_company_name_query_resolves_via_bare_and_name_match(self) -> None:
+        """
+        Bug 3 acceptance case: a bare company name with no ticker at all
+        ("Muthoot Finance") must still be usable -- resolved via the
+        wildcarded company-name ILIKE clause, not the ticker columns.
+        """
+        session = _make_session_returning_row(None)
+
+        await _get_memo_by_ticker_core(session, uuid.uuid4(), ticker="Muthoot Finance")
+
+        bound_params = session.execute.call_args.args[1]
+        assert bound_params["ticker"] == "MUTHOOT FINANCE"
+        query_text = str(session.execute.call_args.args[0])
+        assert "'%' || :ticker || '%'" in query_text
+        assert "c.name ILIKE" in query_text
 
     @pytest.mark.asyncio
     async def test_query_scoped_to_correct_user_id(self) -> None:

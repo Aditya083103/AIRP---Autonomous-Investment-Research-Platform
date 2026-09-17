@@ -499,9 +499,44 @@ class TestInvokeChat:
         mock_llm = MagicMock()
         original = RuntimeError("groq quota exceeded")
         mock_llm.invoke.side_effect = original
-        with pytest.raises(ChatLLMError) as exc_info:
+        with (
+            patch("backend.services.chat_llm._RETRY_BACKOFF_SECONDS", 0),
+            pytest.raises(ChatLLMError) as exc_info,
+        ):
             invoke_chat([], "hello", llm=mock_llm)
         assert exc_info.value.cause is original
+
+    def test_transient_failure_recovers_on_retry_with_simplified_prompt(self) -> None:
+        """
+        Bug 3 fix: a transient failure (rate limit blip, momentary
+        network error) on the first attempt must not fail the whole
+        turn when a retry succeeds -- and that retry must use a
+        simplified (history-dropped) prompt, not the original.
+        """
+        mock_llm = MagicMock()
+        success_response = MagicMock()
+        success_response.content = "Recovered on retry."
+        mock_llm.invoke.side_effect = [RuntimeError("rate limited"), success_response]
+
+        history = [{"role": "user", "content": "earlier turn"}]
+        with patch("backend.services.chat_llm._RETRY_BACKOFF_SECONDS", 0):
+            result = invoke_chat(history, "hello", llm=mock_llm)
+
+        assert result == "Recovered on retry."
+        assert mock_llm.invoke.call_count == 2
+        first_call_messages = mock_llm.invoke.call_args_list[0].args[0]
+        retry_messages = mock_llm.invoke.call_args_list[1].args[0]
+        assert len(retry_messages) < len(first_call_messages)
+
+    def test_exhausting_all_retries_raises_chat_llm_error(self) -> None:
+        mock_llm = MagicMock()
+        mock_llm.invoke.side_effect = RuntimeError("still down")
+        with (
+            patch("backend.services.chat_llm._RETRY_BACKOFF_SECONDS", 0),
+            pytest.raises(ChatLLMError),
+        ):
+            invoke_chat([], "hello", llm=mock_llm)
+        assert mock_llm.invoke.call_count == 2
 
     def test_non_string_content_is_stringified(self) -> None:
         mock_llm = MagicMock()
@@ -793,7 +828,7 @@ class TestRunToolCallingRound:
         assert "DB down" in tool_message.content
 
     @pytest.mark.asyncio
-    async def test_decision_call_failure_propagates(self) -> None:
+    async def test_decision_call_failure_propagates_after_retry_exhausted(self) -> None:
         llm = MagicMock()
         bound = MagicMock()
         bound.ainvoke = AsyncMock(side_effect=RuntimeError("provider down"))
@@ -801,8 +836,35 @@ class TestRunToolCallingRound:
         tool = _make_fake_tool("get_user_analyses")
         messages = build_chat_messages([], "hi")
 
-        with pytest.raises(RuntimeError, match="provider down"):
+        with (
+            patch("backend.services.chat_llm._RETRY_BACKOFF_SECONDS", 0),
+            pytest.raises(RuntimeError, match="provider down"),
+        ):
             await run_tool_calling_round(llm, [tool], messages)
+        assert bound.ainvoke.call_count == 2
+
+    async def test_decision_call_recovers_on_retry(self) -> None:
+        """Bug 3 fix: a transient failure on the decision call itself
+        (not a per-tool failure, which was already handled) must get
+        one retry with a simplified prompt before giving up."""
+        llm = MagicMock()
+        bound = MagicMock()
+        success_response = MagicMock()
+        success_response.tool_calls = []
+        success_response.content = "No tool needed after all."
+        bound.ainvoke = AsyncMock(
+            side_effect=[RuntimeError("rate limited"), success_response]
+        )
+        llm.bind_tools = MagicMock(return_value=bound)
+        tool = _make_fake_tool("get_user_analyses")
+        messages = build_chat_messages([], "hi")
+
+        with patch("backend.services.chat_llm._RETRY_BACKOFF_SECONDS", 0):
+            result_messages, text = await run_tool_calling_round(llm, [tool], messages)
+
+        assert text == "No tool needed after all."
+        assert bound.ainvoke.call_count == 2
+        assert result_messages == messages
 
 
 # ---------------------------------------------------------------------------
@@ -836,9 +898,14 @@ class TestAstreamChatFromMessages:
         llm = _make_tool_bound_llm(_text_response("unused"), stream_chunks=[])
         messages = build_chat_messages([], "hi")
 
-        with pytest.raises(ChatLLMError):
+        with (
+            patch("backend.services.chat_llm._RETRY_BACKOFF_SECONDS", 0),
+            pytest.raises(ChatLLMError),
+        ):
             async for _ in astream_chat_from_messages(messages, llm=llm):
                 pass
+        # One retry with a simplified prompt before giving up.
+        assert llm.astream.call_count == 2
 
     @pytest.mark.asyncio
     async def test_streaming_failure_wrapped_in_chat_llm_error(self) -> None:
@@ -851,9 +918,62 @@ class TestAstreamChatFromMessages:
         llm.astream = MagicMock(side_effect=_boom)
         messages = build_chat_messages([], "hi")
 
-        with pytest.raises(ChatLLMError):
+        with (
+            patch("backend.services.chat_llm._RETRY_BACKOFF_SECONDS", 0),
+            pytest.raises(ChatLLMError),
+        ):
             async for _ in astream_chat_from_messages(messages, llm=llm):
                 pass
+        assert llm.astream.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_streaming_recovers_on_retry_before_any_token_yielded(self) -> None:
+        """Bug 3 fix: a failure before any token is produced gets one
+        retry with a simplified prompt and can still succeed."""
+        llm = MagicMock()
+        call_count = 0
+
+        async def _flaky(_messages: Any) -> Any:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise RuntimeError("rate limited")
+                yield  # pragma: no cover -- unreachable
+            yield _text_response("Recovered.")
+
+        llm.astream = MagicMock(side_effect=_flaky)
+        messages = build_chat_messages([], "hi")
+
+        with patch("backend.services.chat_llm._RETRY_BACKOFF_SECONDS", 0):
+            tokens = [t async for t in astream_chat_from_messages(messages, llm=llm)]
+
+        assert tokens == ["Recovered."]
+        assert call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_mid_stream_failure_after_tokens_yielded_is_not_retried(self) -> None:
+        """A failure AFTER real content was already streamed to the
+        caller must surface immediately -- retrying would mean silently
+        prepending a second attempt onto content already delivered."""
+        llm = MagicMock()
+
+        async def _fails_after_one_token(_messages: Any) -> Any:
+            yield _text_response("Partial answer.")
+            raise RuntimeError("connection dropped mid-stream")
+
+        llm.astream = MagicMock(side_effect=_fails_after_one_token)
+        messages = build_chat_messages([], "hi")
+
+        collected: list[str] = []
+        with (
+            patch("backend.services.chat_llm._RETRY_BACKOFF_SECONDS", 0),
+            pytest.raises(ChatLLMError),
+        ):
+            async for token in astream_chat_from_messages(messages, llm=llm):
+                collected.append(token)
+
+        assert collected == ["Partial answer."]
+        assert llm.astream.call_count == 1
 
 
 # ---------------------------------------------------------------------------
