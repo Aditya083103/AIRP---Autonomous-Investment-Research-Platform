@@ -240,6 +240,49 @@ class TestTracedAgent:
 
         assert result == expected
 
+    def test_invocation_failure_propagates_without_re_running_the_agent(self) -> None:
+        """
+        FINAL SCAN fix: a failure from the TRACED CALL itself (as opposed
+        to a failure setting up the traceable() wrapper) must propagate,
+        not silently trigger a second, duplicate call to the underlying
+        agent function. Before this fix, both failure modes shared one
+        except block, so a traced-call failure -- which can only happen
+        AFTER the agent's real logic already ran -- caused the agent to
+        run a second time (double LLM calls, double cost, double any
+        side effect) purely from an observability-layer problem.
+        """
+        from backend.agents.tracing import traced_agent
+
+        call_count = 0
+
+        def fake_node(state: dict[str, Any]) -> dict[str, Any]:
+            nonlocal call_count
+            call_count += 1
+            return {"fundamental": {"score": 8}}
+
+        def failing_traceable(*_args: Any, **_kwargs: Any) -> Any:
+            def _decorator(fn: Any) -> Any:
+                def _traced_call(*call_args: Any, **call_kwargs: Any) -> Any:
+                    # Actually runs the real function first (as the real
+                    # langsmith SDK would), THEN fails -- e.g. a network
+                    # error submitting the span, well after the agent's
+                    # own work is done.
+                    fn(*call_args, **call_kwargs)
+                    raise RuntimeError("simulated LangSmith submission failure")
+
+                return _traced_call
+
+            return _decorator
+
+        with patch("langsmith.traceable", failing_traceable):
+            wrapped = traced_agent("fundamental_analyst")(fake_node)
+            with pytest.raises(
+                RuntimeError, match="simulated LangSmith submission failure"
+            ):
+                wrapped(_SAMPLE_STATE)
+
+        assert call_count == 1
+
     def test_decorated_function_preserves_function_name(self) -> None:
         from backend.agents.tracing import traced_agent
 

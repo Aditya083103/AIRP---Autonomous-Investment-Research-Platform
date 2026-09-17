@@ -541,12 +541,31 @@ def pdf_export_node(state: dict[str, Any]) -> dict[str, Any]:
 
     generated_at = datetime.utcnow().strftime("%d %b %Y, %H:%M UTC")
 
-    pdf_path = render_memo_pdf(
-        memo_markdown=memo_markdown,
-        company_name=company_name,
-        generated_at=generated_at,
-        job_id=job_id,
-    )
+    # FINAL SCAN finding: render_memo_pdf already catches its own
+    # internal failures (missing WeasyPrint, a disk-write error, ...),
+    # but this function's own "never raises" docstring was previously
+    # unenforced at this level -- relying entirely on that callee, with
+    # no safety net of this function's own if a future change to
+    # render_memo_pdf ever introduced a code path outside its own
+    # try/except. Wrapping the call here makes this node genuinely
+    # self-sufficient in the guarantee its docstring already promised,
+    # matching the project-wide "every agent/service function must catch
+    # its own exceptions" rule instead of depending on a callee two
+    # layers away to uphold it.
+    try:
+        pdf_path = render_memo_pdf(
+            memo_markdown=memo_markdown,
+            company_name=company_name,
+            generated_at=generated_at,
+            job_id=job_id,
+        )
+    except Exception as exc:  # noqa: BLE001 -- this node must never raise
+        logger.exception(
+            "pdf_export_node: render_memo_pdf raised unexpectedly for job_id=%s: %s",
+            job_id,
+            exc,
+        )
+        pdf_path = None
 
     return {"memo_pdf_path": str(pdf_path) if pdf_path is not None else None}
 

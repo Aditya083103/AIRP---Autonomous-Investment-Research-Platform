@@ -221,6 +221,26 @@ def traced_agent(agent_name: str) -> Callable[[Callable[..., Any]], Callable[...
             # or the SDK raises during decorator construction (unlikely but
             # possible with network issues at import time), fall back to the
             # unwrapped function -- tracing failure must never break the agent.
+            #
+            # FINAL SCAN finding: this try/except used to wrap BOTH the
+            # traceable(...)(func) construction AND the actual
+            # traced_func(state, ...) call in one block, so a failure
+            # raised by the trace call itself -- AFTER it had already run
+            # the agent's real logic to completion -- fell into the same
+            # except branch and called func(state, ...) a SECOND time:
+            # a full duplicate execution (double LLM calls, double cost,
+            # double any side effect) triggered purely by an
+            # observability-layer hiccup, not a real agent failure. Every
+            # agent's own run_*_analysis entry point already guarantees
+            # it never raises on its own (see each module's "Never
+            # raises" docstring) -- if traced_func(state, ...) raises
+            # here, that is a LangSmith-layer problem, not the agent's,
+            # so it should propagate to the node wrapper's own "never
+            # crash the pipeline" safety net (_persist_after /
+            # _run_research_node_safely) rather than silently re-running
+            # business logic. Only the SETUP step (constructing the
+            # traced wrapper, before it has run anything) falls back to
+            # the untraced call.
             try:
                 from langsmith import traceable
 
@@ -230,7 +250,6 @@ def traced_agent(agent_name: str) -> Callable[[Callable[..., Any]], Callable[...
                     tags=run_tags,
                     metadata=run_metadata,
                 )(func)
-                return traced_func(state, *args, **kwargs)
             except Exception as exc:  # pragma: no cover
                 logger.warning(
                     "LangSmith traceable setup failed for %s (non-fatal): %s",
@@ -238,6 +257,8 @@ def traced_agent(agent_name: str) -> Callable[[Callable[..., Any]], Callable[...
                     exc,
                 )
                 return func(state, *args, **kwargs)
+
+            return traced_func(state, *args, **kwargs)
 
         return wrapper
 
