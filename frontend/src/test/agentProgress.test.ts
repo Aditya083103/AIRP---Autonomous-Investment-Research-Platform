@@ -217,4 +217,65 @@ describe("deriveAgentCards", () => {
     const technical = cards.find((card) => card.nodeName === "technical_analyst");
     expect(technical?.state).toBe("skipped");
   });
+
+  // -------------------------------------------------------------------
+  // General downstream-evidence reconciliation (hasLaterPipelineEvidence):
+  // the exact bug reported live -- "Risk Officer / Contrarian Investor /
+  // Valuation Agent / Portfolio Manager show 'Did not run for this
+  // analysis' even though the completed Investment Memo clearly
+  // included all of their output". A live connection can miss ANY
+  // single node's own event, not just a round-1 research agent's --
+  // an event for a LATER node in the sequential pipeline
+  // (research_join -> contrarian_investor -> debate_loop ->
+  // risk_officer -> valuation_agent -> portfolio_manager ->
+  // report_generator -> pdf_export) is authoritative proof every
+  // earlier node in that sequence also ran.
+  // -------------------------------------------------------------------
+
+  it("marks contrarian_investor and risk_officer complete via a later valuation_agent event, with no events of their own", () => {
+    const events = [makeEvent({ agent: "valuation_agent" })];
+    const cards = deriveAgentCards(events, false);
+    const contrarian = cards.find((card) => card.nodeName === "contrarian_investor");
+    const risk = cards.find((card) => card.nodeName === "risk_officer");
+    expect(contrarian?.state).toBe("complete");
+    expect(risk?.state).toBe("complete");
+  });
+
+  it("does not mark risk_officer/contrarian/valuation as skipped once terminated when only portfolio_manager's event arrived", () => {
+    const events = [makeEvent({ agent: "portfolio_manager" })];
+    const cards = deriveAgentCards(events, true);
+    const contrarian = cards.find((card) => card.nodeName === "contrarian_investor");
+    const risk = cards.find((card) => card.nodeName === "risk_officer");
+    const valuation = cards.find((card) => card.nodeName === "valuation_agent");
+    expect(contrarian?.state).toBe("complete");
+    expect(risk?.state).toBe("complete");
+    expect(valuation?.state).toBe("complete");
+  });
+
+  it("marks every round-1 agent complete via a downstream contrarian_investor event even when research_join's own event was also missed", () => {
+    const events = [makeEvent({ agent: "contrarian_investor" })];
+    const cards = deriveAgentCards(events, true);
+    const round1 = cards.filter((card) => card.round === 1);
+    expect(round1.every((card) => card.state === "complete")).toBe(true);
+  });
+
+  it("a seat's own event still takes priority over downstream-evidence reconciliation", () => {
+    const events = [
+      makeEvent({ agent: "risk_officer", status: "failed", output_preview: "LLM error." }),
+      makeEvent({ agent: "valuation_agent" }),
+    ];
+    const cards = deriveAgentCards(events, false);
+    const risk = cards.find((card) => card.nodeName === "risk_officer");
+    expect(risk?.state).toBe("failed");
+    expect(risk?.outputPreview).toBe("LLM error.");
+  });
+
+  it("does not synthesise completion for a seat with no later pipeline evidence at all", () => {
+    const events = [makeEvent({ agent: "contrarian_investor" })];
+    const cards = deriveAgentCards(events, true);
+    const portfolioManager = cards.find((card) => card.nodeName === "portfolio_manager");
+    // Nothing after portfolio_manager's own position ever fired, and it
+    // has no event of its own -- genuinely skipped, not synthesised.
+    expect(portfolioManager?.state).toBe("skipped");
+  });
 });

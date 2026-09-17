@@ -530,23 +530,57 @@ def _drain_already_replayed(
 
 async def _catch_up_if_already_terminal(
     job_id: uuid.UUID, user_id: uuid.UUID
-) -> "AgentStreamEvent | None":
+) -> list[AgentStreamEvent]:
     """
     Re-check PostgreSQL for a terminal status the live stream never
-    reported, and build the correct terminal event if so.
+    fully reported, and build the complete backlog of catch-up events
+    if so.
 
     Called from ``_forward_live_events``'s heartbeat path -- see that
     call site's BUGFIX note for why this exists: a live client can, in
-    rare cases, never receive the one broadcast event that would have
-    told it the job finished, leaving it stuck indefinitely even though
-    the job genuinely completed. This is the self-healing half of that
-    fix -- a fresh, narrowly-scoped DB read (mirroring
-    ``stream_analysis_progress``'s own initial snapshot fetch and
-    ownership check) run once per heartbeat interval, cheap enough to
-    not matter at that cadence (default every 10s, only while otherwise
-    idle) and never a source of truth divergence, since it reads the
-    exact same ``get_analysis_status`` every other status surface in
-    this codebase does.
+    rare cases, never receive one or more broadcast events (an
+    at-most-once, fire-and-forget delivery with no redelivery -- see
+    ``backend.services.ws_broadcaster``'s own documented limitation),
+    leaving it stuck indefinitely even though the job genuinely
+    completed. This is the self-healing half of that fix -- a fresh,
+    narrowly-scoped DB read (mirroring ``stream_analysis_progress``'s
+    own initial snapshot fetch and ownership check) run once per
+    heartbeat interval, cheap enough to not matter at that cadence
+    (default every 10s, only while otherwise idle) and never a source
+    of truth divergence, since it reads the exact same
+    ``get_analysis_status`` every other status surface in this
+    codebase does.
+
+    SECOND BUGFIX (root cause of "Risk Officer / Contrarian Investor /
+    Valuation Agent / Portfolio Manager show 'Did not run for this
+    analysis' even though the Investment Memo clearly includes all of
+    their output"): this used to build and return a SINGLE terminal
+    event naming only ``completed_nodes[-1]`` -- correct for the common
+    case where exactly one event was lost, but wrong whenever SEVERAL
+    consecutive nodes' events never arrived (observed in practice on a
+    fast-degrading run, e.g. every LLM call failing near-instantly
+    against a rate limit, so 4-5 sequential nodes complete within
+    milliseconds of each other and this connection's live forward loop
+    never gets scheduled between them). The heartbeat would then fire
+    exactly once, self-heal with a single event for whichever node
+    happened to finish last, and immediately close the connection with
+    ``is_final=True`` -- every other node in between still had zero
+    events on this connection, so ``frontend/src/lib/agentProgress.ts``'s
+    ``deriveAgentCards`` correctly (given only that evidence) rendered
+    every one of them "skipped" once the stream closed, even though the
+    pipeline had genuinely run every agent and produced a complete
+    decision.
+
+    Fix: delegate to ``_snapshot_to_events``, the exact same "replay
+    everything in ``completed_nodes``, in pipeline order, expanding
+    ``research_join`` into its 4 upstream agents" logic
+    ``stream_analysis_progress`` already uses for a brand-new
+    connection's initial replay. Re-sending an event for a node this
+    connection already forwarded live is harmless -- the frontend keys
+    each card off the LATEST event per node name, so a repeated
+    "completed" event for an already-complete seat is a no-op -- while
+    guaranteeing every node the live stream missed, not just the last
+    one, is backfilled before the connection closes.
 
     Args:
         job_id:  UUID of the analysis job.
@@ -554,31 +588,20 @@ async def _catch_up_if_already_terminal(
             scoping every other lookup in this router applies.
 
     Returns:
-        None if the job is not (yet) terminal, or no longer exists for
-        this user (both treated as "nothing to catch up on" -- an
-        ownership change mid-stream is not this function's concern).
-        Otherwise the same terminal ``AgentStreamEvent``
-        ``_snapshot_to_events`` would have produced as its last replayed
-        event for this snapshot.
+        An empty list if the job is not (yet) terminal, or no longer
+        exists for this user (both treated as "nothing to catch up on"
+        -- an ownership change mid-stream is not this function's
+        concern). Otherwise the full, pipeline-ordered event backlog
+        ``_snapshot_to_events`` would have produced for this snapshot,
+        ending with the terminal event.
     """
     async with AsyncSessionLocal() as session:
         snapshot = await get_analysis_status(session, job_id=job_id, user_id=user_id)
 
     if snapshot is None or snapshot.status not in TERMINAL_STATUSES:
-        return None
+        return []
 
-    last_node = "pipeline"
-    if snapshot.completed_nodes:
-        last_node = snapshot.completed_nodes[-1]
-
-    return cast_event(
-        job_id=str(job_id),
-        agent=last_node,
-        status=snapshot.status,
-        output_preview=snapshot.error_message or snapshot.current_phase,
-        progress_percent=snapshot.progress_percent,
-        is_final=True,
-    )
+    return _snapshot_to_events(job_id, snapshot)
 
 
 async def _forward_live_events(
@@ -711,18 +734,20 @@ async def _forward_live_events(
                     # close -- capping the worst case UI staleness at one
                     # heartbeat interval (_HEARTBEAT_AFTER_TICKS *
                     # _QUEUE_POLL_INTERVAL_SECONDS) instead of forever.
-                    catch_up_event = await _catch_up_if_already_terminal(
+                    catch_up_events = await _catch_up_if_already_terminal(
                         job_id, user_id
                     )
-                    if catch_up_event is not None:
+                    if catch_up_events:
                         try:
-                            await websocket.send_json(catch_up_event)
+                            for catch_up_event in catch_up_events:
+                                await websocket.send_json(catch_up_event)
                         except Exception:
                             return
-                        if catch_up_event["is_final"]:
+                        last_catch_up_event = catch_up_events[-1]
+                        if last_catch_up_event["is_final"]:
                             await websocket.close(code=1000)
                             return
-                        last_progress_percent = catch_up_event["progress_percent"]
+                        last_progress_percent = last_catch_up_event["progress_percent"]
                         continue
 
                     heartbeat = cast_event(
