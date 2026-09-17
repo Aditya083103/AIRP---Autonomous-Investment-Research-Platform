@@ -150,6 +150,15 @@ SECTOR_WACC_MAP: dict[str, float] = {
     "it_services": 10.0,  # asset-light, stable FCF, low leverage
     "fmcg": 10.5,  # stable demand, defensive, low capex intensity
     "capital_intensive_cyclical": 13.0,  # auto/energy/infra/metals/cement
+    # Cost of equity for a lender/insurer, not a WACC in the FCFF sense --
+    # kept here only so dcf_sector_used/logging stay consistent with every
+    # other sector band. Never actually fed into _run_dcf: banks/NBFCs/
+    # insurers are valued via price-to-book instead (see
+    # _is_financial_sector / _run_pb_valuation below) because loan-book
+    # growth dominates operating cash flow in a lender's cash-flow
+    # statement even when the lender is healthy, making "free cash flow"
+    # structurally meaningless for a generic FCFF-DCF model.
+    "financial_services": 13.0,
     "diversified": DEFAULT_WACC_PCT,  # unclassified -- preserves pre-T-083 default
 }
 
@@ -197,6 +206,11 @@ RULES:
 5. 2-3 sentences maximum for the summary.
 6. Do NOT use markdown, bullet symbols, or headers in your output.
 7. Respond ONLY with valid JSON matching the schema below.
+8. If the prompt's valuation block is headed "PRICE-TO-BOOK VALUATION"
+   rather than "DCF VALUATION", this is a bank/NBFC/insurer/asset manager
+   -- describe the intrinsic value as a price-to-book valuation, and do
+   NOT mention DCF, WACC, discounted cash flow, or terminal growth, since
+   none of those were used.
 
 OUTPUT SCHEMA (strict JSON, no markdown fences):
 {
@@ -372,6 +386,25 @@ _SECTOR_WACC_KEYWORDS: list[tuple[list[str], str]] = [
     ),
     (
         [
+            "bank",
+            "banks",
+            "banking",
+            "nbfc",
+            "non-banking financial",
+            "non banking financial",
+            "housing finance",
+            "finance company",
+            "financial services",
+            "financial institution",
+            "microfinance",
+            "asset management",
+            "insurance",
+            "insurer",
+        ],
+        "financial_services",
+    ),
+    (
+        [
             "auto",
             "automobile",
             "automotive",
@@ -477,6 +510,174 @@ def _get_sector_wacc_pct(sector_key: str) -> float:
         WACC as a percentage (e.g. 10.0 for 10%).
     """
     return SECTOR_WACC_MAP.get(sector_key, DEFAULT_WACC_PCT)
+
+
+#: Canonical sector key for banks, NBFCs, insurers, and asset managers --
+#: see SECTOR_WACC_MAP's comment on why these are valued via price-to-book
+#: instead of a generic FCFF-DCF.
+_FINANCIAL_SECTOR_KEY: str = "financial_services"
+
+
+def _is_financial_sector(sector_key: str) -> bool:
+    """
+    True when ``sector_key`` (from _resolve_sector_key) names a lending or
+    underwriting business -- banks, NBFCs, insurers, asset managers.
+
+    Used to route the valuation to price-to-book instead of FCFF-DCF (see
+    ``_run_valuation_analysis_core``'s Stage 1g): loan-book growth
+    dominates operating cash flow in a lender's cash-flow statement even
+    when the lender is healthy, so "free cash flow" is structurally
+    meaningless for this sector, not merely occasionally noisy the way it
+    can be for a normal operating business.
+
+    Args:
+        sector_key: A canonical sector key from _resolve_sector_key().
+
+    Returns:
+        True if this sector should be valued via price-to-book.
+    """
+    return sector_key == _FINANCIAL_SECTOR_KEY
+
+
+# ---------------------------------------------------------------------------
+# Hardcoded peer sets -- yFinance fallback when the Screener.in scrape fails
+# ---------------------------------------------------------------------------
+#: A small, well-known peer list per sector band, used ONLY when the
+#: Screener.in scrape (_fetch_peer_multiples) fails to produce
+#: sector_avg_pe/sector_avg_pb -- a single scrape failure (bot-blocking,
+#: a layout change, a network error) must not leave the Valuation Agent
+#: with literally no sector-comparison data at all, since
+#: backend.agents.portfolio_manager._build_relative_price_target's own
+#: PE/PB fallback price target also depends on these same two fields
+#: being non-null. Each list intentionally excludes the subject company
+#: itself at call time (see _fetch_sector_peer_averages) so a peer
+#: average is never just the company comparing itself to itself.
+_HARDCODED_SECTOR_PEERS: dict[str, list[str]] = {
+    "it_services": ["TCS.NS", "INFY.NS", "HCLTECH.NS", "WIPRO.NS", "TECHM.NS"],
+    "fmcg": ["HINDUNILVR.NS", "ITC.NS", "NESTLEIND.NS", "BRITANNIA.NS", "DABUR.NS"],
+    "capital_intensive_cyclical": [
+        "TATASTEEL.NS",
+        "JSWSTEEL.NS",
+        "ULTRACEMCO.NS",
+        "MARUTI.NS",
+        "LT.NS",
+    ],
+    "financial_services": [
+        "HDFCBANK.NS",
+        "ICICIBANK.NS",
+        "KOTAKBANK.NS",
+        "AXISBANK.NS",
+        "SBIN.NS",
+        "BAJFINANCE.NS",
+    ],
+}
+
+
+def _fetch_sector_peer_averages(
+    sector_key: str,
+    exclude_ticker: str,
+) -> dict[str, Optional[float]]:
+    """
+    yFinance-derived sector-average PE/PB, used when the Screener.in
+    scrape did not yield ``sector_avg_pe``/``sector_avg_pb``.
+
+    Calls the existing ``fetch_ratios`` tool once per hardcoded peer in
+    ``_HARDCODED_SECTOR_PEERS[sector_key]`` (each call is transparently
+    Redis-cached by ``fetch_ratios`` itself, per
+    backend.tools.cache.RATIOS_TTL -- repeated analyses of different
+    companies in the same sector do not re-hit yFinance for the same
+    peers every time) and averages whichever peers returned a usable
+    ``pe_ratio``/``pb_ratio``. Never raises: a peer whose fetch fails or
+    returns no usable ratio is simply excluded from that average, and an
+    unknown ``sector_key`` (no hardcoded peer list at all) or a sector
+    where EVERY peer fetch fails returns ``{"sector_avg_pe": None,
+    "sector_avg_pb": None}`` -- the caller already treats both as "no
+    data available", identical to a failed Screener.in scrape.
+
+    Args:
+        sector_key:     Canonical sector key from _resolve_sector_key().
+        exclude_ticker: The subject company's own ticker (e.g.
+                        'MUTHOOTFIN.NS') -- excluded from its own peer
+                        set so the "average" is never partly itself.
+
+    Returns:
+        Dict with keys 'sector_avg_pe' and 'sector_avg_pb', each
+        Optional[float] -- None when no peer yielded that ratio.
+    """
+    peers = [
+        p
+        for p in _HARDCODED_SECTOR_PEERS.get(sector_key, [])
+        if p.upper() != exclude_ticker.upper()
+    ]
+    if not peers:
+        return {"sector_avg_pe": None, "sector_avg_pb": None}
+
+    pe_values: list[float] = []
+    pb_values: list[float] = []
+
+    for peer_ticker in peers:
+        try:
+            peer_result = fetch_ratios.invoke({"ticker": peer_ticker})
+        except Exception as exc:
+            logger.warning(
+                "_fetch_sector_peer_averages: fetch_ratios failed for peer=%s: %s",
+                peer_ticker,
+                exc,
+            )
+            continue
+
+        if not isinstance(peer_result, dict) or "error" in peer_result:
+            continue
+
+        peer_pe: Any = peer_result.get("pe_ratio")
+        if isinstance(peer_pe, (int, float)) and peer_pe > 0:
+            pe_values.append(float(peer_pe))
+
+        peer_pb: Any = peer_result.get("pb_ratio")
+        if isinstance(peer_pb, (int, float)) and peer_pb > 0:
+            pb_values.append(float(peer_pb))
+
+    return {
+        "sector_avg_pe": (
+            round(sum(pe_values) / len(pe_values), 2) if pe_values else None
+        ),
+        "sector_avg_pb": (
+            round(sum(pb_values) / len(pb_values), 2) if pb_values else None
+        ),
+    }
+
+
+def _run_pb_valuation(
+    book_value_per_share: Optional[float],
+    sector_avg_pb: Optional[float],
+) -> Optional[float]:
+    """
+    Price-to-book valuation: intrinsic value = book value per share x
+    sector-average P/B multiple.
+
+    The standard real-world approach for valuing a bank/NBFC/insurer,
+    where FCFF-DCF is structurally unreliable (see
+    ``_is_financial_sector``'s docstring) -- re-rating a lender's book
+    value to where the sector currently prices book value is the
+    equivalent of DCF's "what should this business be worth" question
+    for a balance-sheet-driven business.
+
+    Args:
+        book_value_per_share: From fetch_ratios' RatioInputs
+                               (inputs.book_value_per_share), in Rs.
+        sector_avg_pb:        Sector-average P/B, from either the
+                               Screener.in scrape or the
+                               _fetch_sector_peer_averages fallback.
+
+    Returns:
+        intrinsic_value_per_share_rs, or None when either input is
+        missing or non-positive -- never fabricates a number.
+    """
+    if book_value_per_share is None or book_value_per_share <= 0:
+        return None
+    if sector_avg_pb is None or sector_avg_pb <= 0:
+        return None
+    return round(book_value_per_share * sector_avg_pb, 2)
 
 
 # ---------------------------------------------------------------------------
@@ -755,9 +956,16 @@ def _build_valuation_prompt(
     terminal_growth_pct: float,
     peer_tickers: list[str],
     premium_discount_pct: Optional[float],
+    valuation_method: str = "dcf",
 ) -> str:
     """
     Build the user-turn prompt sent to the LLM for narrative synthesis.
+
+    ``valuation_method`` ('dcf' or 'price_to_book') controls the header and
+    which assumption lines are shown -- WACC/terminal growth are DCF-only
+    assumptions and would misrepresent a price-to-book valuation (used for
+    banks/NBFCs/insurers, see _is_financial_sector) as if a discounted
+    cash flow model had actually run.
     """
 
     def _fmt(val: Optional[float], suffix: str = "") -> str:
@@ -770,16 +978,29 @@ def _build_valuation_prompt(
     if upside_pct is not None and upside_pct > 0:
         upside_str = f"+{upside_str}"
 
-    return f"""Write a valuation summary for {company_name} ({ticker}).
-
-DCF VALUATION:
+    if valuation_method == "price_to_book":
+        valuation_block = f"""PRICE-TO-BOOK VALUATION \
+(primary method for financial-sector companies):
+  Current price       : Rs. {_fmt(current_price)}
+  Intrinsic value     : Rs. {_fmt(intrinsic_value)}
+  Upside / downside   : {upside_str}
+  Price/Book (own)    : {_fmt(pb_ratio)}x
+  Sector avg P/B      : {_fmt(sector_avg_pb)}x
+  Verdict             : {verdict.upper().replace('_', ' ')}
+  Margin of safety    : {margin_of_safety or 'N/A'}"""
+    else:
+        valuation_block = f"""DCF VALUATION:
   Current price       : Rs. {_fmt(current_price)}
   Intrinsic value     : Rs. {_fmt(intrinsic_value)}
   Upside / downside   : {upside_str}
   WACC used           : {_fmt(wacc_pct, '%')}
   Terminal growth     : {_fmt(terminal_growth_pct, '%')}
   Verdict             : {verdict.upper().replace('_', ' ')}
-  Margin of safety    : {margin_of_safety or 'N/A'}
+  Margin of safety    : {margin_of_safety or 'N/A'}"""
+
+    return f"""Write a valuation summary for {company_name} ({ticker}).
+
+{valuation_block}
 
 RELATIVE VALUATION (vs peers):
   Trailing PE         : {_fmt(pe_ratio)}x  |  Sector avg: {_fmt(sector_avg_pe)}x
@@ -960,26 +1181,33 @@ def _run_valuation_analysis_core(
     )
 
     terminal_growth_pct: float = DEFAULT_TERMINAL_GROWTH_PCT
+    is_financial: bool = _is_financial_sector(sector_key)
 
     # --- Stage 1g: Run DCF -------------------------------------------------
-    intrinsic_value, _ev_crores = _run_dcf(
-        fcf_crores_list=fcf_list,
-        revenue_crores_list=revenue_list,
-        shares_outstanding=shares_outstanding,
-        wacc_pct=wacc_pct,
-        terminal_growth_pct=terminal_growth_pct,
-        projection_years=DCF_PROJECTION_YEARS,
-    )
-
-    # --- Stage 1h: Compute upside/downside ---------------------------------
-    upside_pct: Optional[float] = None
-    if intrinsic_value is not None and current_price is not None and current_price > 0:
-        upside_pct = round((intrinsic_value - current_price) / current_price * 100, 2)
+    # Skipped entirely for banks/NBFCs/insurers/asset managers -- see
+    # _is_financial_sector's docstring for why FCFF-DCF is structurally
+    # meaningless for a lending business, not merely occasionally noisy.
+    # Stage 1m below runs a price-to-book valuation instead, and only
+    # falls back to attempting the DCF as a last resort if that also
+    # cannot produce a number (e.g. book value per share is unavailable).
+    intrinsic_value: Optional[float]
+    if is_financial:
+        intrinsic_value = None
+    else:
+        intrinsic_value, _ev_crores = _run_dcf(
+            fcf_crores_list=fcf_list,
+            revenue_crores_list=revenue_list,
+            shares_outstanding=shares_outstanding,
+            wacc_pct=wacc_pct,
+            terminal_growth_pct=terminal_growth_pct,
+            projection_years=DCF_PROJECTION_YEARS,
+        )
 
     # --- Stage 1i: Extract company ratios -----------------------------------
     pe_ratio: Optional[float] = None
     pb_ratio: Optional[float] = None
     ev_ebitda: Optional[float] = None
+    book_value_per_share: Optional[float] = None
 
     pe_raw: Any = ratios.get("pe_ratio")
     if pe_raw is not None:
@@ -999,6 +1227,13 @@ def _run_valuation_analysis_core(
     if ev_raw is not None:
         try:
             ev_ebitda = float(ev_raw)
+        except (TypeError, ValueError):
+            pass
+
+    bvps_raw: Any = (ratios.get("inputs") or {}).get("book_value_per_share")
+    if bvps_raw is not None:
+        try:
+            book_value_per_share = float(bvps_raw)
         except (TypeError, ValueError):
             pass
 
@@ -1055,12 +1290,74 @@ def _run_valuation_analysis_core(
         except (TypeError, ValueError):
             pass
 
+    # --- Stage 1j-bis: yFinance sector-average fallback (Screener hardening) -
+    # The Screener.in scrape is a single point of failure for BOTH the DCF
+    # sector signal above and this function's own sector_avg_pe/pb -- and,
+    # downstream, backend.agents.portfolio_manager._build_relative_price_
+    # target's PE/PB fallback price target also needs one of these two
+    # non-null. A scrape failure (bot-blocking, layout change, network
+    # error -- all common for an unofficial HTML scrape) used to leave
+    # every one of those with nothing to work with. Fill in whichever
+    # average the scrape did not provide from a small hardcoded peer set
+    # via yFinance instead (see _fetch_sector_peer_averages) -- never
+    # overrides a value the scrape DID provide.
+    if sector_avg_pe is None or sector_avg_pb is None:
+        fallback_averages = _fetch_sector_peer_averages(
+            sector_key=sector_key, exclude_ticker=ticker
+        )
+        if sector_avg_pe is None:
+            sector_avg_pe = fallback_averages["sector_avg_pe"]
+        if sector_avg_pb is None:
+            sector_avg_pb = fallback_averages["sector_avg_pb"]
+
     # --- Stage 1k: PE premium/discount to peers ----------------------------
     premium_discount_pct: Optional[float] = None
     if pe_ratio is not None and sector_avg_pe is not None and sector_avg_pe > 0:
         premium_discount_pct = round(
             (pe_ratio - sector_avg_pe) / sector_avg_pe * 100, 2
         )
+
+    # --- Stage 1m: Price-to-book valuation for financial-sector companies --
+    # Primary valuation method for banks/NBFCs/insurers/asset managers
+    # (Stage 1g deliberately skipped the DCF for exactly this reason). Only
+    # falls back to attempting the DCF -- better than a flat "Not
+    # determined" -- if book value per share or a sector-average P/B
+    # (Screener.in or the yFinance fallback above) is unavailable.
+    valuation_method: str = "dcf"
+    if is_financial:
+        intrinsic_value = _run_pb_valuation(
+            book_value_per_share=book_value_per_share,
+            sector_avg_pb=sector_avg_pb,
+        )
+        if intrinsic_value is not None:
+            valuation_method = "price_to_book"
+        else:
+            logger.warning(
+                "Valuation: price-to-book valuation unavailable for "
+                "financial-sector ticker=%s (book_value_per_share=%s "
+                "sector_avg_pb=%s) -- falling back to DCF as a last resort",
+                ticker,
+                book_value_per_share,
+                sector_avg_pb,
+            )
+            intrinsic_value, _ev_crores_fallback = _run_dcf(
+                fcf_crores_list=fcf_list,
+                revenue_crores_list=revenue_list,
+                shares_outstanding=shares_outstanding,
+                wacc_pct=wacc_pct,
+                terminal_growth_pct=terminal_growth_pct,
+                projection_years=DCF_PROJECTION_YEARS,
+            )
+
+    # --- Stage 1n: Compute upside/downside ----------------------------------
+    # Deliberately computed here, after Stages 1g/1m have both had a
+    # chance to set intrinsic_value (DCF for a normal operating business,
+    # price-to-book for a financial-sector one), not immediately after
+    # Stage 1g -- a financial-sector company's intrinsic value is not
+    # known until Stage 1m runs.
+    upside_pct: Optional[float] = None
+    if intrinsic_value is not None and current_price is not None and current_price > 0:
+        upside_pct = round((intrinsic_value - current_price) / current_price * 100, 2)
 
     # --- Stage 1l: Verdict and margin of safety -----------------------------
     verdict = _determine_verdict(upside_pct, premium_discount_pct)
@@ -1090,6 +1387,7 @@ def _run_valuation_analysis_core(
             terminal_growth_pct=terminal_growth_pct,
             peer_tickers=peer_tickers,
             premium_discount_pct=premium_discount_pct,
+            valuation_method=valuation_method,
         )
         messages = [
             SystemMessage(content=SYSTEM_PROMPT),
@@ -1106,23 +1404,36 @@ def _run_valuation_analysis_core(
     except Exception as exc:
         logger.exception("LLM call failed in Valuation Agent for %s: %s", ticker, exc)
         # Build a fallback summary from the deterministic data
+        method_label = "price-to-book" if valuation_method == "price_to_book" else "DCF"
         if intrinsic_value is not None and current_price is not None:
             upside_sign = "+" if (upside_pct or 0) > 0 else ""
             summary = (
-                f"{company_name} has a DCF intrinsic value of "
+                f"{company_name} has a {method_label} intrinsic value of "
                 f"Rs. {intrinsic_value:,.0f} vs current price of "
                 f"Rs. {current_price:,.0f} "
                 f"({upside_sign}{upside_pct or 0:.1f}% "
                 f"{'upside' if (upside_pct or 0) > 0 else 'downside'}). "
                 f"Valuation verdict: {verdict.replace('_', ' ')}. "
-                f"LLM synthesis unavailable -- review DCF assumptions manually."
+                f"LLM synthesis unavailable -- review {method_label} "
+                f"assumptions manually."
             )
         else:
             summary = (
-                f"Insufficient financial data to complete DCF valuation for "
-                f"{company_name}.  Valuation verdict defaulted to "
-                f"{verdict.replace('_', ' ')} based on available peer data."
+                f"Insufficient financial data to complete {method_label} "
+                f"valuation for {company_name}.  Valuation verdict defaulted "
+                f"to {verdict.replace('_', ' ')} based on available peer data."
             )
+
+    # dcf_wacc_pct/dcf_terminal_growth_pct/dcf_projection_years only
+    # describe a DCF that actually ran -- surfacing them for a
+    # price-to-book valuation would misrepresent it as WACC-discounted.
+    dcf_wacc_for_output = wacc_pct if valuation_method == "dcf" else None
+    dcf_terminal_growth_for_output = (
+        terminal_growth_pct if valuation_method == "dcf" else None
+    )
+    dcf_projection_years_for_output = (
+        DCF_PROJECTION_YEARS if valuation_method == "dcf" else None
+    )
 
     return ValuationOutput(
         agent_name="valuation_agent",
@@ -1130,12 +1441,13 @@ def _run_valuation_analysis_core(
         company_name=company_name,
         ticker=ticker,
         intrinsic_value_per_share=intrinsic_value,
+        valuation_method=valuation_method,
         current_price=current_price,
         upside_downside_pct=upside_pct,
         valuation_verdict=verdict,
-        dcf_wacc_pct=wacc_pct,
-        dcf_terminal_growth_pct=terminal_growth_pct,
-        dcf_projection_years=DCF_PROJECTION_YEARS,
+        dcf_wacc_pct=dcf_wacc_for_output,
+        dcf_terminal_growth_pct=dcf_terminal_growth_for_output,
+        dcf_projection_years=dcf_projection_years_for_output,
         dcf_sector_used=sector_key,
         pe_ratio=pe_ratio,
         sector_avg_pe=sector_avg_pe,

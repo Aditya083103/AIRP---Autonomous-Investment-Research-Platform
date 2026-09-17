@@ -60,10 +60,13 @@ from backend.agents.valuation_agent import (  # noqa: E402
     _determine_margin_of_safety,
     _determine_verdict,
     _extract_sector_from_page,
+    _fetch_sector_peer_averages,
     _get_sector_wacc_pct,
+    _is_financial_sector,
     _parse_float,
     _resolve_sector_key,
     _run_dcf,
+    _run_pb_valuation,
     _run_valuation_analysis_core,
     _ticker_to_slug,
     run_valuation_analysis,
@@ -455,9 +458,16 @@ class TestClassifySectorForWacc:
             DEFAULT_SECTOR_KEY
         )
 
-    def test_banking_is_unclassified_for_now(self) -> None:
-        """Banking/NBFC are intentionally out of scope for T-083."""
-        assert _classify_sector_for_wacc("Banking") == DEFAULT_SECTOR_KEY
+    def test_banking_classifies_as_financial_services(self) -> None:
+        """
+        Bug 2 fix: banking/NBFC used to be intentionally out of scope for
+        T-083 (unclassified -> 'diversified'), which routed these
+        companies through the generic FCFF-DCF -- structurally unreliable
+        for a lender, since loan-book growth dominates operating cash
+        flow even when the lender is healthy. Now classified explicitly
+        so _is_financial_sector can route them to price-to-book instead.
+        """
+        assert _classify_sector_for_wacc("Banking") == "financial_services"
 
     # -- word-boundary correctness -------------------------------------------
     def test_case_insensitive(self) -> None:
@@ -1159,6 +1169,243 @@ class TestRunValuationAnalysisCore:
 
     def test_no_error_on_success(self) -> None:
         result = self._call_with_mocks()
+        assert result.error is None
+
+
+# ---------------------------------------------------------------------------
+# Tests: financial-sector (bank/NBFC/insurer) price-to-book valuation
+#
+# Bug: a generic FCFF-DCF structurally cannot value a lender -- loan-book
+# growth dominates operating cash flow even when the lender is healthy,
+# so _run_dcf returns (None, None) almost every time for banks/NBFCs,
+# leaving intrinsic_value_per_share (and therefore the Investment Memo's
+# price target) as "Not determined". Fix: skip the DCF entirely for a
+# sector classified as financial_services and value off price-to-book
+# (book value per share x sector-average P/B) instead, with a yFinance
+# hardcoded-peer-set fallback for sector_avg_pe/pb when the Screener.in
+# scrape itself also fails.
+# ---------------------------------------------------------------------------
+
+# Muthoot Finance-like NBFC financials -- ALL FCF years negative, the
+# exact structural pattern that makes _run_dcf return (None, None).
+_NBFC_FINANCIALS_NEGATIVE_FCF: dict[str, Any] = {
+    "income_statement": [
+        {"fiscal_year": "FY 2024", "revenue_crores": 5_200.0},
+        {"fiscal_year": "FY 2023", "revenue_crores": 4_400.0},
+    ],
+    "cash_flow": [
+        {"fiscal_year": "FY 2024", "free_cash_flow_crores": -1_200.0},
+        {"fiscal_year": "FY 2023", "free_cash_flow_crores": -900.0},
+        {"fiscal_year": "FY 2022", "free_cash_flow_crores": -1_500.0},
+    ],
+}
+
+_NBFC_RATIOS: dict[str, Any] = {
+    "pe_ratio": 18.0,
+    "pb_ratio": 3.5,
+    "roe_pct": 20.0,
+    "ev_to_ebitda": None,
+    "shares_outstanding": 3.75e8,
+    "price": 1_800.0,
+    "inputs": {"book_value_per_share": 500.0},
+    "data_warnings": [],
+}
+
+_NBFC_PRICE: dict[str, Any] = {"current_price": 1_800.0, "ticker": "MUTHOOTFIN.NS"}
+
+
+class TestIsFinancialSector:
+    def test_classifies_bank_and_nbfc_text_as_financial_services(self) -> None:
+        assert (
+            _classify_sector_for_wacc("Banks - Private Sector") == "financial_services"
+        )
+        assert (
+            _classify_sector_for_wacc("Non-Banking Financial Company")
+            == "financial_services"
+        )
+        assert _classify_sector_for_wacc("Housing Finance") == "financial_services"
+        assert _classify_sector_for_wacc("Life Insurance") == "financial_services"
+
+    def test_is_financial_sector_true_for_financial_services_key(self) -> None:
+        assert _is_financial_sector("financial_services") is True
+
+    def test_is_financial_sector_false_for_other_sectors(self) -> None:
+        assert _is_financial_sector("it_services") is False
+        assert _is_financial_sector("diversified") is False
+
+
+class TestRunPbValuation:
+    def test_computes_book_value_times_sector_multiple(self) -> None:
+        assert (
+            _run_pb_valuation(book_value_per_share=500.0, sector_avg_pb=3.0) == 1_500.0
+        )
+
+    def test_none_when_book_value_missing(self) -> None:
+        assert _run_pb_valuation(book_value_per_share=None, sector_avg_pb=3.0) is None
+
+    def test_none_when_sector_avg_pb_missing(self) -> None:
+        assert _run_pb_valuation(book_value_per_share=500.0, sector_avg_pb=None) is None
+
+    def test_none_when_book_value_non_positive(self) -> None:
+        assert _run_pb_valuation(book_value_per_share=0.0, sector_avg_pb=3.0) is None
+
+
+class TestFetchSectorPeerAverages:
+    def test_averages_valid_peers_and_skips_failures(self) -> None:
+        def _side_effect(payload: dict[str, Any]) -> dict[str, Any]:
+            ticker = payload["ticker"]
+            if ticker == "HDFCBANK.NS":
+                return {"pe_ratio": 20.0, "pb_ratio": 3.0}
+            if ticker == "ICICIBANK.NS":
+                return {"error": "rate limited"}
+            if ticker == "KOTAKBANK.NS":
+                return {"pe_ratio": 24.0, "pb_ratio": 5.0}
+            return {"error": "no data"}
+
+        with patch("backend.agents.valuation_agent.fetch_ratios") as mock_rat:
+            mock_rat.invoke.side_effect = _side_effect
+            result = _fetch_sector_peer_averages(
+                "financial_services", exclude_ticker="AXISBANK.NS"
+            )
+
+        assert result["sector_avg_pe"] == pytest.approx(22.0)
+        assert result["sector_avg_pb"] == pytest.approx(4.0)
+
+    def test_excludes_the_subject_companys_own_ticker(self) -> None:
+        with patch("backend.agents.valuation_agent.fetch_ratios") as mock_rat:
+            mock_rat.invoke.return_value = {"pe_ratio": 20.0, "pb_ratio": 3.0}
+            _fetch_sector_peer_averages(
+                "financial_services", exclude_ticker="HDFCBANK.NS"
+            )
+            called_tickers = [
+                call.args[0]["ticker"] for call in mock_rat.invoke.call_args_list
+            ]
+        assert "HDFCBANK.NS" not in called_tickers
+
+    def test_unmapped_sector_returns_none_none_without_raising(self) -> None:
+        result = _fetch_sector_peer_averages("diversified", exclude_ticker="X.NS")
+        assert result == {"sector_avg_pe": None, "sector_avg_pb": None}
+
+    def test_every_peer_fetch_failing_returns_none_none(self) -> None:
+        with patch("backend.agents.valuation_agent.fetch_ratios") as mock_rat:
+            mock_rat.invoke.side_effect = Exception("network down")
+            result = _fetch_sector_peer_averages(
+                "financial_services", exclude_ticker="X.NS"
+            )
+        assert result == {"sector_avg_pe": None, "sector_avg_pb": None}
+
+
+class TestRunValuationAnalysisCoreFinancialSector:
+    """
+    End-to-end acceptance test (Bug 2): an NBFC with a negative FCF
+    history and a failed Screener.in scrape must still get a non-null
+    price target, via price-to-book instead of DCF.
+    """
+
+    def _call(
+        self,
+        peer_data: dict[str, Any] | None = None,
+        ratios: dict[str, Any] = _NBFC_RATIOS,
+    ) -> ValuationOutput:
+        if peer_data is None:
+            peer_data = {}  # Screener.in scrape failed -- the common case
+
+        def _ratios_side_effect(payload: dict[str, Any]) -> dict[str, Any]:
+            if payload["ticker"] == "MUTHOOTFIN.NS":
+                return ratios
+            # yFinance peer fallback lookups (_fetch_sector_peer_averages)
+            return {"pe_ratio": 20.0, "pb_ratio": 4.0}
+
+        with (
+            patch("backend.agents.valuation_agent.fetch_financials") as mock_fin,
+            patch("backend.agents.valuation_agent.fetch_ratios") as mock_rat,
+            patch("backend.agents.valuation_agent.fetch_stock_price") as mock_price,
+            patch(
+                "backend.agents.valuation_agent._fetch_peer_multiples",
+                return_value=peer_data,
+            ),
+            patch("backend.agents.valuation_agent.get_llm") as mock_llm,
+        ):
+            mock_fin.invoke.return_value = _NBFC_FINANCIALS_NEGATIVE_FCF
+            mock_rat.invoke.side_effect = _ratios_side_effect
+            mock_price.invoke.return_value = _NBFC_PRICE
+            mock_llm.return_value = _make_llm(
+                json.dumps({"summary": "Muthoot trades near sector book value."})
+            )
+            return _run_valuation_analysis_core(
+                analysis_id="t-bug2-nbfc",
+                company_name="Muthoot Finance",
+                ticker="MUTHOOTFIN.NS",
+                sector="Non-Banking Financial Company",
+                fundamental={},
+                macro=_MOCK_MACRO_NEUTRAL,
+                screener_base_url="https://www.screener.in",
+            )
+
+    def test_sector_is_classified_as_financial_services(self) -> None:
+        result = self._call()
+        assert result.dcf_sector_used == "financial_services"
+
+    def test_produces_non_null_price_target_via_price_to_book(self) -> None:
+        result = self._call()
+        assert result.intrinsic_value_per_share is not None
+        assert result.intrinsic_value_per_share > 0
+        assert result.valuation_method == "price_to_book"
+
+    def test_upside_pct_is_computed(self) -> None:
+        result = self._call()
+        assert result.upside_downside_pct is not None
+
+    def test_dcf_assumption_fields_absent_for_price_to_book(self) -> None:
+        """
+        dcf_wacc_pct/dcf_terminal_growth_pct/dcf_projection_years must not
+        be populated for a valuation that never ran a DCF -- surfacing
+        them would misrepresent a price-to-book valuation as WACC-
+        discounted in the Investment Memo.
+        """
+        result = self._call()
+        assert result.dcf_wacc_pct is None
+        assert result.dcf_terminal_growth_pct is None
+        assert result.dcf_projection_years is None
+
+    def test_pb_is_primary_method_even_when_screener_scrape_succeeds(self) -> None:
+        """DCF is skipped outright for this sector, not merely as a
+        fallback ordering -- a fully successful Screener scrape (which
+        would have been plenty for a DCF's peer context) still routes to
+        price-to-book, never DCF, for a financial-sector company."""
+        result = self._call(
+            peer_data={
+                "sector_avg_pe": 19.0,
+                "sector_avg_pb": 3.2,
+                "peer_tickers": ["HDFCBANK.NS", "ICICIBANK.NS"],
+            }
+        )
+        assert result.valuation_method == "price_to_book"
+        assert result.dcf_wacc_pct is None
+
+    def test_falls_back_to_dcf_when_book_value_per_share_unavailable(self) -> None:
+        """When book value per share cannot be determined at all, the
+        price-to-book method cannot run -- falls back to attempting DCF
+        (which also fails here, given an all-negative FCF history) rather
+        than skipping valuation outright. Never raises either way."""
+        ratios_without_bvps = {k: v for k, v in _NBFC_RATIOS.items() if k != "inputs"}
+        result = self._call(peer_data={}, ratios=ratios_without_bvps)
+
+        assert isinstance(result, ValuationOutput)
+        assert result.valuation_method == "dcf"
+        assert result.valuation_verdict in (
+            "undervalued",
+            "fairly_valued",
+            "overvalued",
+        )
+
+    def test_never_raises_and_always_returns_valid_verdict(self) -> None:
+        result = self._call()
+        assert result.valuation_verdict in (
+            "undervalued",
+            "fairly_valued",
+            "overvalued",
+        )
         assert result.error is None
 
 
