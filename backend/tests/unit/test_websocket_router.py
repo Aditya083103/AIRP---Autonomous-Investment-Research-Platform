@@ -769,3 +769,80 @@ class TestHeartbeat:
         assert len(fake_ws.sent) == 1
         assert fake_ws.sent[0]["agent"] == "pdf_export"
         assert fake_ws.closed_with_code == 1000
+
+    async def test_heartbeat_catch_up_backfills_every_missed_node_not_just_last(
+        self,
+    ) -> None:
+        """
+        BUGFIX regression: on a fast-degrading run several sequential
+        nodes' live events can be lost before this connection's forward
+        loop ever gets scheduled (e.g. every LLM call failing near-
+        instantly against a rate limit). The heartbeat's self-heal used
+        to send a single terminal event naming only the LAST completed
+        node, leaving every node in between with zero events on this
+        connection -- frontend/src/lib/agentProgress.ts's
+        deriveAgentCards then renders every one of them "skipped" once
+        the connection closes, even though the pipeline genuinely ran
+        (and the Investment Memo includes) all of them. This is the
+        exact "Risk Officer / Contrarian Investor / Valuation Agent /
+        Portfolio Manager show 'Did not run for this analysis'" bug.
+        The fix must backfill every node in completed_nodes, not just
+        the last one.
+        """
+        job_id = uuid.uuid4()
+        # No live events are ever published on this connection's queue --
+        # simulates every one of these nodes' broadcasts being lost.
+        fake_ws = _FakeStreamWebSocket(disconnect_after_seconds=0.1)
+        queue = await subscribe(str(job_id))
+
+        snapshot = _make_snapshot(
+            job_id,
+            status="completed",
+            completed_nodes=[
+                "planner",
+                "research_join",
+                "contrarian_investor",
+                "debate_loop",
+                "risk_officer",
+                "valuation_agent",
+                "portfolio_manager",
+                "report_generator",
+                "pdf_export",
+            ],
+            progress_percent=100,
+        )
+
+        with (
+            patch("backend.routers.websocket._QUEUE_POLL_INTERVAL_SECONDS", 0.01),
+            patch("backend.routers.websocket._HEARTBEAT_AFTER_TICKS", 2),
+            patch(
+                "backend.routers.websocket.get_analysis_status",
+                new=AsyncMock(return_value=snapshot),
+            ),
+        ):
+            await _forward_live_events(
+                fake_ws, job_id, queue, uuid.uuid4()  # type: ignore[arg-type]
+            )
+
+        received_agents = [e["agent"] for e in fake_ws.sent]
+        # Every one of the four parallel research agents (expanded from
+        # research_join, exactly like a fresh-connect replay) plus every
+        # sequential downstream node must be backfilled -- not just
+        # "pdf_export", the last entry in completed_nodes.
+        assert received_agents == [
+            "planner",
+            "fundamental_analyst",
+            "technical_analyst",
+            "sentiment_analyst",
+            "macro_economist",
+            "research_join",
+            "contrarian_investor",
+            "debate_loop",
+            "risk_officer",
+            "valuation_agent",
+            "portfolio_manager",
+            "report_generator",
+            "pdf_export",
+        ]
+        assert [e["is_final"] for e in fake_ws.sent] == [False] * 12 + [True]
+        assert fake_ws.closed_with_code == 1000

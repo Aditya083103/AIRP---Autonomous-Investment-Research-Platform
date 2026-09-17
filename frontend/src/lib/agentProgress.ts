@@ -105,6 +105,71 @@ function latestEventFor(
  */
 const NODE_RESEARCH_JOIN = "research_join";
 
+/**
+ * The non-parallel portion of the pipeline, in the exact sequential
+ * order backend/graph/graph.py's build_graph() wires: research_join ->
+ * contrarian_investor -> debate_loop -> risk_officer -> valuation_agent
+ * -> portfolio_manager -> report_generator -> pdf_export. Every one of
+ * these nodes can only ever run after every node before it in this
+ * list has already completed -- there is no fan-out or branching once
+ * research_join fires (route_after_contrarian's debate loop always
+ * eventually proceeds to risk_officer; the only other conditional
+ * branches, error_handler/sentiment_escalation, both land back on
+ * contrarian_investor before this point, so they do not appear here).
+ * Used by `hasLaterPipelineEvidence` below as the general form of the
+ * `research_join` reconciliation this module already applied to Round
+ * 1: an event for ANY node in this list is authoritative proof every
+ * earlier node in the list also ran, even when this live connection
+ * never received that earlier node's own event.
+ */
+const SEQUENTIAL_PIPELINE_ORDER: readonly string[] = [
+  NODE_RESEARCH_JOIN,
+  "contrarian_investor",
+  "debate_loop",
+  "risk_officer",
+  "valuation_agent",
+  "portfolio_manager",
+  "report_generator",
+  "pdf_export",
+];
+
+/**
+ * True when some node LATER than `anchorNodeName` in
+ * `SEQUENTIAL_PIPELINE_ORDER` has an event -- proof `anchorNodeName`
+ * itself must have already run, regardless of whether this connection
+ * ever received its own event.
+ *
+ * Generalises the `research_join` special-case B3 fix (see this
+ * module's docstring and `roundIsComplete`) to every sequential node
+ * after it: a live WebSocket connection can miss ANY single node's
+ * broadcast (a fire-and-forget, at-most-once publish -- see
+ * backend/services/ws_broadcaster.py's own documented limitation, and
+ * backend/routers/websocket.py's `_catch_up_if_already_terminal`,
+ * which backfills exactly this same evidence server-side after a
+ * heartbeat notices the job already finished). Without this check, a
+ * seat whose OWN event was lost but whose successor's event arrived
+ * would still wrongly render "skipped" once the stream closes -- the
+ * exact "Risk Officer / Contrarian Investor / Valuation Agent /
+ * Portfolio Manager show 'Did not run for this analysis'" bug, even
+ * though later evidence already proves the node ran.
+ *
+ * @param anchorNodeName Must be a member of SEQUENTIAL_PIPELINE_ORDER
+ *   (or NODE_RESEARCH_JOIN, used as the round-1 agents' anchor -- see
+ *   `deriveAgentCards`). Returns false for any other value.
+ */
+function hasLaterPipelineEvidence(
+  anchorNodeName: string,
+  events: readonly AgentStreamEvent[],
+): boolean {
+  const anchorIndex = SEQUENTIAL_PIPELINE_ORDER.indexOf(anchorNodeName);
+  if (anchorIndex === -1) {
+    return false;
+  }
+  return SEQUENTIAL_PIPELINE_ORDER.slice(anchorIndex + 1).some(
+    (nodeName) => latestEventFor(events, nodeName) !== undefined,
+  );
+}
+
 function roundIsComplete(round: 1 | 2 | 3, events: readonly AgentStreamEvent[]): boolean {
   if (round === 1 && latestEventFor(events, NODE_RESEARCH_JOIN) !== undefined) {
     // research_join cannot complete unless all 4 round-1 agents already
@@ -176,6 +241,16 @@ export function deriveAgentCards(
         state: researchJoin.status === "failed" ? "failed" : "complete",
         outputPreview: researchJoin.output_preview,
       };
+    }
+
+    // General downstream-evidence fallback (see hasLaterPipelineEvidence's
+    // docstring): round-1 agents anchor on research_join's position in
+    // SEQUENTIAL_PIPELINE_ORDER (covers the case where research_join's
+    // OWN event was also missed but something after it arrived); round
+    // 2/3 seats anchor on their own node name directly.
+    const anchorNodeName = entry.round === 1 ? NODE_RESEARCH_JOIN : entry.nodeName;
+    if (hasLaterPipelineEvidence(anchorNodeName, events)) {
+      return { ...entry, state: "complete", outputPreview: null };
     }
 
     if (isComplete) {
