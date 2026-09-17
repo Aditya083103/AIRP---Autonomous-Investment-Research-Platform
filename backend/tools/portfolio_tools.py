@@ -121,6 +121,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any, Optional
 import uuid
 
@@ -161,6 +162,45 @@ MAX_SEARCH_RESULTS = 20
 
 _VALID_VERDICTS: frozenset[str] = frozenset({"BUY", "HOLD", "SELL"})
 
+#: Matches a trailing Yahoo Finance exchange suffix (".NS" / ".BO"),
+#: case-insensitively, so it can be stripped to get the bare ticker.
+_TICKER_SUFFIX_RE = re.compile(r"\.(NS|BO)$", re.IGNORECASE)
+
+
+def _normalize_ticker_query(raw: str) -> tuple[str, str]:
+    """
+    Normalize a caller-supplied ticker (or company name/partial name --
+    both are accepted, see this module's docstring) for ILIKE wildcard
+    matching.
+
+    Bug fix: the original queries bound ``ticker`` with no wildcard
+    characters at all, which in Postgres makes ``ILIKE`` case-insensitive
+    EQUALITY, not partial matching -- "Muthoot" would never match
+    "MUTHOOTFIN.NS", and a bare "MUTHOOTFIN" would never match either,
+    since ILIKE requires an exact (case-insensitive) match end to end.
+
+    Args:
+        raw: Whatever the caller/LLM passed as the ticker argument --
+             a bare ticker ("TCS"), a Yahoo Finance ticker ("TCS.NS"),
+             or (now also accepted) a company name/partial name.
+
+    Returns:
+        (normalized, bare) -- ``normalized`` is stripped and
+        upper-cased as typed; ``bare`` additionally drops a trailing
+        ".NS"/".BO" exchange suffix when present (equal to
+        ``normalized`` when there is none), so a caller can wildcard-
+        match against both the full Yahoo Finance ticker column and the
+        bare ticker column without knowing in advance which one the
+        input looks like. Both are safe to embed directly in a SQL
+        ``LIKE``/``ILIKE`` pattern via string concatenation
+        (``'%' || :param || '%'``) -- callers must NOT interpolate
+        ``raw`` itself into a query string; only ever bind these two
+        return values as parameters.
+    """
+    normalized = raw.strip().upper()
+    bare = _TICKER_SUFFIX_RE.sub("", normalized)
+    return normalized, bare
+
 
 # ---------------------------------------------------------------------------
 # get_user_analyses -- core
@@ -173,6 +213,16 @@ _VALID_VERDICTS: frozenset[str] = frozenset({"BUY", "HOLD", "SELL"})
 #: hand for each filter combination). Verdict/conviction come out of
 #: the JSONB state_snapshot via the same ->> extraction
 #: backend.services.analysis._SQL_LOAD_HISTORY_PAGE already uses.
+#:
+#: The ticker filter matches partially (wildcarded ILIKE, never exact
+#: equality -- see _normalize_ticker_query) against both the Yahoo
+#: Finance ticker and the bare ticker, with and without a trailing
+#: exchange suffix, OR against the company's display name -- so a
+#: caller (or the chat LLM) can pass a ticker, a bare symbol, or a
+#: company name/partial name and still resolve the right company. The
+#: wildcards are baked into the BOUND VALUES via '%' || :param || '%',
+#: never into the query string itself, so this stays a properly
+#: parameterised query (no SQL injection surface).
 _SQL_GET_USER_ANALYSES = text(
     """
     SELECT a.id,
@@ -191,8 +241,11 @@ _SQL_GET_USER_ANALYSES = text(
        AND (:verdict IS NULL OR a.state_snapshot -> 'decision' ->> 'verdict' = :verdict)
        AND (
             :ticker IS NULL
-            OR c.ticker_yf ILIKE :ticker
-            OR c.ticker ILIKE :ticker
+            OR c.ticker_yf ILIKE '%' || :ticker || '%'
+            OR c.ticker ILIKE '%' || :ticker || '%'
+            OR c.ticker_yf ILIKE '%' || :ticker_bare || '%'
+            OR c.ticker ILIKE '%' || :ticker_bare || '%'
+            OR c.name ILIKE '%' || :ticker || '%'
        )
      ORDER BY a.completed_at DESC
      LIMIT :limit
@@ -217,9 +270,11 @@ async def _get_user_analyses_core(
         verdict: Optional filter -- one of "BUY"/"HOLD"/"SELL"
                  (case-insensitive). Invalid values are reported back
                  as an error rather than silently ignored.
-        ticker:  Optional filter -- matches either the Yahoo Finance
-                 ticker (e.g. "TCS.NS") or the bare ticker (e.g.
-                 "TCS"), case-insensitively.
+        ticker:  Optional filter -- a ticker (e.g. "TCS.NS" or "TCS")
+                 OR a company name/partial name (e.g. "Muthoot" or
+                 "Tata Consultancy"). Matches partially and case-
+                 insensitively against the Yahoo Finance ticker, the
+                 bare ticker, and the company's display name.
         limit:   Maximum rows to return. Clamped to
                  [1, MAX_ANALYSES_LIMIT].
 
@@ -242,12 +297,18 @@ async def _get_user_analyses_core(
 
     clamped_limit = max(1, min(limit, MAX_ANALYSES_LIMIT))
 
+    normalized_ticker: Optional[str] = None
+    ticker_bare: Optional[str] = None
+    if ticker is not None and ticker.strip():
+        normalized_ticker, ticker_bare = _normalize_ticker_query(ticker)
+
     result = await session.execute(
         _SQL_GET_USER_ANALYSES,
         {
             "user_id": str(user_id),
             "verdict": normalised_verdict,
-            "ticker": ticker,
+            "ticker": normalized_ticker,
+            "ticker_bare": ticker_bare,
             "limit": clamped_limit,
         },
     )
@@ -283,9 +344,14 @@ async def _get_user_analyses_core(
 # get_memo_by_ticker -- core
 # ---------------------------------------------------------------------------
 
-#: Most recent completed analysis for one ticker, scoped to the caller.
-#: Matches either ticker_yf or the bare ticker, case-insensitively, so
-#: an LLM-supplied "TCS" and "TCS.NS" both resolve to the same company.
+#: Most recent completed analysis for one ticker (or company name/
+#: partial name), scoped to the caller. Wildcarded ILIKE (never exact
+#: equality -- see _normalize_ticker_query) against ticker_yf, the bare
+#: ticker (with and without a trailing exchange suffix), and the
+#: company's display name, so an LLM-supplied "TCS", "TCS.NS", "Tata
+#: Consultancy", or "Muthoot" (for "MUTHOOTFIN.NS") all resolve to the
+#: same company. Wildcards are baked into the BOUND VALUES, never the
+#: query string -- this stays a properly parameterised query.
 _SQL_GET_MEMO_BY_TICKER = text(
     """
     SELECT a.id,
@@ -298,7 +364,13 @@ _SQL_GET_MEMO_BY_TICKER = text(
       JOIN companies c ON c.id = a.company_id
      WHERE a.user_id = CAST(:user_id AS uuid)
        AND a.status = 'completed'
-       AND (c.ticker_yf ILIKE :ticker OR c.ticker ILIKE :ticker)
+       AND (
+            c.ticker_yf ILIKE '%' || :ticker || '%'
+            OR c.ticker ILIKE '%' || :ticker || '%'
+            OR c.ticker_yf ILIKE '%' || :ticker_bare || '%'
+            OR c.ticker ILIKE '%' || :ticker_bare || '%'
+            OR c.name ILIKE '%' || :ticker || '%'
+       )
      ORDER BY a.completed_at DESC
      LIMIT 1
     """
@@ -317,8 +389,9 @@ async def _get_memo_by_ticker_core(
         session: Active AsyncSession for this request.
         user_id: UUID of the authenticated chat requester -- bound by
                  the factory closure, never an LLM-fillable argument.
-        ticker:  Ticker or bare symbol to look up (e.g. "TCS.NS" or
-                 "TCS"), case-insensitive.
+        ticker:  Ticker, bare symbol (e.g. "TCS.NS" or "TCS"), OR a
+                 company name/partial name (e.g. "Muthoot Finance"),
+                 case-insensitive, matched partially.
 
     Returns:
         A dict with the memo's key fields on success, or
@@ -331,9 +404,15 @@ async def _get_memo_by_ticker_core(
             "message": "ticker must be a non-empty string",
         }
 
+    normalized_ticker, ticker_bare = _normalize_ticker_query(ticker)
+
     result = await session.execute(
         _SQL_GET_MEMO_BY_TICKER,
-        {"user_id": str(user_id), "ticker": ticker.strip()},
+        {
+            "user_id": str(user_id),
+            "ticker": normalized_ticker,
+            "ticker_bare": ticker_bare,
+        },
     )
     row = result.fetchone()
 
@@ -535,8 +614,12 @@ def build_portfolio_tools(
 
         Args:
             verdict: Optional filter -- one of "BUY", "HOLD", "SELL".
-            ticker:  Optional filter -- a ticker symbol (e.g. "TCS" or
-                     "TCS.NS") to restrict results to one company.
+            ticker:  Optional filter to restrict results to one
+                     company -- pass EITHER a ticker symbol (e.g. "TCS"
+                     or "TCS.NS") OR a company name/partial name (e.g.
+                     "Muthoot" or "Tata Consultancy"). Matches
+                     partially, so you do not need the exact full name
+                     or ticker.
             limit:   Maximum number of analyses to return (default 10,
                      max 25).
 
@@ -556,10 +639,14 @@ def build_portfolio_tools(
         ticker.
 
         Use this to answer questions like "what did AIRP say about
-        TCS?" or "pull up my Infosys memo".
+        TCS?", "pull up my Infosys memo", or "what did you say about
+        Muthoot Finance?".
 
         Args:
-            ticker: Ticker symbol or bare name (e.g. "TCS.NS" or "TCS").
+            ticker: EITHER a ticker symbol (e.g. "TCS.NS" or "TCS") OR
+                    a company name/partial name (e.g. "Muthoot Finance"
+                    or just "Muthoot"). Matches partially -- you do not
+                    need the exact full name or ticker.
 
         Returns:
             Dict with the memo's verdict, conviction score, price

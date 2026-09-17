@@ -167,8 +167,10 @@ Public API
     )
 """
 
+import asyncio
 import json
 import logging
+import time
 from typing import Any, AsyncIterator, Optional
 
 from langchain_core.messages import (
@@ -352,6 +354,64 @@ _HISTORY_ROLE_TO_MESSAGE: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 # Errors
 # ---------------------------------------------------------------------------
+
+
+#: A transient Groq/Anthropic hiccup (a rate-limit blip, a momentary
+#: network error, an overloaded-model 5xx) must not fail an entire chat
+#: turn on the very first bad response when a single retry -- especially
+#: one with a shorter, simplified prompt -- has a real chance of
+#: succeeding. Kept at exactly one retry (not a full exponential-backoff
+#: loop like backend/tools/*.py's external-data fetchers use): a chat
+#: turn is a live, latency-sensitive user-facing wait, not a background
+#: batch job, so bounding the extra latency a failure can add is more
+#: important here than maximising eventual success odds.
+_MAX_LLM_RETRIES = 1
+
+#: Fixed delay before the one retry -- long enough to ride out a brief
+#: rate-limit window, short enough that a user watching a chat reply
+#: does not perceive the retry as a second hang on top of the first.
+_RETRY_BACKOFF_SECONDS = 1.0
+
+
+def _simplify_messages(messages: list[BaseMessage]) -> list[BaseMessage]:
+    """
+    Build a shorter, simpler message list for a post-failure retry.
+
+    Keeps only the guardrail ``SystemMessage`` (always first, see
+    ``build_chat_messages``) and the FINAL message (the user's actual
+    question, or -- after a tool-calling round -- the model's own
+    tool-call turn plus its tool results, which is deliberately dropped
+    here in favour of the plain question instead: a retry after a
+    failed decision/streaming call should ask a strictly simpler
+    question, not repeat a tool-calling round). Dropping conversation
+    history is the "simplified prompt" this module's callers retry
+    with -- a shorter prompt is both cheaper (helps against a
+    token-budget-flavoured rate limit) and structurally simpler (fewer
+    turns for the model to get confused by) than the original, at the
+    cost of losing multi-turn context for just this one retry attempt.
+
+    Args:
+        messages: The original message list that failed.
+
+    Returns:
+        A new list: [system_message, last_human_message] when at least
+        one ``HumanMessage`` exists in ``messages``; otherwise the
+        original list unchanged (nothing sensible to simplify).
+    """
+    if not messages:
+        return messages
+
+    system = messages[0]
+    last_human: Optional[HumanMessage] = None
+    for msg in reversed(messages):
+        if isinstance(msg, HumanMessage):
+            last_human = msg
+            break
+
+    if last_human is None:
+        return messages
+
+    return [system, last_human]
 
 
 class ChatLLMError(Exception):
@@ -665,13 +725,33 @@ def invoke_chat(
     )
     active_llm = llm if llm is not None else get_chat_llm()
 
-    try:
-        response = active_llm.invoke(messages)
-    except Exception as exc:
-        logger.exception("chat_llm: LLM invocation failed")
+    attempt_messages = messages
+    last_exc: Optional[Exception] = None
+    response: Any = None
+    for attempt in range(_MAX_LLM_RETRIES + 1):
+        try:
+            response = active_llm.invoke(attempt_messages)
+            last_exc = None
+            break
+        except Exception as exc:
+            last_exc = exc
+            if attempt < _MAX_LLM_RETRIES:
+                logger.warning(
+                    "chat_llm: LLM invocation failed (attempt %d/%d), "
+                    "retrying with a simplified prompt: %s",
+                    attempt + 1,
+                    _MAX_LLM_RETRIES + 1,
+                    exc,
+                )
+                attempt_messages = _simplify_messages(messages)
+                time.sleep(_RETRY_BACKOFF_SECONDS)
+            else:
+                logger.exception("chat_llm: LLM invocation failed on final attempt")
+
+    if last_exc is not None:
         raise ChatLLMError(
-            "AIRP Assistant failed to generate a response.", cause=exc
-        ) from exc
+            "AIRP Assistant failed to generate a response.", cause=last_exc
+        ) from last_exc
 
     raw_content: Any = response.content if hasattr(response, "content") else response
     text = raw_content if isinstance(raw_content, str) else str(raw_content)
@@ -761,14 +841,44 @@ async def run_tool_calling_round(
           follows) -- the caller should make a second, final streaming
           call on this updated list, WITHOUT re-binding tools.
 
-    Never raises for a tool-execution failure (see above); DOES let a
-    failure of the decision call itself (``llm.bind_tools(...).ainvoke``)
-    propagate, exactly like a normal ``invoke_chat``/``astream_chat``
-    LLM failure -- the caller's existing ``except Exception`` handling
-    around this call already turns that into a ``ChatLLMError``.
+    Never raises for a tool-execution failure (see above). The decision
+    call itself (``llm.bind_tools(...).ainvoke``) gets one bounded retry
+    with a simplified (history-dropped) prompt on failure -- a
+    malformed/garbled tool-call response or a transient provider error
+    on this one call used to fail the entire turn immediately; now only
+    a repeated failure does. A failure of BOTH attempts still propagates
+    exactly like a normal ``invoke_chat``/``astream_chat`` LLM failure --
+    the caller's existing ``except Exception`` handling around this call
+    already turns that into a ``ChatLLMError``.
     """
-    tool_bound_llm = llm.bind_tools(tools)
-    response = await tool_bound_llm.ainvoke(messages)
+    attempt_messages = messages
+    response: Any = None
+    last_exc: Optional[Exception] = None
+    for attempt in range(_MAX_LLM_RETRIES + 1):
+        try:
+            tool_bound_llm = llm.bind_tools(tools)
+            response = await tool_bound_llm.ainvoke(attempt_messages)
+            last_exc = None
+            break
+        except Exception as exc:
+            last_exc = exc
+            if attempt < _MAX_LLM_RETRIES:
+                logger.warning(
+                    "chat_llm: tool-calling decision call failed "
+                    "(attempt %d/%d), retrying with a simplified prompt: %s",
+                    attempt + 1,
+                    _MAX_LLM_RETRIES + 1,
+                    exc,
+                )
+                attempt_messages = _simplify_messages(messages)
+                await asyncio.sleep(_RETRY_BACKOFF_SECONDS)
+            else:
+                logger.exception(
+                    "chat_llm: tool-calling decision call failed on final attempt"
+                )
+
+    if last_exc is not None:
+        raise last_exc
 
     tool_calls: list[dict[str, Any]] = list(getattr(response, "tool_calls", None) or [])
     if not tool_calls:
@@ -785,12 +895,16 @@ async def run_tool_calling_round(
         tool_name = call.get("name")
         tool_obj = tools_by_name.get(tool_name) if tool_name else None
         call_id = str(call.get("id") or "")
+        call_args = call.get("args")
 
         if tool_obj is None:
             logger.warning(
-                "chat_llm: model requested unknown tool %r -- returning an "
-                "error result instead of executing anything",
+                "chat_llm: tool_call id=%s model requested unknown tool %r "
+                "(args=%r) -- returning an error result instead of "
+                "executing anything",
+                call_id,
                 tool_name,
+                call_args,
             )
             updated.append(
                 ToolMessage(
@@ -800,13 +914,23 @@ async def run_tool_calling_round(
             )
             continue
 
+        logger.info(
+            "chat_llm: tool_call id=%s invoking tool=%s args=%r",
+            call_id,
+            tool_name,
+            call_args,
+        )
+        started_at = time.monotonic()
         try:
             tool_result = await tool_obj.ainvoke(call)
         except Exception as exc:
+            elapsed_ms = (time.monotonic() - started_at) * 1000
             logger.warning(
-                "chat_llm: tool %s failed: %s -- returning an error result "
-                "instead of failing the whole turn",
+                "chat_llm: tool_call id=%s tool=%s failed after %.0fms: %s "
+                "-- returning an error result instead of failing the whole turn",
+                call_id,
                 tool_name,
+                elapsed_ms,
                 exc,
             )
             updated.append(
@@ -816,6 +940,14 @@ async def run_tool_calling_round(
                 )
             )
             continue
+
+        elapsed_ms = (time.monotonic() - started_at) * 1000
+        logger.info(
+            "chat_llm: tool_call id=%s tool=%s completed in %.0fms",
+            call_id,
+            tool_name,
+            elapsed_ms,
+        )
 
         # BaseTool.ainvoke(call) on a ToolCall-shaped dict (name/args/id/
         # type, exactly what response.tool_calls items already are)
@@ -981,24 +1113,68 @@ async def astream_chat_from_messages(
 
     Raises:
         ChatLLMError: the streaming call itself failed, or the stream
-            produced zero non-empty chunks.
+            produced zero non-empty chunks -- after one bounded retry
+            with a simplified (history-dropped) prompt, but ONLY when
+            the failure/empty result happened before any token was
+            actually delivered to the caller. A failure that occurs
+            AFTER some tokens were already yielded is never retried --
+            the caller has already received and (for
+            backend/routers/chat_stream.py) forwarded real partial
+            content, so retrying would mean silently prepending a
+            second, differently-worded attempt onto what the user is
+            already reading.
     """
     active_llm = llm if llm is not None else get_chat_llm()
 
-    yielded_any = False
-    try:
-        async for chunk in active_llm.astream(messages):
-            raw_content: Any = chunk.content if hasattr(chunk, "content") else chunk
-            token = raw_content if isinstance(raw_content, str) else str(raw_content)
-            if token:
-                yielded_any = True
-                yield token
-    except Exception as exc:
-        logger.exception("chat_llm: streaming LLM invocation failed")
-        raise ChatLLMError(
-            "AIRP Assistant failed to generate a response.", cause=exc
-        ) from exc
+    attempt_messages = messages
+    for attempt in range(_MAX_LLM_RETRIES + 1):
+        is_last_attempt = attempt == _MAX_LLM_RETRIES
+        yielded_any = False
+        try:
+            async for chunk in active_llm.astream(attempt_messages):
+                raw_content: Any = chunk.content if hasattr(chunk, "content") else chunk
+                token = (
+                    raw_content if isinstance(raw_content, str) else str(raw_content)
+                )
+                if token:
+                    yielded_any = True
+                    yield token
+        except Exception as exc:
+            if yielded_any or is_last_attempt:
+                logger.exception(
+                    "chat_llm: streaming LLM invocation failed "
+                    "(yielded_any=%s, attempt=%d/%d)",
+                    yielded_any,
+                    attempt + 1,
+                    _MAX_LLM_RETRIES + 1,
+                )
+                raise ChatLLMError(
+                    "AIRP Assistant failed to generate a response.", cause=exc
+                ) from exc
+            logger.warning(
+                "chat_llm: streaming LLM invocation failed before any token "
+                "was produced (attempt %d/%d), retrying with a simplified "
+                "prompt: %s",
+                attempt + 1,
+                _MAX_LLM_RETRIES + 1,
+                exc,
+            )
+            attempt_messages = _simplify_messages(messages)
+            await asyncio.sleep(_RETRY_BACKOFF_SECONDS)
+            continue
 
-    if not yielded_any:
-        logger.warning("chat_llm: streaming LLM produced no tokens")
-        raise ChatLLMError("AIRP Assistant returned an empty response.")
+        if yielded_any:
+            return
+
+        if is_last_attempt:
+            logger.warning("chat_llm: streaming LLM produced no tokens")
+            raise ChatLLMError("AIRP Assistant returned an empty response.")
+
+        logger.warning(
+            "chat_llm: streaming LLM produced no tokens (attempt %d/%d), "
+            "retrying with a simplified prompt",
+            attempt + 1,
+            _MAX_LLM_RETRIES + 1,
+        )
+        attempt_messages = _simplify_messages(messages)
+        await asyncio.sleep(_RETRY_BACKOFF_SECONDS)
