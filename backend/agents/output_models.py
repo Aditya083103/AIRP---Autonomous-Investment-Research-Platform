@@ -757,7 +757,23 @@ class ValuationOutput(AgentOutput):
     # --- Intrinsic value ---
     intrinsic_value_per_share: Optional[float] = Field(
         default=None,
-        description="DCF-derived intrinsic value per share in ₹",
+        description=(
+            "Intrinsic value per share in ₹ -- from a DCF model for a "
+            "normal operating business, or from price-to-book (book value "
+            "per share x sector-average P/B) for a bank/NBFC/insurer/"
+            "asset manager. See valuation_method for which one produced "
+            "this figure."
+        ),
+    )
+    valuation_method: str = Field(
+        default="dcf",
+        description=(
+            "Which method produced intrinsic_value_per_share: 'dcf' "
+            "(FCFF discounted cash flow) or 'price_to_book' (book value "
+            "per share x sector-average P/B -- the standard approach for "
+            "financial-sector companies, where loan-book growth makes "
+            "free cash flow structurally meaningless)"
+        ),
     )
     current_price: Optional[float] = Field(
         default=None,
