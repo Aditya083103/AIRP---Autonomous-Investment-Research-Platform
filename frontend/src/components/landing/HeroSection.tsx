@@ -47,7 +47,7 @@ export function HeroSection(): JSX.Element {
       <div className="grid items-center gap-12 lg:grid-cols-[1.1fr,0.9fr]">
         <Reveal>
           <div>
-            <p className="font-mono text-xs uppercase tracking-[0.2em] text-brand-600">
+            <p className="font-mono text-xs uppercase tracking-[0.2em] text-brand-300">
               Investment committee, simulated
             </p>
 

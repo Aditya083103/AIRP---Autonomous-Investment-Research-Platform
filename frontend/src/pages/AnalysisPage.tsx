@@ -159,7 +159,7 @@ export function AnalysisPage(): JSX.Element {
 
   return (
     <div className="mx-auto max-w-lg py-12">
-      <p className="font-mono text-xs uppercase tracking-[0.2em] text-brand-600">New analysis</p>
+      <p className="font-mono text-xs uppercase tracking-[0.2em] text-brand-300">New analysis</p>
       <h1 className="mt-2 font-display text-3xl font-semibold text-ink">
         Run the committee on a company.
       </h1>

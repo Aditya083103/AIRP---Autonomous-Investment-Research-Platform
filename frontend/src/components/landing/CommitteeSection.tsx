@@ -171,7 +171,7 @@ export function CommitteeSection(): JSX.Element {
   return (
     <section id="committee" className="py-16">
       <div className="max-w-2xl">
-        <p className="font-mono text-xs uppercase tracking-[0.2em] text-brand-600">The committee</p>
+        <p className="font-mono text-xs uppercase tracking-[0.2em] text-brand-300">The committee</p>
         <h2 className="mt-3 font-display text-3xl font-semibold text-ink">
           Eight specialists, one shared state, zero unchecked authority.
         </h2>

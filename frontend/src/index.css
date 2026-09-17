@@ -5,6 +5,13 @@
 @layer base {
   html {
     scroll-behavior: smooth;
+    /* AIRP is dark-only (no light theme/toggle). Without this, native
+       browser chrome that Tailwind cannot reach -- the <select> popup
+       listbox, scrollbars, date/range pickers -- renders with the OS's
+       light-mode UI regardless of our own dark palette, producing
+       barely-legible light-gray-on-white option text in the <select>
+       dropdown popup. */
+    color-scheme: dark;
   }
 
   body {
@@ -13,6 +20,37 @@
 
   :focus-visible {
     @apply outline-none ring-2 ring-brand-500 ring-offset-2 ring-offset-canvas;
+  }
+
+  /* Chrome/Edge/Safari autofill (login/register email+password fields)
+     paints its own white-or-yellow background with black text via a
+     UA-stylesheet pseudo-class that normal `background-color` cannot
+     override -- only `-webkit-box-shadow` (large enough to fully cover
+     the field) and `-webkit-text-fill-color` can. The absurd transition
+     delay is the standard trick to stop Chrome re-flashing its own
+     colours a frame after this rule applies. */
+  input:-webkit-autofill,
+  input:-webkit-autofill:hover,
+  input:-webkit-autofill:focus {
+    -webkit-text-fill-color: theme("colors.ink");
+    -webkit-box-shadow: 0 0 0px 1000px theme("colors.surface") inset;
+    box-shadow: 0 0 0px 1000px theme("colors.surface") inset;
+    transition: background-color 9999s ease-in-out 0s;
+  }
+
+  /* The <select> popup listbox itself: color-scheme:dark above fixes
+     Chromium/Firefox chrome, but explicit colours on <option> give a
+     second line of defense in engines that partially honour author
+     styles on the popup (and keep it visually on-brand rather than
+     generic OS dark grey). Safari's native popup ignores this and uses
+     `color-scheme` alone -- there is no further CSS hook available. */
+  select {
+    color-scheme: dark;
+  }
+
+  option {
+    background-color: theme("colors.surface");
+    color: theme("colors.ink");
   }
 }
 

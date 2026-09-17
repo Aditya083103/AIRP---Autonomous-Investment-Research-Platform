@@ -63,7 +63,7 @@ export function AccuracyPage(): JSX.Element {
 
   return (
     <div>
-      <p className="font-mono text-xs uppercase tracking-[0.2em] text-brand-600">
+      <p className="font-mono text-xs uppercase tracking-[0.2em] text-brand-300">
         Public accuracy dashboard
       </p>
       <h1 className="mt-2 font-display text-3xl font-semibold text-ink">

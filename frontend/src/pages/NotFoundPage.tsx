@@ -7,7 +7,7 @@ import { Link } from "react-router-dom";
 export function NotFoundPage(): JSX.Element {
   return (
     <div className="mx-auto max-w-md py-16 text-center">
-      <p className="font-mono text-sm font-semibold text-brand-600">404</p>
+      <p className="font-mono text-sm font-semibold text-brand-300">404</p>
       <h1 className="mt-3 font-display text-3xl font-semibold text-ink">Page not found</h1>
       <p className="mt-3 text-sm leading-relaxed text-muted">
         That page does not exist. Head back home to start a new analysis.

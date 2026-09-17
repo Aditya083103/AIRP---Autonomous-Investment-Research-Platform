@@ -46,7 +46,7 @@ const PREVIEW_CHAR_LIMIT = 160;
 function initialsFor(displayName: string): string {
   const words = displayName.split(" ").filter(Boolean);
   const first = words[0]?.[0] ?? "";
-  const last = words.length > 1 ? (words[words.length - 1]?.[0] ?? "") : "";
+  const last = words.length > 1 ? words[words.length - 1]?.[0] ?? "" : "";
   return `${first}${last}`.toUpperCase();
 }
 
@@ -105,8 +105,8 @@ export function DebateMessageCard({ message }: DebateMessageCardProps): JSX.Elem
             onClick={() => setExpanded((previous) => !previous)}
             aria-expanded={expanded}
             className={cn(
-              "mt-2 font-mono text-xs font-semibold uppercase tracking-wide text-brand-600",
-              "hover:text-brand-700 hover:underline",
+              "mt-2 font-mono text-xs font-semibold uppercase tracking-wide text-brand-300",
+              "hover:text-brand-200 hover:underline",
             )}
           >
             {expanded ? "Show less" : "Show more"}

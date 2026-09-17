@@ -75,7 +75,7 @@ export function DashboardPage(): JSX.Element {
 
   return (
     <div>
-      <p className="font-mono text-xs uppercase tracking-[0.2em] text-brand-600">Dashboard</p>
+      <p className="font-mono text-xs uppercase tracking-[0.2em] text-brand-300">Dashboard</p>
       <h1 className="mt-2 font-display text-3xl font-semibold text-ink">
         Welcome back, {user?.display_name ?? user?.email}.
       </h1>
@@ -111,7 +111,7 @@ export function DashboardPage(): JSX.Element {
             action={
               <Link
                 to="/analysis"
-                className="text-sm font-medium text-brand-600 hover:text-brand-700"
+                className="text-sm font-medium text-brand-300 hover:text-brand-200"
               >
                 Run an analysis →
               </Link>
