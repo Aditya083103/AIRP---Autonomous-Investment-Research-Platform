@@ -85,14 +85,36 @@ logger = logging.getLogger(__name__)
 # only two agents grounded directly in financial-statement data; News
 # Sentiment carries the least because it is the noisiest, most transient
 # signal.
+#
+# ISSUE 4 rebalance: Risk Officer and Contrarian Investor were previously
+# 0.15 each -- combined, the two adversarial/skeptical seats outweighed
+# every non-fundamental bullish signal (Technical + Macro + Sentiment =
+# 0.30 combined, same as Risk + Contrarian alone), which skewed the
+# committee toward HOLD/SELL far more often than BUY. This is a
+# deliberate rebalancing of how much adversarial-agent skepticism
+# influences the FINAL VERDICT MATH -- it does not change what the Risk
+# Officer or Contrarian Investor themselves say; their critiques are
+# unchanged, they simply carry less mathematical pull on the outcome.
+# Both hard gates below (prohibitive risk_score, overvalued + weak
+# fundamentals) are untouched -- those exist to catch genuinely
+# dangerous situations and are not weakened by this change.
+# Freed weight (0.05 + 0.05 = 0.10) is redistributed across the three
+# remaining non-fundamental agents proportional to their own prior
+# weight (Technical 0.12, Macro 0.10, Sentiment 0.08, totalling 0.30):
+#   Technical:  0.12 + 0.10 * (0.12/0.30) = 0.16
+#   Macro:      0.10 + 0.10 * (0.10/0.30) = 0.1333
+#   Sentiment:  0.08 + 0.10 * (0.08/0.30) = 0.1067
+# Fundamental and Valuation are deliberately left untouched -- they
+# remain the two highest weights, and are the only two agents grounded
+# in real financial-statement data.
 _BASE_AGENT_WEIGHTS: dict[str, float] = {
     "fundamental_analyst": 0.20,
     "valuation_agent": 0.20,
-    "risk_officer": 0.15,
-    "contrarian_investor": 0.15,
-    "technical_analyst": 0.12,
-    "macro_economist": 0.10,
-    "news_sentiment": 0.08,
+    "technical_analyst": 0.16,
+    "macro_economist": 0.1333,
+    "news_sentiment": 0.1067,
+    "risk_officer": 0.10,
+    "contrarian_investor": 0.10,
 }
 
 # Agents whose entire mandate is to argue the bearish/skeptical side of
@@ -410,14 +432,30 @@ def _determine_verdict(
     # opinion skews skeptical by design. Discounting their penalty in
     # proportion to how much real data actually backed it keeps a
     # data-outage from manufacturing a structurally bearish verdict.
-    score -= max(0, risk_score - 5) * 0.35 * completeness
+    #
+    # ISSUE 4 rebalance: these three coefficients (0.35, 1.5/0.1, 0.3)
+    # are a SEPARATE, hardcoded scoring system that does not read from
+    # _BASE_AGENT_WEIGHTS/_compute_agent_weights at all -- rebalancing
+    # the weights above without also touching these would leave the
+    # "How the committee's evidence was weighted" card the user sees
+    # showing Risk/Contrarian at a reduced 10% each while this function's
+    # actual verdict math still penalised them at their old, higher
+    # weight. Each coefficient below is scaled by the same ratio the
+    # base-weight rebalance applied to Risk Officer/Contrarian Investor
+    # (0.10 / 0.15 = 2/3), so the displayed weighting and the real
+    # scoring math stay internally consistent:
+    #   risk penalty:            0.35  * (2/3) = 0.2333
+    #   high-bear-conviction:     1.5  * (2/3) = 1.0
+    #   low-bear-conviction/pt:   0.1  * (2/3) = 0.0667
+    #   critical_flags/flag:      0.3  * (2/3) = 0.2
+    score -= max(0, risk_score - 5) * 0.2333 * completeness
 
     if bear_conviction >= _HIGH_BEAR_CONVICTION_THRESHOLD:
-        score -= 1.5 * completeness
+        score -= 1.0 * completeness
     else:
-        score -= (bear_conviction - 1) * 0.1 * completeness
+        score -= (bear_conviction - 1) * 0.0667 * completeness
 
-    score -= len(critical_flags) * 0.3 * completeness
+    score -= len(critical_flags) * 0.2 * completeness
 
     if score >= 1.5:
         verdict = "BUY"
