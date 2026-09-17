@@ -183,6 +183,7 @@ from langchain_core.messages import (
 from langchain_core.tools import BaseTool
 
 from backend.agents.llm_factory import get_llm
+from backend.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -460,11 +461,31 @@ class ChatLLMError(Exception):
     (a future REST endpoint in T-103, a future WebSocket handler in
     T-104) can log or inspect the underlying failure while presenting
     a clean, user-facing error of its own choosing.
+
+    ``collected_tokens`` lets a streaming caller
+    (``backend/routers/chat_stream.py``'s ``_poll_reply_tokens``)
+    attach whatever partial reply had already been streamed to the
+    user before this was raised. A caller deciding whether a
+    fallback-provider retry is safe needs exactly this: retrying is
+    only sound when NOTHING was streamed yet (see
+    ``get_chat_llm_fallback``'s docstring) -- the exception type alone
+    cannot distinguish "zero tokens, both attempts failed" from "some
+    tokens streamed, then it broke mid-reply", since
+    ``astream_chat_from_messages`` raises the same ``ChatLLMError`` for
+    both. Defaults to an empty list for every other raise site, which
+    never streamed anything in the first place.
     """
 
-    def __init__(self, message: str, *, cause: Optional[BaseException] = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        cause: Optional[BaseException] = None,
+        collected_tokens: Optional[list[str]] = None,
+    ) -> None:
         super().__init__(message)
         self.cause = cause
+        self.collected_tokens: list[str] = collected_tokens or []
 
 
 # ---------------------------------------------------------------------------
@@ -488,6 +509,63 @@ def get_chat_llm() -> Any:
         ``LLM_PROVIDER=anthropic``.
     """
     return get_llm()
+
+
+def get_chat_llm_fallback() -> Optional[Any]:
+    """
+    Return a different-provider LLM client to retry a failed chat turn
+    with, or ``None`` when no distinct fallback is configured.
+
+    Groq's free tier shares one daily token budget across every agent
+    AND every chat turn in this deployment -- observed in practice (see
+    this module's own manual QA transcript) as the single most common
+    real-world chat failure: the LLM call raises ``groq.RateLimitError``
+    with a token-per-day message, and retrying the SAME provider a
+    second later (this module's existing one-retry policy) cannot
+    possibly succeed, since the quota does not reset in the ~1s backoff
+    window -- the retry was previously pure wasted latency before the
+    turn failed anyway. When ``ANTHROPIC_API_KEY`` is also configured
+    (true in every environment this project actually runs in), the
+    retry attempt below uses THIS client instead, so a chat turn only
+    fails outright when both configured providers are unavailable.
+
+    Deliberately chat-only, not folded into ``llm_factory.get_llm()``
+    itself: the 8-agent analysis pipeline's per-node LLM calls are
+    analytical judgements that become part of a permanently persisted
+    verdict, where a silent mid-analysis provider swap could change
+    *how* an agent reasons about the same data -- a consistency
+    property worth keeping strict there. The AIRP Assistant is the
+    opposite case by design (see this module's own docstring): it never
+    produces a new judgement, only explains ones already persisted, so
+    which provider answers a given chat turn is not observable in any
+    stored output -- there is nothing here for provider-consistency to
+    protect.
+
+    Returns:
+        A fresh ``ChatAnthropic`` client when the active provider is
+        Groq and ``settings.anthropic_api_key`` is non-empty; ``None``
+        otherwise (active provider is already Anthropic, or no
+        Anthropic key is configured -- callers fall back to retrying
+        the original client unchanged in that case).
+    """
+    if settings.llm_provider != "groq" or not settings.anthropic_api_key:
+        return None
+
+    from langchain_anthropic import ChatAnthropic
+
+    return ChatAnthropic(
+        api_key=settings.anthropic_api_key,
+        model=settings.anthropic_model,
+        max_tokens=settings.anthropic_max_tokens,
+        temperature=0,
+        timeout=25.0,
+        # max_retries=0, not 1: see llm_factory.get_llm's own docstring
+        # comment -- the anthropic SDK's internal retry can itself sleep
+        # up to ~60s honouring a 429's Retry-After header, which would
+        # silently delay this already-a-fallback attempt well past what
+        # a live chat turn should ever wait.
+        max_retries=0,
+    )
 
 
 # ---------------------------------------------------------------------------

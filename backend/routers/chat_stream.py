@@ -296,6 +296,7 @@ from backend.services.chat_llm import (
     astream_chat_from_messages,
     build_chat_messages,
     get_chat_llm,
+    get_chat_llm_fallback,
     run_tool_calling_round,
 )
 from backend.services.chat_service import build_memo_context
@@ -715,9 +716,10 @@ def _build_chat_tools(
     are bound for EVERY session type -- a user asking "what's TCS's P/E
     right now?" is a reasonable question in a memo-scoped conversation
     too, not just a portfolio-wide one. ``backend.tools.portfolio_tools``
-    ``'s three tools are ADDITIONALLY bound only for a portfolio-wide
-    session -- they read the caller's own analysis history / uploaded
-    documents, which has no meaning scoped to one already-open memo.
+    ``'s four tools are ADDITIONALLY bound only for a portfolio-wide
+    session -- they read or act on the caller's own analysis history /
+    uploaded documents / new-analysis requests, none of which has a
+    meaning scoped to one already-open memo.
 
     Root cause this closes: chat_stream.py's own module docstring used
     to document portfolio-wide tool-calling as a deliberately deferred
@@ -780,6 +782,166 @@ async def _reply_token_source(
         return
     async for token in astream_chat_from_messages(messages, llm=llm):
         yield token
+
+
+class _StreamAlreadyHandled(Exception):
+    """
+    Internal signal raised by ``_poll_reply_tokens`` when the turn ended
+    for a reason that is ALREADY fully handled (a client disconnect, or
+    a failed send on an already-broken connection -- any partial reply
+    is already persisted by the time this is raised). Distinct from
+    ``ChatLLMError`` specifically so ``_run_one_turn`` can tell "the LLM
+    failed, a fallback-provider retry might help" apart from "the
+    connection is gone, retrying anything is pointless" -- catching
+    ``Exception`` broadly at the call site would conflate the two.
+    """
+
+
+async def _poll_reply_tokens(
+    websocket: WebSocket,
+    reader: "_InboundReader",
+    session_id: uuid.UUID,
+    cached_reply: Optional[str],
+    immediate_text: Optional[str],
+    messages: list[BaseMessage],
+    llm: Any,
+) -> list[str]:
+    """
+    Run the token-polling loop for ONE LLM client and return the tokens
+    collected, sending each as a ``token`` event (and periodic
+    ``heartbeat`` events) as it arrives.
+
+    Extracted from ``_run_one_turn`` (B9/T-104) so it can be called a
+    second time, unchanged, against ``get_chat_llm_fallback()``'s client
+    when the first attempt fails before yielding anything (see
+    ``_run_one_turn``'s own fallback-retry logic) -- the disconnect/
+    heartbeat/send-failure handling below must behave identically on
+    both attempts, which duplicating this loop inline twice could not
+    guarantee would stay true as the loop evolves.
+
+    Raises:
+        ChatLLMError: the LLM call itself failed, or produced no
+            tokens (see ``astream_chat_from_messages``'s own docstring)
+            -- the caller decides whether a fallback-provider retry is
+            possible (only when the returned/collected list is empty).
+        _StreamAlreadyHandled: a client disconnect or a send failure on
+            an already-broken connection occurred; any partial reply is
+            already persisted and the caller must not retry or send
+            anything further -- it should simply return.
+    """
+    collected: list[str] = []
+    idle_ticks = 0
+    pending_next: Optional["asyncio.Task[str]"] = None
+
+    try:
+        token_iter = _reply_token_source(
+            cached_reply, immediate_text, messages, llm
+        ).__aiter__()
+
+        while True:
+            # IMPORTANT: do not wrap token_iter.__anext__() directly in
+            # asyncio.wait_for(). wait_for() CANCELS its awaitable the
+            # instant it times out, and cancelling an async generator's
+            # in-flight __anext__() call destroys the generator's
+            # paused state -- the very next __anext__() call on the
+            # same iterator then raises StopAsyncIteration immediately,
+            # silently truncating the reply to nothing the moment a
+            # single token takes longer than _TOKEN_POLL_INTERVAL_SECONDS
+            # to arrive (an entirely realistic wait for a real
+            # provider's first token). asyncio.wait() below never
+            # cancels on timeout -- it only reports whether the SAME
+            # long-lived Task has finished yet -- so a slow-to-arrive
+            # token is polled for repeatedly without ever losing
+            # progress. The task is created once per token and re-used
+            # across every timeout iteration until it actually
+            # resolves; it is only ever cancelled in this loop's exit
+            # paths below (disconnect, send failure), where abandoning
+            # the in-flight generation is the correct, intended outcome.
+            if pending_next is None:
+                pending_next = asyncio.ensure_future(token_iter.__anext__())
+
+            # BUGFIX: the disconnect probe below used to be
+            # ``_client_still_connected(websocket)``, which cancelled a
+            # fresh ``websocket.receive()`` call every idle tick -- see
+            # ``_InboundReader``'s class docstring for the full
+            # explanation of why that corrupted the connection (the
+            # actual root cause of the "AIRP Assistant failed to
+            # generate a response" report). ``reader.task`` is the
+            # SAME never-cancelled-mid-flight receive task
+            # ``_turn_loop`` itself waits on between turns; waiting on
+            # it here too (never cancelling it) is what makes it safe
+            # to share.
+            done, _pending = await asyncio.wait(
+                {pending_next, reader.task},
+                timeout=_TOKEN_POLL_INTERVAL_SECONDS,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+
+            if reader.task in done and pending_next not in done:
+                try:
+                    message = reader.advance()
+                except WebSocketDisconnect:
+                    message = {"type": "websocket.disconnect"}
+                except Exception:
+                    message = {"type": "websocket.disconnect"}
+
+                if message.get("type") == "websocket.disconnect":
+                    pending_next.cancel()
+                    await _persist_interrupted_reply(session_id, collected)
+                    raise _StreamAlreadyHandled()
+                # A benign, unexpected message mid-reply -- this
+                # endpoint has no mid-turn client protocol, so it is
+                # ignored (reader.task has already been advanced to
+                # listen for the next one). Fall through to the
+                # idle/heartbeat bookkeeping below since the token
+                # itself has not necessarily arrived yet.
+
+            if pending_next not in done:
+                # Still waiting on the same in-flight token call --
+                # send a heartbeat if it has been quiet long enough,
+                # then loop back and keep waiting on it (not a new one).
+                idle_ticks += 1
+                if idle_ticks >= _HEARTBEAT_AFTER_TICKS:
+                    idle_ticks = 0
+                    try:
+                        await websocket.send_json(
+                            _cast_stream_event(session_id, event_type="heartbeat")
+                        )
+                    except Exception:
+                        pending_next.cancel()
+                        await _persist_interrupted_reply(session_id, collected)
+                        raise _StreamAlreadyHandled()
+                continue
+
+            try:
+                token = pending_next.result()
+            except StopAsyncIteration:
+                break
+            finally:
+                pending_next = None
+
+            idle_ticks = 0
+            collected.append(token)
+
+            try:
+                await websocket.send_json(
+                    _cast_stream_event(session_id, event_type="token", token=token)
+                )
+            except Exception:
+                await _persist_interrupted_reply(session_id, collected)
+                raise _StreamAlreadyHandled()
+    except ChatLLMError as exc:
+        # Attach whatever was collected before this failed -- see
+        # ChatLLMError.collected_tokens's own docstring for why the
+        # caller needs this to decide whether a fallback-provider retry
+        # is safe.
+        exc.collected_tokens = collected
+        raise
+    finally:
+        if pending_next is not None and not pending_next.done():
+            pending_next.cancel()
+
+    return collected
 
 
 def _extract_started_analysis_job_id(messages: list[BaseMessage]) -> Optional[str]:
@@ -951,13 +1113,44 @@ async def _run_one_turn(
                     )
                     analysis_job_id = _extract_started_analysis_job_id(messages)
                 except Exception as exc:
-                    logger.exception(
-                        "chat_stream: tool-calling round failed for session_id=%s",
-                        session_id,
-                    )
-                    tool_round_error = ChatLLMError(
-                        "AIRP Assistant failed to generate a response.", cause=exc
-                    )
+                    fallback_llm = get_chat_llm_fallback()
+                    if fallback_llm is None:
+                        logger.exception(
+                            "chat_stream: tool-calling round failed for session_id=%s",
+                            session_id,
+                        )
+                        tool_round_error = ChatLLMError(
+                            "AIRP Assistant failed to generate a response.", cause=exc
+                        )
+                    else:
+                        # Root cause behind most real-world "failed to
+                        # generate a response" reports: the primary
+                        # provider's rate/quota limit, not a genuine bug
+                        # -- see get_chat_llm_fallback's own docstring.
+                        # One more attempt on the second configured
+                        # provider before the turn actually fails.
+                        logger.warning(
+                            "chat_stream: tool-calling round failed for "
+                            "session_id=%s, retrying once on the fallback "
+                            "LLM provider: %s",
+                            session_id,
+                            exc,
+                        )
+                        try:
+                            messages, immediate_text = await run_tool_calling_round(
+                                fallback_llm, tools, messages
+                            )
+                            analysis_job_id = _extract_started_analysis_job_id(messages)
+                        except Exception as fallback_exc:
+                            logger.exception(
+                                "chat_stream: tool-calling round failed on the "
+                                "fallback provider too for session_id=%s",
+                                session_id,
+                            )
+                            tool_round_error = ChatLLMError(
+                                "AIRP Assistant failed to generate a response.",
+                                cause=fallback_exc,
+                            )
 
     if tool_round_error is not None:
         try:
@@ -985,123 +1178,85 @@ async def _run_one_turn(
     except Exception:
         return
 
-    collected: list[str] = []
-    idle_ticks = 0
-    pending_next: Optional["asyncio.Task[str]"] = None
-
     try:
-        token_iter = _reply_token_source(
-            cached_reply, immediate_text, messages, get_chat_llm()
-        ).__aiter__()
-
-        while True:
-            # IMPORTANT: do not wrap token_iter.__anext__() directly in
-            # asyncio.wait_for(). wait_for() CANCELS its awaitable the
-            # instant it times out, and cancelling an async generator's
-            # in-flight __anext__() call destroys the generator's
-            # paused state -- the very next __anext__() call on the
-            # same iterator then raises StopAsyncIteration immediately,
-            # silently truncating the reply to nothing the moment a
-            # single token takes longer than _TOKEN_POLL_INTERVAL_SECONDS
-            # to arrive (an entirely realistic wait for a real
-            # provider's first token). asyncio.wait() below never
-            # cancels on timeout -- it only reports whether the SAME
-            # long-lived Task has finished yet -- so a slow-to-arrive
-            # token is polled for repeatedly without ever losing
-            # progress. The task is created once per token and re-used
-            # across every timeout iteration until it actually
-            # resolves; it is only ever cancelled in this loop's exit
-            # paths below (disconnect, send failure), where abandoning
-            # the in-flight generation is the correct, intended outcome.
-            if pending_next is None:
-                pending_next = asyncio.ensure_future(token_iter.__anext__())
-
-            # BUGFIX: the disconnect probe below used to be
-            # ``_client_still_connected(websocket)``, which cancelled a
-            # fresh ``websocket.receive()`` call every idle tick -- see
-            # ``_InboundReader``'s class docstring for the full
-            # explanation of why that corrupted the connection (the
-            # actual root cause of the "AIRP Assistant failed to
-            # generate a response" report). ``reader.task`` is the
-            # SAME never-cancelled-mid-flight receive task
-            # ``_turn_loop`` itself waits on between turns; waiting on
-            # it here too (never cancelling it) is what makes it safe
-            # to share.
-            done, _pending = await asyncio.wait(
-                {pending_next, reader.task},
-                timeout=_TOKEN_POLL_INTERVAL_SECONDS,
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-
-            if reader.task in done and pending_next not in done:
-                try:
-                    message = reader.advance()
-                except WebSocketDisconnect:
-                    message = {"type": "websocket.disconnect"}
-                except Exception:
-                    message = {"type": "websocket.disconnect"}
-
-                if message.get("type") == "websocket.disconnect":
-                    pending_next.cancel()
-                    await _persist_interrupted_reply(session_id, collected)
-                    return
-                # A benign, unexpected message mid-reply -- this
-                # endpoint has no mid-turn client protocol, so it is
-                # ignored (reader.task has already been advanced to
-                # listen for the next one). Fall through to the
-                # idle/heartbeat bookkeeping below since the token
-                # itself has not necessarily arrived yet.
-
-            if pending_next not in done:
-                # Still waiting on the same in-flight token call --
-                # send a heartbeat if it has been quiet long enough,
-                # then loop back and keep waiting on it (not a new one).
-                idle_ticks += 1
-                if idle_ticks >= _HEARTBEAT_AFTER_TICKS:
-                    idle_ticks = 0
-                    try:
-                        await websocket.send_json(
-                            _cast_stream_event(session_id, event_type="heartbeat")
-                        )
-                    except Exception:
-                        pending_next.cancel()
-                        await _persist_interrupted_reply(session_id, collected)
-                        return
-                continue
-
-            try:
-                token = pending_next.result()
-            except StopAsyncIteration:
-                break
-            finally:
-                pending_next = None
-
-            idle_ticks = 0
-            collected.append(token)
-
+        collected = await _poll_reply_tokens(
+            websocket,
+            reader,
+            session_id,
+            cached_reply,
+            immediate_text,
+            messages,
+            get_chat_llm(),
+        )
+    except _StreamAlreadyHandled:
+        return
+    except ChatLLMError as exc:
+        # A fallback-provider retry only makes sense when NOTHING was
+        # streamed yet on the failed attempt -- astream_chat_from_messages
+        # raises the same ChatLLMError whether zero tokens ever came out
+        # or a failure happened mid-stream (see its own docstring), so
+        # exc.collected_tokens (attached by _poll_reply_tokens before
+        # re-raising) is what actually distinguishes the two cases, not
+        # the exception type.
+        collected = exc.collected_tokens
+        fallback_llm = get_chat_llm_fallback() if not collected else None
+        if fallback_llm is None:
             try:
                 await websocket.send_json(
-                    _cast_stream_event(session_id, event_type="token", token=token)
+                    _cast_stream_event(
+                        session_id, event_type="error", error=str(exc), is_final=True
+                    )
                 )
-            except Exception:
+            except (
+                Exception
+            ):  # nosec B110 -- best-effort notify on a failing connection
+                pass
+            if collected:
                 await _persist_interrupted_reply(session_id, collected)
-                return
-
-    except ChatLLMError as exc:
+            return
+        # Root cause behind most real-world "failed to generate a
+        # response" reports: the primary provider's rate/quota limit,
+        # not a genuine bug -- see get_chat_llm_fallback's own
+        # docstring. One more attempt on the second configured provider
+        # before the turn actually fails.
+        logger.warning(
+            "chat_stream: streaming reply failed for session_id=%s before "
+            "any token was produced, retrying once on the fallback LLM "
+            "provider: %s",
+            session_id,
+            exc,
+        )
         try:
-            await websocket.send_json(
-                _cast_stream_event(
-                    session_id, event_type="error", error=str(exc), is_final=True
-                )
+            collected = await _poll_reply_tokens(
+                websocket,
+                reader,
+                session_id,
+                cached_reply,
+                immediate_text,
+                messages,
+                fallback_llm,
             )
-        except Exception:  # nosec B110 -- best-effort notify on a failing connection
-            pass
-        if collected:
-            await _persist_interrupted_reply(session_id, collected)
-        return
-    finally:
-        if pending_next is not None and not pending_next.done():
-            pending_next.cancel()
+        except _StreamAlreadyHandled:
+            return
+        except ChatLLMError as fallback_exc:
+            try:
+                await websocket.send_json(
+                    _cast_stream_event(
+                        session_id,
+                        event_type="error",
+                        error=str(fallback_exc),
+                        is_final=True,
+                    )
+                )
+            except (
+                Exception
+            ):  # nosec B110 -- best-effort notify on a failing connection
+                pass
+            if fallback_exc.collected_tokens:
+                await _persist_interrupted_reply(
+                    session_id, fallback_exc.collected_tokens
+                )
+            return
 
     full_text = "".join(collected)
 

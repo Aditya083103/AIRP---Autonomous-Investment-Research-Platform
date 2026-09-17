@@ -52,6 +52,7 @@ from langchain_core.messages import (  # noqa: E402
 from langchain_core.tools import BaseTool  # noqa: E402
 import pytest  # noqa: E402
 
+from backend.config import settings  # noqa: E402
 from backend.services.chat_llm import (  # noqa: E402
     DEFAULT_RESPONSE_STYLE,
     LIVE_DATA_TOOL_INSTRUCTION,
@@ -66,6 +67,7 @@ from backend.services.chat_llm import (  # noqa: E402
     build_system_message,
     build_system_prompt,
     get_chat_llm,
+    get_chat_llm_fallback,
     invoke_chat,
     run_tool_calling_round,
 )
@@ -222,6 +224,63 @@ class TestGetChatLlm:
         result = get_chat_llm()
         assert result is sentinel
         mock_get_llm.assert_called_once_with()
+
+
+# ---------------------------------------------------------------------------
+# 2b. get_chat_llm_fallback (chat provider-fallback bug fix)
+# ---------------------------------------------------------------------------
+
+
+class TestGetChatLlmFallback:
+    """
+    Root-cause fix for the reported "AIRP Assistant failed to generate a
+    response" bug: reproduced live against a real Groq deployment, the
+    actual cause was Groq's free-tier daily token quota being exhausted
+    (a groq.RateLimitError with a tokens-per-day message) -- not a code
+    defect in the retry logic itself, which already existed and worked
+    exactly as designed. Since ANTHROPIC_API_KEY is also configured in
+    every environment this project runs in, get_chat_llm_fallback gives
+    chat_stream.py's turn handling a second provider to retry with
+    instead of failing the turn outright.
+    """
+
+    def test_returns_none_when_primary_provider_is_not_groq(self) -> None:
+        with patch.object(settings, "llm_provider", "anthropic"):
+            assert get_chat_llm_fallback() is None
+
+    def test_returns_none_when_no_anthropic_key_configured(self) -> None:
+        with (
+            patch.object(settings, "llm_provider", "groq"),
+            patch.object(settings, "anthropic_api_key", ""),
+        ):
+            assert get_chat_llm_fallback() is None
+
+    def test_returns_a_chat_anthropic_client_when_groq_is_primary(self) -> None:
+        with (
+            patch.object(settings, "llm_provider", "groq"),
+            patch.object(settings, "anthropic_api_key", "sk-ant-configured"),
+        ):
+            fallback = get_chat_llm_fallback()
+        assert fallback is not None
+        assert type(fallback).__name__ == "ChatAnthropic"
+
+    def test_fallback_client_disables_the_sdks_own_retry(self) -> None:
+        """
+        Same latency-hang bug as llm_factory.get_llm's own regression
+        test (see test_tracing.py's test_*_client_disables_the_sdks_own_retry):
+        max_retries must be 0, not 1, or a rate-limited fallback attempt
+        can itself sleep up to ~60s inside the anthropic SDK before ever
+        raising -- defeating the entire point of retrying quickly on a
+        second provider for a live chat turn.
+        """
+        with (
+            patch.object(settings, "llm_provider", "groq"),
+            patch.object(settings, "anthropic_api_key", "sk-ant-configured"),
+            patch("langchain_anthropic.ChatAnthropic") as mock_chat_anthropic,
+        ):
+            get_chat_llm_fallback()
+
+        assert mock_chat_anthropic.call_args.kwargs["max_retries"] == 0
 
 
 # ---------------------------------------------------------------------------

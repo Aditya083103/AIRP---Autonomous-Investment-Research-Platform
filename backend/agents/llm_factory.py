@@ -49,11 +49,28 @@ def get_llm() -> Any:
     # own (see node_profiler.py's _ThreadTimeout docstring). Capping the
     # HTTP-level timeout here at 25s -- under NODE_TIMEOUT_S -- means the
     # call itself raises before the node-level timeout would even need
-    # to fire, on every platform, not just POSIX (SIGALRM). max_retries=1
-    # additionally prevents the SDK's own internal retry/backoff on 429s
-    # from silently multiplying that 25s into 60-90+ seconds across
-    # several attempts before the exception ever surfaces to AIRP's own
-    # try/except graceful-degradation handling in each agent.
+    # to fire, on every platform, not just POSIX (SIGALRM).
+    #
+    # max_retries=0 (NOT 1): both the groq and anthropic Python SDKs
+    # implement their OWN internal retry-with-backoff for a 429/5xx
+    # BEFORE ever raising back to LangChain -- and per each SDK's own
+    # _calculate_retry_timeout, a 429 response's Retry-After header (up
+    # to 60s) is honoured as the SLEEP DURATION before that one internal
+    # retry, entirely independent of the timeout= above (timeout bounds
+    # one HTTP request/response, not a pre-request sleep the SDK does on
+    # its own). With max_retries=1, a single rate-limited ainvoke() could
+    # therefore silently take up to ~60s (SDK sleep) + 25s (timeout) =
+    # 85s to raise -- reproduced live against a real exhausted Groq quota
+    # during the chat-fallback bug investigation, a Retry-After of 57s
+    # measured directly in this deployment's own logs. max_retries=0
+    # disables that internal retry entirely, so a rate-limited call
+    # raises immediately and each agent's own try/except (or, for chat,
+    # backend/services/chat_llm.py's own fast ~1s-backoff retry plus
+    # backend/routers/chat_stream.py's cross-provider fallback) is what
+    # actually decides whether and how to retry -- deliberately, since
+    # those callers know the real latency budget (a live user-facing
+    # wait for chat, node_profiler.NODE_TIMEOUT_S for an agent node) and
+    # the SDK's own generic backoff does not.
     if settings.llm_provider == "groq":
         from langchain_groq import ChatGroq
 
@@ -62,7 +79,7 @@ def get_llm() -> Any:
             model_name=settings.groq_model,
             temperature=0,
             timeout=25.0,
-            max_retries=1,
+            max_retries=0,
         )
     else:
         from langchain_anthropic import ChatAnthropic
@@ -73,5 +90,5 @@ def get_llm() -> Any:
             max_tokens=settings.anthropic_max_tokens,
             temperature=0,
             timeout=25.0,
-            max_retries=1,
+            max_retries=0,
         )

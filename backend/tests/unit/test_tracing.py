@@ -505,6 +505,59 @@ class TestGetLlmCallsTracing:
                     result = get_llm()
         assert result is not None
 
+    def test_groq_client_disables_the_sdks_own_retry(self) -> None:
+        """
+        Regression test for a chat-latency bug found live: the groq SDK's
+        OWN internal retry (independent of LangChain) can sleep up to
+        ~60s honouring a 429 response's Retry-After header before making
+        its one permitted retry -- max_retries=1 here does not prevent
+        that, only max_retries=0 does (see llm_factory.get_llm's own
+        docstring comment for the full explanation, including the 57s
+        Retry-After this was reproduced against). timeout=25.0 bounds a
+        single HTTP request/response; it does NOT bound this pre-request
+        sleep, which is why max_retries must be 0, not 1.
+        """
+        with patch("backend.agents.llm_factory.configure_tracing"):
+            with patch("backend.agents.llm_factory.settings") as mock_settings:
+                mock_settings.llm_provider = "groq"
+                mock_settings.groq_api_key = "test-key"
+                mock_settings.groq_model = "openai/gpt-oss-120b"
+                with patch("langchain_groq.ChatGroq") as mock_chat_groq:
+                    from backend.agents.llm_factory import get_llm
+
+                    get_llm()
+
+        mock_chat_groq.assert_called_once_with(
+            api_key="test-key",
+            model_name="openai/gpt-oss-120b",
+            temperature=0,
+            timeout=25.0,
+            max_retries=0,
+        )
+
+    def test_anthropic_client_disables_the_sdks_own_retry(self) -> None:
+        """Same fix, same reasoning, for the Anthropic client -- see
+        test_groq_client_disables_the_sdks_own_retry above."""
+        with patch("backend.agents.llm_factory.configure_tracing"):
+            with patch("backend.agents.llm_factory.settings") as mock_settings:
+                mock_settings.llm_provider = "anthropic"
+                mock_settings.anthropic_api_key = "sk-ant-test"
+                mock_settings.anthropic_model = "claude-haiku-4-5-20251001"
+                mock_settings.anthropic_max_tokens = 4096
+                with patch("langchain_anthropic.ChatAnthropic") as mock_chat_anthropic:
+                    from backend.agents.llm_factory import get_llm
+
+                    get_llm()
+
+        mock_chat_anthropic.assert_called_once_with(
+            api_key="sk-ant-test",
+            model="claude-haiku-4-5-20251001",
+            max_tokens=4096,
+            temperature=0,
+            timeout=25.0,
+            max_retries=0,
+        )
+
 
 # ---------------------------------------------------------------------------
 # Tests: agent node functions have @traced_agent applied

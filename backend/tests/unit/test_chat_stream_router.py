@@ -1361,17 +1361,23 @@ class TestToolCallingRoundWiring:
         info = _make_stream_info(session_id, user_id=current_user.id)
         call_count = {"n": 0}
 
-        def _raise_once_then_passthrough(
+        def _raise_twice_then_passthrough(
             llm: Any, tools: Any, messages: Any
         ) -> tuple[Any, None]:
+            # A real deployment has ANTHROPIC_API_KEY configured (see
+            # test conftest's settings fixture), so a tool-round failure
+            # now gets one fallback-provider retry (chat_stream.py's
+            # get_chat_llm_fallback) before the turn actually fails --
+            # both calls must fail to exercise this test's "genuine,
+            # unrecoverable failure" scenario.
             call_count["n"] += 1
-            if call_count["n"] == 1:
+            if call_count["n"] <= 2:
                 raise RuntimeError("tool exploded")
             return messages, None
 
         with _patch_chat_stream_services(
             stream_info=info,
-            tool_round=_raise_once_then_passthrough,
+            tool_round=_raise_twice_then_passthrough,
             astream_tokens=["ok"],
         ):
             with client.websocket_connect(
@@ -1386,6 +1392,136 @@ class TestToolCallingRoundWiring:
                 ws.send_json({"message": "try again"})
                 start_event = ws.receive_json()
                 assert start_event["event_type"] == "start"
+
+    def test_tool_round_recovers_via_fallback_provider_on_first_failure(
+        self, client: TestClient, auth_token: str, current_user: User
+    ) -> None:
+        """
+        Root-cause regression test for the reported "AIRP Assistant
+        failed to generate a response" bug: reproduced live, the actual
+        cause was the primary provider's (Groq) daily quota being
+        exhausted, not a code defect -- a SINGLE failed attempt used to
+        fail the whole turn even though a second, already-configured
+        provider (Anthropic) was available. One failure on the primary
+        attempt must now recover within the SAME turn via
+        get_chat_llm_fallback, with no error event at all.
+        """
+        session_id = uuid.uuid4()
+        info = _make_stream_info(session_id, user_id=current_user.id)
+        call_count = {"n": 0}
+
+        def _fail_primary_then_succeed(
+            llm: Any, tools: Any, messages: Any
+        ) -> tuple[Any, None]:
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                raise RuntimeError("Error code: 429 - rate_limit_exceeded")
+            return messages, None
+
+        with _patch_chat_stream_services(
+            stream_info=info,
+            tool_round=_fail_primary_then_succeed,
+            astream_tokens=["Recovered via the fallback provider."],
+        ):
+            with client.websocket_connect(
+                f"/api/v1/chat/{session_id}/stream?token={auth_token}"
+            ) as ws:
+                ws.send_json({"message": "Which of my analyses are BUY?"})
+                start_event = ws.receive_json()
+                assert start_event["event_type"] == "start"
+                token_event = ws.receive_json()
+                assert token_event["event_type"] == "token"
+                done_event = ws.receive_json()
+                assert done_event["event_type"] == "done"
+
+        assert call_count["n"] == 2
+
+
+# ---------------------------------------------------------------------------
+# 9b. Streaming-call provider fallback (root-cause fix for the reported
+# "AIRP Assistant failed to generate a response" bug)
+# ---------------------------------------------------------------------------
+
+
+class TestStreamingProviderFallback:
+    def test_recovers_via_fallback_when_primary_fails_before_any_token(
+        self, client: TestClient, auth_token: str, current_user: User
+    ) -> None:
+        """The streaming call's own equivalent of the tool-round fallback
+        test above: the primary provider fails before yielding a single
+        token, so retrying on the fallback provider is safe and this
+        turn must still succeed, not surface an error."""
+        session_id = uuid.uuid4()
+        info = _make_stream_info(session_id, user_id=current_user.id)
+        call_count = {"n": 0}
+
+        async def _fail_once_then_succeed(
+            messages: Any, *, llm: Any = None
+        ) -> AsyncGenerator[str, None]:
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                raise ChatLLMError("Error code: 429 - rate_limit_exceeded")
+            yield "Recovered via the fallback provider."
+
+        with _patch_chat_stream_services(stream_info=info):
+            with patch(
+                "backend.routers.chat_stream.astream_chat_from_messages",
+                new=_fail_once_then_succeed,
+            ):
+                with client.websocket_connect(
+                    f"/api/v1/chat/{session_id}/stream?token={auth_token}"
+                ) as ws:
+                    ws.send_json({"message": "hello"})
+                    start_event = ws.receive_json()
+                    assert start_event["event_type"] == "start"
+                    token_event = ws.receive_json()
+                    assert token_event["event_type"] == "token"
+                    assert (
+                        token_event["token"] == "Recovered via the fallback provider."
+                    )
+                    done_event = ws.receive_json()
+                    assert done_event["event_type"] == "done"
+
+        assert call_count["n"] == 2
+
+    def test_does_not_retry_once_a_token_was_already_streamed(
+        self, client: TestClient, auth_token: str, current_user: User
+    ) -> None:
+        """A failure AFTER some tokens were already sent to the user
+        must NOT trigger a fallback-provider retry -- the user has
+        already seen real partial content; silently prepending a
+        second, differently-worded attempt would be worse than just
+        reporting the failure and persisting what was sent."""
+        session_id = uuid.uuid4()
+        info = _make_stream_info(session_id, user_id=current_user.id)
+        call_count = {"n": 0}
+
+        async def _yield_one_then_fail(
+            messages: Any, *, llm: Any = None
+        ) -> AsyncGenerator[str, None]:
+            call_count["n"] += 1
+            yield "Partial reply, then it broke."
+            raise ChatLLMError("stream broke mid-reply")
+
+        with _patch_chat_stream_services(stream_info=info):
+            with patch(
+                "backend.routers.chat_stream.astream_chat_from_messages",
+                new=_yield_one_then_fail,
+            ):
+                with client.websocket_connect(
+                    f"/api/v1/chat/{session_id}/stream?token={auth_token}"
+                ) as ws:
+                    ws.send_json({"message": "hello"})
+                    ws.receive_json()  # start
+                    token_event = ws.receive_json()
+                    assert token_event["event_type"] == "token"
+                    error_event = ws.receive_json()
+                    assert error_event["event_type"] == "error"
+                    assert error_event["is_final"] is True
+
+        # Exactly one attempt -- a second (fallback) call would have
+        # incremented this to 2.
+        assert call_count["n"] == 1
 
 
 # ---------------------------------------------------------------------------
