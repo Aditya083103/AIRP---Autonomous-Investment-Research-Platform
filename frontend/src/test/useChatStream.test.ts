@@ -77,7 +77,7 @@ function jsonResponse(status: number, body: unknown): Response {
   });
 }
 
-function startEvent(messageId: string | null = null): unknown {
+function startEvent(messageId: string | null = null, analysisJobId: string | null = null): unknown {
   return {
     session_id: "session-1",
     event_type: "start",
@@ -85,6 +85,7 @@ function startEvent(messageId: string | null = null): unknown {
     message_id: messageId,
     is_final: false,
     error: null,
+    analysis_job_id: analysisJobId,
   };
 }
 
@@ -539,6 +540,71 @@ describe("useChatStream turn lifecycle", () => {
       isError: false,
     });
     expect(lastSocket().closed).toBe(false);
+  });
+});
+
+describe("useChatStream pendingAnalysisJobId (FEATURE 1)", () => {
+  it("is null before any event arrives", () => {
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+
+    const { result } = renderHook(() =>
+      useChatStream({ sessionId: "session-1", token: "jwt-token" }),
+    );
+
+    expect(result.current.pendingAnalysisJobId).toBeNull();
+  });
+
+  it("is set the instant a 'start' event carries analysis_job_id", async () => {
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+
+    const { result } = renderHook(() =>
+      useChatStream({ sessionId: "session-1", token: "jwt-token" }),
+    );
+
+    act(() => {
+      lastSocket().emitOpen();
+      lastSocket().emitMessage(startEvent(null, "job-123"));
+    });
+
+    await waitFor(() => expect(result.current.pendingAnalysisJobId).toBe("job-123"));
+  });
+
+  it("stays null for a normal turn with no analysis_job_id", async () => {
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+
+    const { result } = renderHook(() =>
+      useChatStream({ sessionId: "session-1", token: "jwt-token" }),
+    );
+
+    act(() => {
+      lastSocket().emitOpen();
+      lastSocket().emitMessage(startEvent());
+      lastSocket().emitMessage(tokenEvent("A P/E ratio of..."));
+      lastSocket().emitMessage(doneEvent("msg-1"));
+    });
+
+    await waitFor(() => expect(result.current.messages).toHaveLength(1));
+    expect(result.current.pendingAnalysisJobId).toBeNull();
+  });
+
+  it("clearPendingAnalysisJobId resets it back to null", async () => {
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+
+    const { result } = renderHook(() =>
+      useChatStream({ sessionId: "session-1", token: "jwt-token" }),
+    );
+
+    act(() => {
+      lastSocket().emitOpen();
+      lastSocket().emitMessage(startEvent(null, "job-123"));
+    });
+    await waitFor(() => expect(result.current.pendingAnalysisJobId).toBe("job-123"));
+
+    act(() => {
+      result.current.clearPendingAnalysisJobId();
+    });
+
+    expect(result.current.pendingAnalysisJobId).toBeNull();
   });
 });
 

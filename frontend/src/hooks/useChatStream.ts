@@ -44,6 +44,14 @@ export interface ChatStreamEvent {
   message_id: string | null;
   is_final: boolean;
   error: string | null;
+  /**
+   * (FEATURE 1) Set only on the 'start' event of a turn whose
+   * portfolio-wide tool round successfully called the backend's
+   * request_new_analysis tool -- null on every other event, and on a
+   * turn that did not start a new analysis. See
+   * backend/routers/chat_stream.py's ChatStreamEvent docstring.
+   */
+  analysis_job_id: string | null;
 }
 
 /** Connection lifecycle as observed from the browser side. */
@@ -150,6 +158,18 @@ export interface UseChatStreamResult {
   isEditingMessage: boolean;
   /** Set when the most recent editMessage() call failed. Cleared at the start of the next attempt. */
   editError: string | null;
+  /**
+   * (FEATURE 1) The job_id of an analysis the assistant just started via
+   * request_new_analysis, or null. Set the instant the matching 'start'
+   * event arrives (so the caller can navigate immediately, without
+   * waiting for the reply to finish streaming). The caller (ChatWidget)
+   * is responsible for calling clearPendingAnalysisJobId() once it has
+   * acted on this (e.g. after navigating) so the same job_id does not
+   * re-trigger navigation on a later re-render.
+   */
+  pendingAnalysisJobId: string | null;
+  /** Clears pendingAnalysisJobId back to null -- call after navigating. */
+  clearPendingAnalysisJobId: () => void;
 }
 
 const LOCAL_ID_PREFIX = "local-";
@@ -171,7 +191,10 @@ function isChatStreamEvent(value: unknown): value is ChatStreamEvent {
     typeof candidate.token === "string" &&
     (candidate.message_id === null || typeof candidate.message_id === "string") &&
     typeof candidate.is_final === "boolean" &&
-    (candidate.error === null || typeof candidate.error === "string")
+    (candidate.error === null || typeof candidate.error === "string") &&
+    (candidate.analysis_job_id === null ||
+      candidate.analysis_job_id === undefined ||
+      typeof candidate.analysis_job_id === "string")
   );
 }
 
@@ -190,6 +213,8 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamResul
   const [messages, setMessages] = useState<ChatWidgetMessage[]>([]);
   const [connectionStatus, setConnectionStatus] = useState<ChatStreamConnectionStatus>("idle");
   const [error, setError] = useState<string | null>(null);
+  // (FEATURE 1) See UseChatStreamResult.pendingAnalysisJobId's own docstring.
+  const [pendingAnalysisJobId, setPendingAnalysisJobId] = useState<string | null>(null);
 
   // (B9) Always holds the LATEST `initialMessages` prop, read by the
   // connect effect below at the moment it (re)runs -- NOT added to
@@ -282,6 +307,7 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamResul
 
     streamingMessageIdRef.current = null;
     pendingUserLocalIdRef.current = null;
+    setPendingAnalysisJobId(null);
 
     if (!enabled || sessionId === null || sessionId === "" || token === null || token === "") {
       currentSocketRef.current = null;
@@ -350,6 +376,12 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamResul
           const confirmedUserLocalId = pendingUserLocalIdRef.current;
           const confirmedUserServerId = parsed.message_id;
           pendingUserLocalIdRef.current = null;
+          // (FEATURE 1) This turn's tool round started a new analysis --
+          // expose its job_id so the caller (ChatWidget) can navigate to
+          // the existing live-progress route.
+          if (parsed.analysis_job_id) {
+            setPendingAnalysisJobId(parsed.analysis_job_id);
+          }
           setMessages((previous) => {
             const withAssistantPlaceholder: ChatWidgetMessage[] = [
               ...previous,
@@ -624,6 +656,10 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamResul
     [messages, isAssistantTyping, sessionId, token, sendMessage],
   );
 
+  const clearPendingAnalysisJobId = useCallback(() => {
+    setPendingAnalysisJobId(null);
+  }, []);
+
   return {
     messages,
     connectionStatus,
@@ -633,5 +669,7 @@ export function useChatStream(options: UseChatStreamOptions): UseChatStreamResul
     editMessage,
     isEditingMessage,
     editError,
+    pendingAnalysisJobId,
+    clearPendingAnalysisJobId,
   };
 }

@@ -191,6 +191,7 @@ __all__ = [
     "RESPONSE_STYLE_INSTRUCTIONS",
     "DEFAULT_RESPONSE_STYLE",
     "LIVE_DATA_TOOL_INSTRUCTION",
+    "NEW_ANALYSIS_TOOL_INSTRUCTION",
     "ChatLLMError",
     "get_chat_llm",
     "build_system_prompt",
@@ -340,6 +341,43 @@ data.
 
 If a tool call fails or returns no data, say so plainly rather than \
 guessing or inventing a figure."""
+
+#: (FEATURE 1) Appended only for a portfolio-wide call that has the
+#: request_new_analysis tool bound (memo-scoped sessions never get it --
+#: starting a brand new analysis has no relationship to the one
+#: already-open memo the conversation is about). Kept separate from
+#: LIVE_DATA_TOOL_INSTRUCTION for the same reason that block is kept
+#: separate from SYSTEM_PROMPT: a call without this tool bound has
+#: nothing to gain from instructions about a tool it cannot call.
+NEW_ANALYSIS_TOOL_INSTRUCTION = """\
+STARTING A NEW ANALYSIS
+You have a request_new_analysis tool that starts a brand new AIRP \
+analysis job for a company. Use it when the user clearly wants a new \
+analysis run -- for example "can you analyse Muthoot Finance for me?", \
+"run AIRP on TCS", or "start a 3-year analysis of Infosys".
+
+HARD RULE -- CONFIRM BEFORE CALLING IF EITHER IS AMBIGUOUS
+Before calling request_new_analysis, you must be confident about BOTH \
+the company and the time horizon:
+  - If the company name is ambiguous, unclear, or you are not sure \
+which company the user means, ASK them to confirm or clarify first -- \
+never guess. If the tool itself reports back that the name matched \
+more than one company (status="needs_clarification"), read the \
+candidates back to the user in plain language and ask them to pick one \
+before calling the tool again with their choice.
+  - If the user did not state a time horizon, it is fine to proceed \
+with the default (1 year, "1y") -- you do not need to ask about this \
+unless they clearly want a different one.
+
+HARD RULE -- NEVER FABRICATE A RESULT WHILE THE JOB IS RUNNING
+Once request_new_analysis returns a job_id, tell the user plainly that \
+the analysis has started and that they will be taken to the live \
+progress view to watch the committee work. Do NOT invent, guess, or \
+imply a verdict, conviction score, or price target while the job is \
+still running -- every restriction above about never producing a \
+verdict of your own applies here with no exception. The only way to \
+learn the real result is to wait for the job to finish and then ask \
+again (get_memo_by_ticker / get_user_analyses)."""
 
 #: Maps a stored ``chat_messages.role`` value to the LangChain message
 #: class it becomes. Deliberately excludes 'system' and 'tool' -- see
@@ -538,6 +576,7 @@ def build_system_prompt(
     risk_appetite: Optional[str] = None,
     preferred_sectors: Optional[list[str]] = None,
     tools_available: bool = False,
+    can_request_analysis: bool = False,
 ) -> str:
     """
     Build the full system prompt text for one AIRP Assistant call.
@@ -547,6 +586,8 @@ def build_system_prompt(
     instruction (T-106, see ``build_personalization_instruction``),
     then -- only when ``tools_available`` -- the live-data-tool
     instruction (B9, see ``LIVE_DATA_TOOL_INSTRUCTION``), then -- only
+    when ``can_request_analysis`` -- the new-analysis-tool instruction
+    (FEATURE 1, see ``NEW_ANALYSIS_TOOL_INSTRUCTION``), then -- only
     when provided -- the grounded context block (e.g. a memo-scoped
     session's ``MemoChatContext.full_context`` from T-100). ``context``
     is never validated or summarised here; this function only assembles
@@ -571,6 +612,10 @@ def build_system_prompt(
             ``LIVE_DATA_TOOL_INSTRUCTION`` when true. False for a call
             with no tools bound, keeping that (more common) prompt
             shorter.
+        can_request_analysis: (FEATURE 1) True when this call has the
+            ``request_new_analysis`` tool bound -- portfolio-wide
+            sessions only, never memo-scoped. Appends
+            ``NEW_ANALYSIS_TOOL_INSTRUCTION`` when true.
 
     Returns:
         The full system prompt text, ready to wrap in a
@@ -586,6 +631,8 @@ def build_system_prompt(
     ]
     if tools_available:
         parts.append(LIVE_DATA_TOOL_INSTRUCTION)
+    if can_request_analysis:
+        parts.append(NEW_ANALYSIS_TOOL_INSTRUCTION)
     if context:
         parts.append(f"Grounded context for this conversation:\n{context}")
     return "\n\n".join(parts)
@@ -597,11 +644,17 @@ def build_system_message(
     risk_appetite: Optional[str] = None,
     preferred_sectors: Optional[list[str]] = None,
     tools_available: bool = False,
+    can_request_analysis: bool = False,
 ) -> SystemMessage:
     """Wrap ``build_system_prompt()``'s output in a ``SystemMessage``."""
     return SystemMessage(
         content=build_system_prompt(
-            response_style, context, risk_appetite, preferred_sectors, tools_available
+            response_style,
+            context,
+            risk_appetite,
+            preferred_sectors,
+            tools_available,
+            can_request_analysis,
         )
     )
 
@@ -615,6 +668,7 @@ def build_chat_messages(
     risk_appetite: Optional[str] = None,
     preferred_sectors: Optional[list[str]] = None,
     tools_available: bool = False,
+    can_request_analysis: bool = False,
 ) -> list[BaseMessage]:
     """
     Assemble the full message list for one AIRP Assistant LLM call.
@@ -639,6 +693,8 @@ def build_chat_messages(
         risk_appetite: Forwarded to ``build_system_prompt`` (T-106).
         preferred_sectors: Forwarded to ``build_system_prompt`` (T-106).
         tools_available: Forwarded to ``build_system_prompt`` (B9).
+        can_request_analysis: Forwarded to ``build_system_prompt``
+            (FEATURE 1).
 
     Returns:
         A list of LangChain ``BaseMessage`` objects ready to pass to
@@ -646,7 +702,12 @@ def build_chat_messages(
     """
     messages: list[BaseMessage] = [
         build_system_message(
-            response_style, context, risk_appetite, preferred_sectors, tools_available
+            response_style,
+            context,
+            risk_appetite,
+            preferred_sectors,
+            tools_available,
+            can_request_analysis,
         )
     ]
 
@@ -973,6 +1034,7 @@ async def astream_chat(
     preferred_sectors: Optional[list[str]] = None,
     llm: Optional[Any] = None,
     tools: Optional[list[BaseTool]] = None,
+    can_request_analysis: bool = False,
 ) -> AsyncIterator[str]:
     """
     Run one AIRP Assistant chat turn and yield the reply token by token.
@@ -1023,6 +1085,10 @@ async def astream_chat(
                          falsely claiming "no analysis". ``None`` or an
                          empty list (the default) preserves the exact
                          pre-B9 behaviour: one streaming call, no tools.
+        can_request_analysis: (FEATURE 1) Forwarded to
+                         ``build_chat_messages`` -- True when the
+                         ``request_new_analysis`` tool is among
+                         ``tools`` (portfolio-wide sessions only).
 
     Yields:
         Each non-empty text chunk of the assistant's reply, in the
@@ -1047,6 +1113,7 @@ async def astream_chat(
         risk_appetite=risk_appetite,
         preferred_sectors=preferred_sectors,
         tools_available=bool(tools),
+        can_request_analysis=can_request_analysis,
     )
     active_llm = llm if llm is not None else get_chat_llm()
 

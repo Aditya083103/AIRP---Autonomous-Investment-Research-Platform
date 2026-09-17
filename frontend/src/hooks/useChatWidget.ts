@@ -102,6 +102,12 @@ export interface UseChatWidgetResult {
   isEditingMessage: boolean;
   editError: string | null;
 
+  // (FEATURE 1) See useChatStream's identical fields for the full
+  // docstring -- forwarded here unchanged so ChatWidget.tsx (the only
+  // caller with access to react-router's useNavigate) can act on them.
+  pendingAnalysisJobId: string | null;
+  clearPendingAnalysisJobId: () => void;
+
   // (B9) Conversation list -- revisit and continue a past session.
   /** True while the history panel (session list) is showing instead of the live transcript. */
   isHistoryOpen: boolean;
@@ -426,6 +432,8 @@ export function useChatWidget(): UseChatWidgetResult {
     editMessage: stream.editMessage,
     isEditingMessage: stream.isEditingMessage,
     editError: stream.editError,
+    pendingAnalysisJobId: stream.pendingAnalysisJobId,
+    clearPendingAnalysisJobId: stream.clearPendingAnalysisJobId,
     isHistoryOpen,
     toggleHistory,
     historySessions,

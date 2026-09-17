@@ -63,6 +63,7 @@ import asyncio
 from collections.abc import AsyncGenerator, Generator
 from contextlib import ExitStack, contextmanager
 from datetime import datetime, timezone
+import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 import uuid
@@ -70,6 +71,7 @@ import uuid
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from fastapi.websockets import WebSocketDisconnect
+from langchain_core.messages import ToolMessage
 import pytest
 
 from backend.config import Settings
@@ -78,7 +80,11 @@ from backend.main import create_app
 from backend.models.orm import User
 from backend.services.analysis import AnalysisNotReadyError
 from backend.services.auth import create_access_token
-from backend.services.chat_llm import RESPONSE_STYLE_INSTRUCTIONS, ChatLLMError
+from backend.services.chat_llm import (
+    NEW_ANALYSIS_TOOL_INSTRUCTION,
+    RESPONSE_STYLE_INSTRUCTIONS,
+    ChatLLMError,
+)
 from backend.services.chat_session_service import (
     ChatMessageEntry,
     ChatMessagesPage,
@@ -1136,6 +1142,160 @@ class TestBuildChatTools:
                 MagicMock(), MagicMock(id=uuid.uuid4()), session_type
             )
             assert len(tools) >= 1
+
+
+# ---------------------------------------------------------------------------
+# 8b. FEATURE 1 -- can_request_analysis is wired from session_type, so the
+# model only ever learns it can start a new analysis on a portfolio-wide
+# turn, never a memo-scoped one.
+# ---------------------------------------------------------------------------
+
+
+class TestFeature1NewAnalysisPromptWiring:
+    def test_portfolio_wide_turn_includes_new_analysis_instruction(
+        self, client: TestClient, auth_token: str, current_user: User
+    ) -> None:
+        session_id = uuid.uuid4()
+        info = _make_stream_info(
+            session_id, user_id=current_user.id, session_type="portfolio_wide"
+        )
+        recorded_calls: list[tuple[Any, Any]] = []
+        with _patch_chat_stream_services(
+            stream_info=info, astream_tokens=["ok"], astream_calls=recorded_calls
+        ):
+            with client.websocket_connect(
+                f"/api/v1/chat/{session_id}/stream?token={auth_token}"
+            ) as ws:
+                ws.send_json({"message": "can you analyse Muthoot Finance?"})
+                ws.receive_json()  # start
+                ws.receive_json()  # token
+                ws.receive_json()  # done
+
+        assert len(recorded_calls) == 1
+        forwarded_messages, _llm = recorded_calls[0]
+        assert NEW_ANALYSIS_TOOL_INSTRUCTION in forwarded_messages[0].content
+
+    def test_memo_scoped_turn_omits_new_analysis_instruction(
+        self, client: TestClient, auth_token: str, current_user: User
+    ) -> None:
+        analysis_id = uuid.uuid4()
+        session_id = uuid.uuid4()
+        info = _make_stream_info(
+            session_id,
+            user_id=current_user.id,
+            session_type="memo_scoped",
+            analysis_id=analysis_id,
+        )
+        recorded_calls: list[tuple[Any, Any]] = []
+        with _patch_chat_stream_services(
+            stream_info=info, astream_tokens=["ok"], astream_calls=recorded_calls
+        ):
+            with client.websocket_connect(
+                f"/api/v1/chat/{session_id}/stream?token={auth_token}"
+            ) as ws:
+                ws.send_json({"message": "what's the verdict?"})
+                ws.receive_json()  # start
+                ws.receive_json()  # token
+                ws.receive_json()  # done
+
+        assert len(recorded_calls) == 1
+        forwarded_messages, _llm = recorded_calls[0]
+        assert NEW_ANALYSIS_TOOL_INSTRUCTION not in forwarded_messages[0].content
+
+
+# ---------------------------------------------------------------------------
+# 8c. FEATURE 1 -- a successful request_new_analysis tool call surfaces its
+# job_id on the 'start' event, so the frontend can navigate to the
+# existing live-progress route without a second progress UI inside chat.
+# ---------------------------------------------------------------------------
+
+
+def _tool_round_returning_started_job(job_id: str) -> Any:
+    """Stand-in for run_tool_calling_round: simulates a successful
+    request_new_analysis call by appending the exact ToolMessage shape
+    that tool returns on success."""
+
+    def _tool_round(llm: Any, tools: Any, messages: Any) -> tuple[Any, None]:
+        tool_message = ToolMessage(
+            content=json.dumps(
+                {
+                    "status": "started",
+                    "job_id": job_id,
+                    "company_name": "Muthoot Finance",
+                    "ticker": "MUTHOOTFIN.NS",
+                    "exchange": "NSE",
+                    "period": "1y",
+                }
+            ),
+            tool_call_id="call_1",
+        )
+        return [*messages, tool_message], None
+
+    return _tool_round
+
+
+class TestFeature1AnalysisJobIdSurfacedOnStartEvent:
+    def test_successful_tool_call_sets_analysis_job_id_on_start_event(
+        self, client: TestClient, auth_token: str, current_user: User
+    ) -> None:
+        session_id = uuid.uuid4()
+        job_id = str(uuid.uuid4())
+        info = _make_stream_info(
+            session_id, user_id=current_user.id, session_type="portfolio_wide"
+        )
+        with _patch_chat_stream_services(
+            stream_info=info,
+            astream_tokens=["Started!"],
+            tool_round=_tool_round_returning_started_job(job_id),
+        ):
+            with client.websocket_connect(
+                f"/api/v1/chat/{session_id}/stream?token={auth_token}"
+            ) as ws:
+                ws.send_json({"message": "analyse Muthoot Finance"})
+                start_event = ws.receive_json()
+                ws.receive_json()  # token
+                ws.receive_json()  # done
+
+        assert start_event["event_type"] == "start"
+        assert start_event["analysis_job_id"] == job_id
+
+    def test_normal_turn_leaves_analysis_job_id_null(
+        self, client: TestClient, auth_token: str, current_user: User
+    ) -> None:
+        session_id = uuid.uuid4()
+        info = _make_stream_info(session_id, user_id=current_user.id)
+        with _patch_chat_stream_services(stream_info=info, astream_tokens=["ok"]):
+            with client.websocket_connect(
+                f"/api/v1/chat/{session_id}/stream?token={auth_token}"
+            ) as ws:
+                ws.send_json({"message": "what's TCS's P/E?"})
+                start_event = ws.receive_json()
+                ws.receive_json()  # token
+                ws.receive_json()  # done
+
+        assert start_event["event_type"] == "start"
+        assert start_event["analysis_job_id"] is None
+
+    def test_cache_hit_turn_leaves_analysis_job_id_null(
+        self, client: TestClient, auth_token: str, current_user: User
+    ) -> None:
+        """A cached-reply turn never runs the tool round at all (see
+        _run_one_turn's own cache-hit short-circuit) -- analysis_job_id
+        must still default to null, not carry over from a prior turn."""
+        session_id = uuid.uuid4()
+        info = _make_stream_info(session_id, user_id=current_user.id)
+        with _patch_chat_stream_services(
+            stream_info=info, cached_reply="cached answer"
+        ):
+            with client.websocket_connect(
+                f"/api/v1/chat/{session_id}/stream?token={auth_token}"
+            ) as ws:
+                ws.send_json({"message": "what's TCS's P/E?"})
+                start_event = ws.receive_json()
+                ws.receive_json()  # token
+                ws.receive_json()  # done
+
+        assert start_event["analysis_job_id"] is None
 
 
 # ---------------------------------------------------------------------------

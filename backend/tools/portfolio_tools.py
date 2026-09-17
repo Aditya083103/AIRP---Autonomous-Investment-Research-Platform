@@ -2,11 +2,12 @@
 """
 AIRP -- Portfolio-Wide AIRP Assistant Tools (T-101)
 
-Three LangChain tools for portfolio-wide chat sessions (T-099's
+Four LangChain tools for portfolio-wide chat sessions (T-099's
 ``chat_sessions.session_type = 'portfolio_wide'``) -- the counterpart to
 T-100's memo-scoped context builder. Where T-100 answers questions
 grounded in ONE already-open analysis, these tools let the chat agent
-answer questions that span the user's whole history:
+answer questions that span the user's whole history, and (FEATURE 1)
+start a brand new one:
 
     get_user_analyses         -- "which of my BUY calls are up this
                                   month?", "show me my last 5 analyses"
@@ -14,6 +15,32 @@ answer questions that span the user's whole history:
                                   "pull up my Infosys memo"
     search_uploaded_documents  -- "find the debt covenant clause in the
                                   annual report I uploaded"
+    request_new_analysis       -- "can you analyse Muthoot Finance for
+                                  me?" -- starts a new AIRP analysis job
+                                  and returns its job_id so the frontend
+                                  can navigate to the live-progress view
+
+Why request_new_analysis exists (FEATURE 1)
+-------------------------------------------
+Before this tool, the AIRP Assistant had no way to DO anything -- only
+to look things up. A user asking "can you run an analysis on Muthoot
+Finance?" mid-conversation had no path forward except leaving the chat
+and using the separate "New analysis" page. This tool closes that gap
+by wiring the exact same company-resolution
+(``backend.services.company_search.search_companies``, the identical
+ranked search GET /api/v1/companies/search already exposes to that
+page's autocomplete) and job-creation
+(``backend.services.analysis.resolve_company`` /
+``get_or_create_company`` / ``create_analysis_job`` /
+``reserve_analysis_slot`` / ``run_analysis_pipeline`` -- the exact same
+functions POST /api/v1/analysis/start itself calls) into a chat tool,
+rather than reimplementing either. Deliberately bound ONLY for
+portfolio-wide sessions (never memo-scoped, where starting a brand new
+analysis has no relationship to the one already-open memo the
+conversation is about) -- this falls out naturally from
+``build_portfolio_tools`` itself only ever being called for
+portfolio-wide sessions (see ``backend/routers/chat_stream.py``'s
+``_build_chat_tools``), so no extra gating is needed here.
 
 Why a factory, not three plain module-level ``@tool`` functions
 -------------------------------------------------------------------
@@ -114,11 +141,13 @@ Public API
     from backend.tools.portfolio_tools import build_portfolio_tools
 
     tools = build_portfolio_tools(session, user_id)
-    # tools == [get_user_analyses, get_memo_by_ticker, search_uploaded_documents]
+    # tools == [get_user_analyses, get_memo_by_ticker,
+    #           search_uploaded_documents, request_new_analysis]
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -130,6 +159,15 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.chroma_client import COLLECTION_DOCUMENTS, ChromaClient, semantic_search
+from backend.services.analysis import (
+    create_analysis_job,
+    get_or_create_company,
+    release_analysis_slot,
+    reserve_analysis_slot,
+    resolve_company,
+    run_analysis_pipeline,
+)
+from backend.services.company_search import search_companies
 
 logger = logging.getLogger(__name__)
 
@@ -139,6 +177,7 @@ __all__ = [
     "MAX_ANALYSES_LIMIT",
     "DEFAULT_SEARCH_RESULTS",
     "MAX_SEARCH_RESULTS",
+    "MAX_CLARIFICATION_CANDIDATES",
 ]
 
 # ---------------------------------------------------------------------------
@@ -200,6 +239,36 @@ def _normalize_ticker_query(raw: str) -> tuple[str, str]:
     normalized = raw.strip().upper()
     bare = _TICKER_SUFFIX_RE.sub("", normalized)
     return normalized, bare
+
+
+#: How many ranked candidates request_new_analysis shows back to the
+#: user when a company name resolves to more than one company (e.g.
+#: "HDFC" matching HDFC Bank, HDFC Life, HDFC AMC, ...) -- enough for
+#: the assistant to read them out as a short disambiguation list
+#: without flooding the reply with the entire NSE universe.
+MAX_CLARIFICATION_CANDIDATES = 5
+
+#: Mirrors backend.models.schemas._VALID_ANALYSIS_PERIODS /
+#: DEFAULT_ANALYSIS_PERIOD -- duplicated rather than imported for the
+#: same reason backend.services.analysis._COMPANY_NAME_OVERRIDES
+#: duplicates backend.agents.valuation_agent._SLUG_OVERRIDES (that
+#: module's own docstring): the schemas module is a Pydantic
+#: request-validation layer this tools module has no reason to depend
+#: on, and the set is small enough that two copies are cheaper to keep
+#: in sync than a cross-layer import would be.
+_VALID_ANALYSIS_PERIODS: frozenset[str] = frozenset(
+    {"1mo", "3mo", "6mo", "1y", "3y", "5y", "10y"}
+)
+_DEFAULT_ANALYSIS_PERIOD = "1y"
+
+#: Fire-and-forget asyncio.Task objects for background analysis runs
+#: started by request_new_analysis, keyed by nothing in particular --
+#: just held here so the event loop cannot garbage-collect a task
+#: while it is still running (a well-documented asyncio pitfall:
+#: "the event loop only keeps weak references to tasks" --
+#: https://docs.python.org/3/library/asyncio-task.html#asyncio.create_task).
+#: Each task removes itself once done via add_done_callback below.
+_background_analysis_tasks: set["asyncio.Task[None]"] = set()
 
 
 # ---------------------------------------------------------------------------
@@ -564,6 +633,197 @@ def _search_uploaded_documents_core(
 
 
 # ---------------------------------------------------------------------------
+# request_new_analysis -- core (FEATURE 1)
+# ---------------------------------------------------------------------------
+#
+# Lets the AIRP Assistant start a new analysis conversationally instead of
+# only ever answering questions about analyses that already exist. Company
+# resolution reuses backend.services.company_search.search_companies -- the
+# EXACT ranked-search logic backend/routers/companies.py's GET /search
+# already exposes to the "New analysis" page's autocomplete -- rather than
+# reimplementing name matching here. Job creation reuses the exact same
+# backend.services.analysis functions (resolve_company,
+# get_or_create_company, create_analysis_job, reserve_analysis_slot,
+# run_analysis_pipeline) backend/routers/analysis.py's POST /start endpoint
+# itself calls -- this tool and that endpoint are two different front doors
+# onto the identical job-creation code path, never two implementations of
+# the same thing.
+
+
+def _clamp_analysis_period(period: Optional[str]) -> str:
+    """
+    Normalise a caller-supplied analysis period, defaulting/falling back
+    to ``_DEFAULT_ANALYSIS_PERIOD`` for anything not in
+    ``_VALID_ANALYSIS_PERIODS`` -- an LLM-filled tool argument is exactly
+    the kind of input that deserves a safe fallback rather than a 422
+    the way the HTTP endpoint's Pydantic validator would give a
+    malformed request body.
+    """
+    if not period:
+        return _DEFAULT_ANALYSIS_PERIOD
+    normalized = period.strip().lower()
+    return (
+        normalized
+        if normalized in _VALID_ANALYSIS_PERIODS
+        else _DEFAULT_ANALYSIS_PERIOD
+    )
+
+
+async def _request_new_analysis_core(
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    company_name: str,
+    period: str = _DEFAULT_ANALYSIS_PERIOD,
+) -> dict[str, Any]:
+    """
+    Resolve ``company_name`` and start a new AIRP analysis job for it.
+
+    Args:
+        session: Active AsyncSession for this request -- used only to
+            resolve/insert the Company row and insert the Analysis row
+            (the same two writes POST /api/v1/analysis/start makes on
+            its own synchronous path). NOT used by the background
+            pipeline itself, which opens its own sessions via
+            AsyncSessionLocal exactly as run_analysis_pipeline already
+            documents.
+        user_id: UUID of the authenticated chat requester -- bound by
+            the factory closure, never an LLM-fillable argument (same
+            security property as get_user_analyses/get_memo_by_ticker).
+        company_name: Free-text company name or ticker as the user
+            typed it, e.g. "Muthoot Finance" or "TCS".
+        period: Analysis horizon, one of "1mo"/"3mo"/"6mo"/"1y"/"3y"/
+            "5y"/"10y". Any other value (or an empty string) falls back
+            to "1y" via _clamp_analysis_period.
+
+    Returns:
+        On a confident match, ``{"status": "started", "job_id": ...,
+        "company_name": ..., "ticker": ..., "exchange": ..., "period":
+        ...}`` -- the caller (backend/routers/chat_stream.py) surfaces
+        ``job_id`` to the frontend, which navigates to the existing
+        live-progress route for it.
+
+        When ``company_name`` matches zero companies in AIRP's NSE
+        universe: ``{"error": "not_found", "query": ..., "message":
+        ...}``.
+
+        When it matches MORE than one (ambiguous -- e.g. "HDFC"):
+        ``{"status": "needs_clarification", "query": ...,
+        "candidates": [{"name", "ticker", "exchange"}, ...]}`` --
+        deliberately conservative rather than guessing: only a single
+        unambiguous search match is ever auto-started.
+
+        When the concurrency limit is reached or job creation itself
+        fails: ``{"error": "capacity"`` / ``"failed_to_start", ...}``.
+        Never raises.
+    """
+    query = company_name.strip() if company_name else ""
+    if not query:
+        return {
+            "error": "invalid_company_name",
+            "message": "company_name must be a non-empty string",
+        }
+
+    normalized_period = _clamp_analysis_period(period)
+
+    search_page = search_companies(query, limit=MAX_CLARIFICATION_CANDIDATES)
+
+    if search_page.total_count == 0:
+        logger.info("request_new_analysis: no match for query=%r", query)
+        return {
+            "error": "not_found",
+            "query": query,
+            "message": (
+                f"No company matching {query!r} was found in AIRP's "
+                "NSE company universe."
+            ),
+        }
+
+    if search_page.total_count > 1:
+        logger.info(
+            "request_new_analysis: query=%r ambiguous -> %d candidates",
+            query,
+            search_page.total_count,
+        )
+        return {
+            "status": "needs_clarification",
+            "query": query,
+            "candidates": [
+                {"name": c.name, "ticker": c.ticker, "exchange": c.exchange}
+                for c in search_page.items
+            ],
+        }
+
+    candidate = search_page.items[0]
+
+    # T-074 audit findings C9/F9's concurrency guard -- the exact same
+    # reserve-before-write pattern POST /api/v1/analysis/start uses, so
+    # a chat-triggered analysis at capacity gets a clear "try again"
+    # message instead of a job record that will never actually run.
+    if not await reserve_analysis_slot():
+        logger.warning(
+            "request_new_analysis: concurrency limit reached for query=%r", query
+        )
+        return {
+            "error": "capacity",
+            "message": (
+                "Too many analyses are currently running. Please try "
+                "again in a moment."
+            ),
+        }
+
+    try:
+        resolution = resolve_company(
+            raw_query=candidate.name,
+            ticker_override=candidate.ticker,
+            exchange_override=candidate.exchange,
+        )
+        company = await get_or_create_company(session, resolution)
+        analysis = await create_analysis_job(session, company=company, user_id=user_id)
+    except Exception as exc:
+        # Mirrors backend/routers/analysis.py's start_analysis: the slot
+        # was reserved above but the pipeline will now never be
+        # scheduled, so it must be released here or a failed attempt
+        # would permanently leak one concurrency slot.
+        await release_analysis_slot()
+        logger.exception(
+            "request_new_analysis: failed to create analysis job for query=%r", query
+        )
+        return {
+            "error": "failed_to_start",
+            "message": f"Could not start an analysis for {query!r}: {exc}",
+        }
+
+    task = asyncio.create_task(
+        run_analysis_pipeline(
+            job_id=analysis.id,
+            company_name=resolution.company_name,
+            ticker=resolution.ticker,
+            exchange=resolution.exchange,
+            requested_by=str(user_id),
+            period=normalized_period,
+        )
+    )
+    _background_analysis_tasks.add(task)
+    task.add_done_callback(_background_analysis_tasks.discard)
+
+    logger.info(
+        "request_new_analysis: started job_id=%s ticker=%s for query=%r",
+        analysis.id,
+        resolution.ticker,
+        query,
+    )
+
+    return {
+        "status": "started",
+        "job_id": str(analysis.id),
+        "company_name": resolution.company_name,
+        "ticker": resolution.ticker,
+        "exchange": resolution.exchange,
+        "period": normalized_period,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Factory -- builds all 3 tools bound to one request's identity
 # ---------------------------------------------------------------------------
 
@@ -574,29 +834,37 @@ def build_portfolio_tools(
     chroma: Optional[ChromaClient] = None,
 ) -> list[BaseTool]:
     """
-    Build the 3 portfolio-wide AIRP Assistant tools for one chat turn.
+    Build the 4 portfolio-wide AIRP Assistant tools for one chat turn.
 
     ``session``/``user_id``/``chroma`` are captured in a closure, NOT
     exposed as tool arguments -- see this module's docstring for why
-    that is a security requirement, not a style choice, for the two
-    tools that read a user's own analysis history.
+    that is a security requirement, not a style choice, for the three
+    tools that read or write a user's own analysis history.
 
     Args:
         session: Active AsyncSession for this request. The caller owns
                  its lifecycle (open/close) exactly as any other route
                  handler does -- this factory does not open or close
-                 it.
+                 it. request_new_analysis uses it only for the
+                 synchronous get_or_create_company/create_analysis_job
+                 writes; the background pipeline it schedules opens its
+                 own sessions independently (see that tool's own
+                 docstring), so it is safe to call even though
+                 backend/routers/chat_stream.py closes this session
+                 before streaming the reply.
         user_id: UUID of the authenticated chat requester. Every
-                 result get_user_analyses/get_memo_by_ticker return is
-                 scoped to this user and no other.
+                 result get_user_analyses/get_memo_by_ticker return, and
+                 every analysis request_new_analysis starts, is scoped
+                 to this user and no other.
         chroma:  Optional ChromaClient for search_uploaded_documents.
                  Defaults to semantic_search's own default (a fresh
                  client via build_chroma_client()) when None.
 
     Returns:
-        ``[get_user_analyses, get_memo_by_ticker, search_uploaded_documents]``
-        -- three LangChain ``BaseTool`` instances ready to hand to an
-        agent executor.
+        ``[get_user_analyses, get_memo_by_ticker,
+        search_uploaded_documents, request_new_analysis]`` -- four
+        LangChain ``BaseTool`` instances ready to hand to an agent
+        executor.
     """
 
     @tool
@@ -688,4 +956,56 @@ def build_portfolio_tools(
             query=query, ticker=ticker, n_results=n_results, chroma=chroma
         )
 
-    return [get_user_analyses, get_memo_by_ticker, search_uploaded_documents]
+    @tool
+    async def request_new_analysis(
+        company_name: str,
+        period: str = _DEFAULT_ANALYSIS_PERIOD,
+    ) -> dict[str, Any]:
+        """
+        Start a new AIRP investment analysis for a company.
+
+        Use this when the user clearly wants a NEW analysis run -- e.g.
+        "can you analyse Muthoot Finance for me?", "run AIRP on TCS",
+        "start a 3-year analysis of Infosys". Before calling this: if
+        the company name is ambiguous or you are not confident which
+        company the user means, ASK the user to confirm rather than
+        guessing -- this tool itself will also tell you when a name
+        matched more than one company (status="needs_clarification"),
+        in which case read the candidates back to the user and ask them
+        to pick one, then call this tool again with their choice.
+
+        Once this tool returns a job_id, tell the user the analysis has
+        started and that they will be taken to the live progress view --
+        do NOT fabricate a verdict, conviction score, or any other
+        result yourself while the job is running. The verdict only ever
+        comes from a completed analysis (get_memo_by_ticker /
+        get_user_analyses, once it finishes).
+
+        Args:
+            company_name: The company to analyse, as the user said it --
+                a ticker ("TCS") or a company name/partial name
+                ("Muthoot Finance", "Infosys").
+            period: Analysis horizon -- one of "1mo", "3mo", "6mo", "1y"
+                (default), "3y", "5y", "10y". Only set this if the user
+                specified a time horizon; otherwise leave it at the
+                default.
+
+        Returns:
+            On success: {"status": "started", "job_id", "company_name",
+            "ticker", "exchange", "period"}.
+            When the name is ambiguous: {"status": "needs_clarification",
+            "query", "candidates": [{"name", "ticker", "exchange"}, ...]}
+            -- ask the user which one they meant.
+            On failure: {"error": "not_found" | "capacity" |
+            "failed_to_start" | "invalid_company_name", "message"}.
+        """
+        return await _request_new_analysis_core(
+            session, user_id, company_name=company_name, period=period
+        )
+
+    return [
+        get_user_analyses,
+        get_memo_by_ticker,
+        search_uploaded_documents,
+        request_new_analysis,
+    ]
