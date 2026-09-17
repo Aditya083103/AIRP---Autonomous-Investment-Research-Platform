@@ -41,6 +41,7 @@ import asyncio
 from email.message import EmailMessage
 import logging
 import smtplib
+import socket
 
 from backend.config import Settings
 
@@ -53,6 +54,39 @@ __all__ = ["send_password_reset_email"]
 #: asyncio.to_thread, but a request handler awaiting it would still
 #: stall until this returns).
 _SMTP_TIMEOUT_SECONDS = 10
+
+
+class _IPv4SMTP(smtplib.SMTP):
+    """
+    ``smtplib.SMTP`` that always connects over IPv4.
+
+    Bug fix: on Render (and other containerised hosts with an IPv6
+    address assigned but no functional outbound IPv6 route),
+    ``smtplib``'s default ``_get_socket`` hands the hostname straight to
+    ``socket.create_connection``, which tries whatever
+    ``getaddrinfo(host)`` returns FIRST -- Gmail's SMTP servers publish
+    both an A (IPv4) and AAAA (IPv6) record, and on exactly such a host
+    the IPv6 attempt fails immediately with
+    ``OSError: [Errno 101] Network is unreachable`` (a routing failure,
+    not a firewall block -- there is no fallback to the working IPv4
+    address). Reproduced live via Render's own deployment logs.
+
+    Resolving to an IPv4 address ourselves and connecting to THAT
+    sidesteps the broken IPv6 path entirely. This does NOT break TLS:
+    ``smtplib.SMTP.connect`` sets ``self._host`` to the ORIGINAL
+    hostname argument before ``_get_socket`` ever runs, and
+    ``starttls()`` verifies the server's certificate against
+    ``self._host`` (``server_hostname=self._host``), not against
+    whatever address the socket actually connected to -- so certificate
+    validation still correctly checks the hostname, e.g. "smtp.gmail.com",
+    exactly as if no override existed here.
+    """
+
+    def _get_socket(self, host: str, port: int, timeout: float) -> socket.socket:
+        ipv4_address = socket.gethostbyname(host)
+        return socket.create_connection(
+            (ipv4_address, port), timeout, self.source_address
+        )
 
 
 def _build_message(*, to_email: str, from_email: str, reset_url: str) -> EmailMessage:
@@ -78,7 +112,7 @@ def _send_sync(*, settings: Settings, to_email: str, reset_url: str) -> None:
         from_email=settings.smtp_from_email,
         reset_url=reset_url,
     )
-    with smtplib.SMTP(
+    with _IPv4SMTP(
         settings.smtp_host, settings.smtp_port, timeout=_SMTP_TIMEOUT_SECONDS
     ) as client:
         if settings.smtp_use_tls:

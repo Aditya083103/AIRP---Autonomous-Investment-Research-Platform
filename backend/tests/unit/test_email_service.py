@@ -24,6 +24,7 @@ ENVIRONMENT must be set to 'test' before any backend import.
 from __future__ import annotations
 
 import os
+from typing import Any, cast
 
 os.environ.setdefault("ENVIRONMENT", "test")
 
@@ -122,7 +123,9 @@ class TestSendSync:
         fake_client.__enter__ = MagicMock(return_value=fake_client)
         fake_client.__exit__ = MagicMock(return_value=False)
 
-        with patch("smtplib.SMTP", return_value=fake_client) as mock_smtp:
+        with patch(
+            "backend.services.email_service._IPv4SMTP", return_value=fake_client
+        ) as mock_smtp:
             from backend.services.email_service import _send_sync
 
             _send_sync(
@@ -146,7 +149,9 @@ class TestSendSync:
         fake_client.__enter__ = MagicMock(return_value=fake_client)
         fake_client.__exit__ = MagicMock(return_value=False)
 
-        with patch("smtplib.SMTP", return_value=fake_client):
+        with patch(
+            "backend.services.email_service._IPv4SMTP", return_value=fake_client
+        ):
             from backend.services.email_service import _send_sync
 
             _send_sync(
@@ -163,7 +168,9 @@ class TestSendSync:
         fake_client.__enter__ = MagicMock(return_value=fake_client)
         fake_client.__exit__ = MagicMock(return_value=False)
 
-        with patch("smtplib.SMTP", return_value=fake_client):
+        with patch(
+            "backend.services.email_service._IPv4SMTP", return_value=fake_client
+        ):
             from backend.services.email_service import _send_sync
 
             _send_sync(
@@ -173,3 +180,51 @@ class TestSendSync:
             )
 
         fake_client.starttls.assert_not_called()
+
+
+class TestIPv4SMTP:
+    """
+    Regression tests for the Render "Network is unreachable" bug: Gmail's
+    SMTP servers publish both an A and AAAA record, and smtplib's default
+    socket resolution tries whichever getaddrinfo() returns first -- IPv6
+    on a host with no working outbound IPv6 route. _IPv4SMTP forces the
+    actual TCP connection to the resolved IPv4 address while leaving the
+    hostname used for TLS certificate verification untouched.
+    """
+
+    def test_get_socket_connects_to_the_resolved_ipv4_address(self) -> None:
+        from backend.services.email_service import _IPv4SMTP
+
+        client = _IPv4SMTP.__new__(_IPv4SMTP)
+        client.source_address = None
+
+        with (
+            patch("socket.gethostbyname", return_value="93.184.216.34") as mock_resolve,
+            patch("socket.create_connection") as mock_connect,
+        ):
+            client._get_socket("smtp.gmail.com", 587, 10)
+
+        mock_resolve.assert_called_once_with("smtp.gmail.com")
+        mock_connect.assert_called_once_with(("93.184.216.34", 587), 10, None)
+
+    def test_host_used_for_tls_verification_is_untouched(self) -> None:
+        """
+        connect() (smtplib.SMTP's own, not overridden here) sets
+        self._host to the ORIGINAL hostname before _get_socket runs, and
+        starttls() later verifies the server certificate against
+        self._host -- confirming _get_socket resolving to an IP for the
+        socket itself has no effect on what starttls() checks against.
+        """
+        from backend.services.email_service import _IPv4SMTP
+
+        with (
+            patch("socket.gethostbyname", return_value="93.184.216.34"),
+            patch("socket.create_connection"),
+            patch.object(_IPv4SMTP, "getreply", return_value=(220, b"ok")),
+        ):
+            client = _IPv4SMTP("smtp.gmail.com", 587, timeout=10)
+
+        # _host is set by smtplib.SMTP's own connect(), not declared in
+        # its type stubs -- cast(Any, ...) (not a bare type: ignore)
+        # keeps this strict-mypy-clean.
+        assert cast(Any, client)._host == "smtp.gmail.com"
