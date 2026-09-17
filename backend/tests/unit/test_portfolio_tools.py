@@ -30,6 +30,7 @@ ENVIRONMENT must be set to 'test' before any backend import.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 import json
 from typing import Any, Optional
@@ -39,13 +40,18 @@ import uuid
 from langchain_core.tools import BaseTool
 import pytest
 
+from backend.services.analysis import TickerResolution
+from backend.services.company_search import CompanySearchPage, CompanySearchResult
 from backend.tools.portfolio_tools import (
     DEFAULT_ANALYSES_LIMIT,
     DEFAULT_SEARCH_RESULTS,
     MAX_ANALYSES_LIMIT,
+    MAX_CLARIFICATION_CANDIDATES,
     MAX_SEARCH_RESULTS,
+    _clamp_analysis_period,
     _get_memo_by_ticker_core,
     _get_user_analyses_core,
+    _request_new_analysis_core,
     _search_uploaded_documents_core,
     build_portfolio_tools,
 )
@@ -435,16 +441,228 @@ class TestSearchUploadedDocumentsCore:
 
 
 # ---------------------------------------------------------------------------
+# _request_new_analysis_core (FEATURE 1)
+# ---------------------------------------------------------------------------
+
+_SINGLE_MUTHOOT_MATCH = CompanySearchPage(
+    items=[
+        CompanySearchResult(
+            name="Muthoot Finance", ticker="MUTHOOTFIN.NS", exchange="NSE"
+        )
+    ],
+    total_count=1,
+    limit=5,
+    offset=0,
+)
+
+
+class TestClampAnalysisPeriod:
+    def test_valid_period_lowercased_unchanged(self) -> None:
+        assert _clamp_analysis_period("3Y") == "3y"
+
+    def test_none_falls_back_to_default(self) -> None:
+        assert _clamp_analysis_period(None) == "1y"
+
+    def test_empty_string_falls_back_to_default(self) -> None:
+        assert _clamp_analysis_period("") == "1y"
+
+    def test_unrecognised_value_falls_back_to_default(self) -> None:
+        assert _clamp_analysis_period("nonsense") == "1y"
+
+
+class TestRequestNewAnalysisCore:
+    @pytest.mark.asyncio
+    async def test_empty_company_name_returns_error(self) -> None:
+        session = _make_session_returning_rows([])
+        result = await _request_new_analysis_core(
+            session, uuid.uuid4(), company_name="   "
+        )
+        assert result["error"] == "invalid_company_name"
+
+    @pytest.mark.asyncio
+    async def test_no_match_returns_not_found(self) -> None:
+        session = _make_session_returning_rows([])
+        empty_page = CompanySearchPage(items=[], total_count=0, limit=5, offset=0)
+        with patch(
+            "backend.tools.portfolio_tools.search_companies", return_value=empty_page
+        ):
+            result = await _request_new_analysis_core(
+                session, uuid.uuid4(), company_name="Nonexistent Corp"
+            )
+        assert result["error"] == "not_found"
+        assert result["query"] == "Nonexistent Corp"
+
+    @pytest.mark.asyncio
+    async def test_ambiguous_match_returns_needs_clarification_with_candidates(
+        self,
+    ) -> None:
+        """
+        The 'user never gives a confident company name' path: an
+        ambiguous name (e.g. "HDFC", matching several HDFC-branded
+        companies) must never guess -- it returns candidates for the
+        assistant to read back and ask the user to pick from.
+        """
+        session = _make_session_returning_rows([])
+        candidates = [
+            CompanySearchResult(name="HDFC Bank", ticker="HDFCBANK.NS", exchange="NSE"),
+            CompanySearchResult(
+                name="HDFC Life Insurance", ticker="HDFCLIFE.NS", exchange="NSE"
+            ),
+        ]
+        ambiguous_page = CompanySearchPage(
+            items=candidates, total_count=2, limit=5, offset=0
+        )
+        with patch(
+            "backend.tools.portfolio_tools.search_companies",
+            return_value=ambiguous_page,
+        ):
+            result = await _request_new_analysis_core(
+                session, uuid.uuid4(), company_name="HDFC"
+            )
+        assert result["status"] == "needs_clarification"
+        assert result["query"] == "HDFC"
+        assert result["candidates"] == [
+            {"name": "HDFC Bank", "ticker": "HDFCBANK.NS", "exchange": "NSE"},
+            {"name": "HDFC Life Insurance", "ticker": "HDFCLIFE.NS", "exchange": "NSE"},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_search_limited_to_max_clarification_candidates(self) -> None:
+        session = _make_session_returning_rows([])
+        empty_page = CompanySearchPage(items=[], total_count=0, limit=5, offset=0)
+        with patch(
+            "backend.tools.portfolio_tools.search_companies", return_value=empty_page
+        ) as mock_search:
+            await _request_new_analysis_core(session, uuid.uuid4(), company_name="x")
+        _, kwargs = mock_search.call_args
+        assert kwargs["limit"] == MAX_CLARIFICATION_CANDIDATES
+
+    @pytest.mark.asyncio
+    async def test_capacity_reached_returns_capacity_error_without_creating_job(
+        self,
+    ) -> None:
+        session = _make_session_returning_rows([])
+        with (
+            patch(
+                "backend.tools.portfolio_tools.search_companies",
+                return_value=_SINGLE_MUTHOOT_MATCH,
+            ),
+            patch(
+                "backend.tools.portfolio_tools.reserve_analysis_slot",
+                new=AsyncMock(return_value=False),
+            ),
+            patch(
+                "backend.tools.portfolio_tools.create_analysis_job", new=AsyncMock()
+            ) as mock_create_job,
+        ):
+            result = await _request_new_analysis_core(
+                session, uuid.uuid4(), company_name="Muthoot Finance"
+            )
+        assert result["error"] == "capacity"
+        mock_create_job.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_successful_single_match_starts_analysis_and_returns_job_id(
+        self,
+    ) -> None:
+        session = _make_session_returning_rows([])
+        user_id = uuid.uuid4()
+        job_id = uuid.uuid4()
+
+        fake_company = MagicMock()
+        fake_analysis = MagicMock()
+        fake_analysis.id = job_id
+        fake_analysis.status = "pending"
+
+        fake_resolution = TickerResolution(
+            company_name="Muthoot Finance", ticker="MUTHOOTFIN.NS", exchange="NSE"
+        )
+
+        with (
+            patch(
+                "backend.tools.portfolio_tools.search_companies",
+                return_value=_SINGLE_MUTHOOT_MATCH,
+            ),
+            patch(
+                "backend.tools.portfolio_tools.reserve_analysis_slot",
+                new=AsyncMock(return_value=True),
+            ),
+            patch(
+                "backend.tools.portfolio_tools.resolve_company",
+                return_value=fake_resolution,
+            ),
+            patch(
+                "backend.tools.portfolio_tools.get_or_create_company",
+                new=AsyncMock(return_value=fake_company),
+            ),
+            patch(
+                "backend.tools.portfolio_tools.create_analysis_job",
+                new=AsyncMock(return_value=fake_analysis),
+            ),
+            patch(
+                "backend.tools.portfolio_tools.run_analysis_pipeline",
+                new=AsyncMock(return_value=None),
+            ) as mock_pipeline,
+        ):
+            result = await _request_new_analysis_core(
+                session, user_id, company_name="Muthoot Finance", period="3y"
+            )
+            # Let the fire-and-forget asyncio.create_task actually run
+            # before asserting on it -- see _background_analysis_tasks'
+            # own docstring for why the task reference is held at all.
+            await asyncio.sleep(0)
+
+        assert result["status"] == "started"
+        assert result["job_id"] == str(job_id)
+        assert result["company_name"] == "Muthoot Finance"
+        assert result["ticker"] == "MUTHOOTFIN.NS"
+        assert result["exchange"] == "NSE"
+        assert result["period"] == "3y"
+        mock_pipeline.assert_awaited_once()
+        _, kwargs = mock_pipeline.call_args
+        assert kwargs["job_id"] == job_id
+        assert kwargs["ticker"] == "MUTHOOTFIN.NS"
+        assert kwargs["requested_by"] == str(user_id)
+        assert kwargs["period"] == "3y"
+
+    @pytest.mark.asyncio
+    async def test_job_creation_failure_releases_slot_and_returns_error(self) -> None:
+        session = _make_session_returning_rows([])
+        with (
+            patch(
+                "backend.tools.portfolio_tools.search_companies",
+                return_value=_SINGLE_MUTHOOT_MATCH,
+            ),
+            patch(
+                "backend.tools.portfolio_tools.reserve_analysis_slot",
+                new=AsyncMock(return_value=True),
+            ),
+            patch(
+                "backend.tools.portfolio_tools.resolve_company",
+                side_effect=RuntimeError("db unavailable"),
+            ),
+            patch(
+                "backend.tools.portfolio_tools.release_analysis_slot", new=AsyncMock()
+            ) as mock_release,
+        ):
+            result = await _request_new_analysis_core(
+                session, uuid.uuid4(), company_name="Muthoot Finance"
+            )
+        assert result["error"] == "failed_to_start"
+        mock_release.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
 # build_portfolio_tools -- factory wiring
 # ---------------------------------------------------------------------------
 
 
 class TestBuildPortfolioTools:
-    def test_returns_three_tools(self) -> None:
+    def test_returns_four_tools(self) -> None:
         session = _make_session_returning_rows([])
         tools = build_portfolio_tools(session, uuid.uuid4())
 
-        assert len(tools) == 3
+        assert len(tools) == 4
 
     def test_every_tool_is_a_base_tool_instance(self) -> None:
         session = _make_session_returning_rows([])
@@ -461,6 +679,7 @@ class TestBuildPortfolioTools:
             "get_user_analyses",
             "get_memo_by_ticker",
             "search_uploaded_documents",
+            "request_new_analysis",
         }
 
     @pytest.mark.asyncio

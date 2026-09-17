@@ -55,6 +55,7 @@ import pytest  # noqa: E402
 from backend.services.chat_llm import (  # noqa: E402
     DEFAULT_RESPONSE_STYLE,
     LIVE_DATA_TOOL_INSTRUCTION,
+    NEW_ANALYSIS_TOOL_INSTRUCTION,
     RESPONSE_STYLE_INSTRUCTIONS,
     SYSTEM_PROMPT,
     ChatLLMError,
@@ -666,6 +667,54 @@ class TestToolsAvailableInstruction:
     def test_build_chat_messages_omits_by_default(self) -> None:
         messages = build_chat_messages([], "hi")
         assert LIVE_DATA_TOOL_INSTRUCTION not in messages[0].content
+
+
+# ---------------------------------------------------------------------------
+# 6b. can_request_analysis (FEATURE 1) -- NEW_ANALYSIS_TOOL_INSTRUCTION
+# only when true, and only ever alongside portfolio-wide sessions
+# ---------------------------------------------------------------------------
+
+
+class TestNewAnalysisToolInstruction:
+    def test_omitted_by_default(self) -> None:
+        prompt = build_system_prompt()
+        assert NEW_ANALYSIS_TOOL_INSTRUCTION not in prompt
+
+    def test_included_when_can_request_analysis_true(self) -> None:
+        prompt = build_system_prompt(can_request_analysis=True)
+        assert NEW_ANALYSIS_TOOL_INSTRUCTION in prompt
+
+    def test_confirm_before_calling_rule_present(self) -> None:
+        """Feature 1 acceptance: the assistant must confirm the company
+        name and time horizon before calling the tool if either was
+        ambiguous -- not guess."""
+        prompt = build_system_prompt(can_request_analysis=True)
+        assert "CONFIRM BEFORE CALLING" in prompt
+        assert "ASK them to confirm or clarify first" in prompt
+
+    def test_never_fabricate_result_while_running_rule_present(self) -> None:
+        """Feature 1 acceptance: once the tool returns a job_id, the
+        assistant must say the analysis started and never fabricate a
+        verdict while it is running."""
+        prompt = build_system_prompt(can_request_analysis=True)
+        assert "NEVER FABRICATE A RESULT WHILE THE JOB IS RUNNING" in prompt
+        assert "live progress view" in prompt
+
+    def test_build_chat_messages_forwards_can_request_analysis(self) -> None:
+        messages = build_chat_messages([], "hi", can_request_analysis=True)
+        assert NEW_ANALYSIS_TOOL_INSTRUCTION in messages[0].content
+
+    def test_build_chat_messages_omits_by_default(self) -> None:
+        messages = build_chat_messages([], "hi")
+        assert NEW_ANALYSIS_TOOL_INSTRUCTION not in messages[0].content
+
+    def test_can_coexist_with_live_data_tool_instruction(self) -> None:
+        """A portfolio-wide session has BOTH the live-market-data tools
+        and request_new_analysis bound -- both instruction blocks must
+        appear together."""
+        prompt = build_system_prompt(tools_available=True, can_request_analysis=True)
+        assert LIVE_DATA_TOOL_INSTRUCTION in prompt
+        assert NEW_ANALYSIS_TOOL_INSTRUCTION in prompt
 
 
 # ---------------------------------------------------------------------------

@@ -29,6 +29,7 @@
 // useEffect keyed on `messages`, not a library.
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useNavigate } from "react-router-dom";
 
 import { ChatMessageBubble } from "@/components/chat/ChatMessageBubble";
 import { TypingIndicator } from "@/components/progress/TypingIndicator";
@@ -132,6 +133,7 @@ export interface ChatWidgetProps {
 
 export function ChatWidget({ enabled = true }: ChatWidgetProps): JSX.Element | null {
   const widget = useChatWidget();
+  const navigate = useNavigate();
   const [draft, setDraft] = useState("");
   const transcriptRef = useRef<HTMLDivElement>(null);
 
@@ -141,6 +143,25 @@ export function ChatWidget({ enabled = true }: ChatWidgetProps): JSX.Element | n
       node.scrollTop = node.scrollHeight;
     }
   }, [widget.messages]);
+
+  // (FEATURE 1) The assistant just started a new analysis (via the
+  // request_new_analysis tool) -- navigate to the existing live-progress
+  // route for it (AnalysisResultPage, /analysis/:jobId/result) rather
+  // than building a second progress UI inside the chat panel. Clears
+  // pendingAnalysisJobId immediately so this effect does not re-fire
+  // on a later render (e.g. after navigation unmounts/remounts this
+  // component on some route transitions). Destructured to plain local
+  // consts (rather than reading widget.* inline) so the effect's
+  // dependency array only ever needs to name these two values, not the
+  // whole widget result object.
+  const { pendingAnalysisJobId, clearPendingAnalysisJobId } = widget;
+  useEffect(() => {
+    if (pendingAnalysisJobId === null) {
+      return;
+    }
+    clearPendingAnalysisJobId();
+    navigate(`/analysis/${pendingAnalysisJobId}/result`);
+  }, [pendingAnalysisJobId, clearPendingAnalysisJobId, navigate]);
 
   if (!enabled) {
     return null;

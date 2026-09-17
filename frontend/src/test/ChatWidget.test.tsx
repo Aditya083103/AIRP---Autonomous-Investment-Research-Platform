@@ -9,7 +9,7 @@
 
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ChatWidget } from "@/components/chat/ChatWidget";
@@ -87,6 +87,25 @@ function renderWidget(initialPath = "/dashboard"): void {
     <AuthContext.Provider value={AUTHENTICATED}>
       <MemoryRouter initialEntries={[initialPath]}>
         <ChatWidget />
+      </MemoryRouter>
+    </AuthContext.Provider>,
+  );
+}
+
+/** (FEATURE 1) Renders the current route's pathname into the DOM so a
+ * test can assert on client-side navigation without a full route
+ * table -- ChatWidget.tsx calls useNavigate() directly. */
+function LocationProbe(): JSX.Element {
+  const location = useLocation();
+  return <div data-testid="location-probe">{location.pathname}</div>;
+}
+
+function renderWidgetWithLocationProbe(initialPath = "/dashboard"): void {
+  render(
+    <AuthContext.Provider value={AUTHENTICATED}>
+      <MemoryRouter initialEntries={[initialPath]}>
+        <ChatWidget />
+        <LocationProbe />
       </MemoryRouter>
     </AuthContext.Provider>,
   );
@@ -228,6 +247,87 @@ describe("ChatWidget conversation", () => {
     });
 
     await waitFor(() => expect(screen.getByText("Conviction is 8/10.")).toBeInTheDocument());
+  });
+
+  it("navigates to the analysis progress route when the assistant starts a new analysis (FEATURE 1)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(201, sessionResponse()));
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+
+    const user = userEvent.setup();
+    renderWidgetWithLocationProbe();
+
+    await user.click(screen.getByRole("button", { name: "Open AIRP Assistant chat" }));
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+
+    const socket = lastSocket();
+    act(() => {
+      socket.emitOpen();
+    });
+
+    const composer = screen.getByLabelText("Message the AIRP Assistant");
+    await user.type(composer, "Can you analyse Muthoot Finance?");
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+
+    act(() => {
+      socket.emitMessage({
+        session_id: "session-1",
+        event_type: "start",
+        token: "",
+        message_id: null,
+        is_final: false,
+        error: null,
+        analysis_job_id: "job-123",
+      });
+    });
+
+    await waitFor(() =>
+      expect(screen.getByTestId("location-probe")).toHaveTextContent("/analysis/job-123/result"),
+    );
+  });
+
+  it("does not navigate when a normal turn carries no analysis_job_id (FEATURE 1)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(201, sessionResponse()));
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+
+    const user = userEvent.setup();
+    renderWidgetWithLocationProbe();
+
+    await user.click(screen.getByRole("button", { name: "Open AIRP Assistant chat" }));
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+
+    const socket = lastSocket();
+    act(() => {
+      socket.emitOpen();
+    });
+
+    const composer = screen.getByLabelText("Message the AIRP Assistant");
+    await user.type(composer, "What's TCS's P/E?");
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+
+    act(() => {
+      socket.emitMessage({
+        session_id: "session-1",
+        event_type: "start",
+        token: "",
+        message_id: null,
+        is_final: false,
+        error: null,
+        analysis_job_id: null,
+      });
+      socket.emitMessage({
+        session_id: "session-1",
+        event_type: "token",
+        token: "A P/E ratio of...",
+        message_id: null,
+        is_final: false,
+        error: null,
+      });
+    });
+
+    await waitFor(() => expect(screen.getByText("A P/E ratio of...")).toBeInTheDocument());
+    expect(screen.getByTestId("location-probe")).toHaveTextContent("/dashboard");
   });
 
   it("disables the composer while the session is being created, then enables it", async () => {

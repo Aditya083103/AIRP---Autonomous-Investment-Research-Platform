@@ -274,7 +274,7 @@ from typing import Any, AsyncIterator, Optional, TypedDict
 import uuid
 
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import BaseMessage, ToolMessage
 from langchain_core.tools import BaseTool
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -384,6 +384,16 @@ class ChatStreamEvent(TypedDict):
       'error'     -- the turn failed (bad client input, or the LLM
                       call itself failed). The connection stays open;
                       the client may send another message.
+
+    ``analysis_job_id`` (FEATURE 1): set ONLY on the 'start' event of a
+    turn whose tool-calling round successfully called
+    ``backend.tools.portfolio_tools``'s ``request_new_analysis`` (see
+    ``_extract_started_analysis_job_id`` below) -- every other event,
+    and every turn that did not start a new analysis, carries ``None``.
+    The frontend (``useChatStream``/``ChatWidget``) uses this to
+    navigate to the existing live-progress route for that job_id --
+    reusing ``AnalysisResultPage`` (``/analysis/:jobId/result``), never
+    building a second progress UI inside the chat panel.
     """
 
     session_id: str
@@ -392,6 +402,7 @@ class ChatStreamEvent(TypedDict):
     message_id: Optional[str]
     is_final: bool
     error: Optional[str]
+    analysis_job_id: Optional[str]
 
 
 def _cast_stream_event(  # nosec B107 -- "token" is a stream chunk, not a password
@@ -401,6 +412,7 @@ def _cast_stream_event(  # nosec B107 -- "token" is a stream chunk, not a passwo
     message_id: Optional[uuid.UUID] = None,
     is_final: bool = False,
     error: Optional[str] = None,
+    analysis_job_id: Optional[str] = None,
 ) -> ChatStreamEvent:
     return ChatStreamEvent(
         session_id=str(session_id),
@@ -409,6 +421,7 @@ def _cast_stream_event(  # nosec B107 -- "token" is a stream chunk, not a passwo
         message_id=str(message_id) if message_id is not None else None,
         is_final=is_final,
         error=error,
+        analysis_job_id=analysis_job_id,
     )
 
 
@@ -769,6 +782,50 @@ async def _reply_token_source(
         yield token
 
 
+def _extract_started_analysis_job_id(messages: list[BaseMessage]) -> Optional[str]:
+    """
+    Scan a tool-calling round's updated message list for a successful
+    ``request_new_analysis`` result (FEATURE 1).
+
+    ``backend.tools.portfolio_tools.request_new_analysis`` returns
+    ``{"status": "started", "job_id": ..., ...}`` as a JSON-encoded
+    ``ToolMessage`` (see ``run_tool_calling_round``'s own docstring --
+    every tool result, success or error, becomes one ``ToolMessage``
+    appended to the message list). This is a generic scan over
+    ``ToolMessage`` content shape rather than one keyed to a specific
+    tool_call_id/name, since that shape (``status`` + ``job_id``
+    together) is unique to this one tool's success response -- no other
+    tool in this codebase returns both keys.
+
+    Args:
+        messages: The message list AFTER ``run_tool_calling_round`` --
+            unchanged (== the original list, no ``ToolMessage`` added)
+            when no tool was called, in which case this returns None.
+
+    Returns:
+        The job_id string, or None if no successful
+        request_new_analysis call is present. Never raises -- a
+        malformed/non-JSON ToolMessage content is simply skipped.
+    """
+    for message in messages:
+        if not isinstance(message, ToolMessage):
+            continue
+        content = message.content
+        if not isinstance(content, str):
+            continue
+        try:
+            parsed: Any = json.loads(content)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if (
+            isinstance(parsed, dict)
+            and parsed.get("status") == "started"
+            and isinstance(parsed.get("job_id"), str)
+        ):
+            return str(parsed["job_id"])
+    return None
+
+
 async def _run_one_turn(
     websocket: WebSocket,
     session_id: uuid.UUID,
@@ -815,6 +872,7 @@ async def _run_one_turn(
     messages: list[BaseMessage] = []
     immediate_text: Optional[str] = None
     tool_round_error: Optional[ChatLLMError] = None
+    analysis_job_id: Optional[str] = None
 
     async with AsyncSessionLocal() as db_session:
         history_page = await get_chat_session_messages(
@@ -879,12 +937,19 @@ async def _run_one_turn(
                 risk_appetite=preferences.risk_appetite,
                 preferred_sectors=preferences.preferred_sectors,
                 tools_available=bool(tools),
+                # FEATURE 1: request_new_analysis is bound only for
+                # portfolio-wide sessions (see _build_chat_tools) -- this
+                # tells the model it can start a new analysis without a
+                # separate signal, since session_type itself already
+                # determines whether that tool is among `tools`.
+                can_request_analysis=info.session_type == "portfolio_wide",
             )
             if tools:
                 try:
                     messages, immediate_text = await run_tool_calling_round(
                         get_chat_llm(), tools, messages
                     )
+                    analysis_job_id = _extract_started_analysis_job_id(messages)
                 except Exception as exc:
                     logger.exception(
                         "chat_stream: tool-calling round failed for session_id=%s",
@@ -911,7 +976,10 @@ async def _run_one_turn(
     try:
         await websocket.send_json(
             _cast_stream_event(
-                session_id, event_type="start", message_id=saved_user_message.id
+                session_id,
+                event_type="start",
+                message_id=saved_user_message.id,
+                analysis_job_id=analysis_job_id,
             )
         )
     except Exception:
