@@ -2,7 +2,7 @@
 """
 Unit tests for B6: backend/services/email_service.py
 
-backend.services.email_service.httpx.AsyncClient (the actual Resend API
+backend.services.email_service.httpx.AsyncClient (the actual Brevo API
 call) is patched at module scope via unittest.mock.patch -- there is no
 real network access in this test environment.
 
@@ -10,10 +10,10 @@ Test strategy
 -------------
 send_password_reset_email
     success -- returns True, posts the correct payload/auth header
-    Resend rejects the request (4xx/5xx) -- returns False, never raises
+    Brevo rejects the request (4xx/5xx) -- returns False, never raises
     network error (httpx raises) -- returns False, never raises
 _build_email_payload
-    correct to/from/subject, reset URL present in the text body
+    correct sender/to/subject, reset URL present in the text body
 
 ENVIRONMENT must be set to 'test' before any backend import.
 """
@@ -33,12 +33,12 @@ from backend.config import Settings  # noqa: E402
 from backend.services.email_service import send_password_reset_email  # noqa: E402
 
 
-def _make_settings(resend_api_key: str = "re_test_key") -> Settings:
+def _make_settings(brevo_api_key: str = "test-brevo-key") -> Settings:
     return Settings.model_construct(
         environment="test",
         database_url="x",
         secret_key="a" * 32,
-        resend_api_key=resend_api_key,
+        brevo_api_key=brevo_api_key,
         smtp_from_email="noreply@airp.example.com",
     )
 
@@ -58,7 +58,7 @@ def _make_fake_client(response: MagicMock) -> AsyncMock:
 class TestSendPasswordResetEmailSuccess:
     @pytest.mark.asyncio
     async def test_returns_true_on_success(self) -> None:
-        response = MagicMock(status_code=200)
+        response = MagicMock(status_code=201)
         fake_client = _make_fake_client(response)
 
         with patch(
@@ -75,8 +75,8 @@ class TestSendPasswordResetEmailSuccess:
 
     @pytest.mark.asyncio
     async def test_sends_the_correct_payload_and_auth_header(self) -> None:
-        settings = _make_settings(resend_api_key="re_abc123")
-        response = MagicMock(status_code=200)
+        settings = _make_settings(brevo_api_key="xkeysib-abc123")
+        response = MagicMock(status_code=201)
         fake_client = _make_fake_client(response)
 
         with patch(
@@ -90,11 +90,13 @@ class TestSendPasswordResetEmailSuccess:
             )
 
         call_kwargs = fake_client.post.call_args.kwargs
-        assert call_kwargs["headers"]["Authorization"] == "Bearer re_abc123"
+        assert call_kwargs["headers"]["api-key"] == "xkeysib-abc123"
         body = call_kwargs["json"]
-        assert body["to"] == ["user@example.com"]
-        assert body["from"] == "noreply@airp.example.com"
-        assert "https://airp.example.com/reset-password?token=abc" in body["text"]
+        assert body["to"] == [{"email": "user@example.com"}]
+        assert body["sender"]["email"] == "noreply@airp.example.com"
+        assert (
+            "https://airp.example.com/reset-password?token=abc" in body["textContent"]
+        )
 
 
 class TestSendPasswordResetEmailFailure:
@@ -118,13 +120,13 @@ class TestSendPasswordResetEmailFailure:
         assert result is False
 
     @pytest.mark.asyncio
-    async def test_returns_false_when_resend_rejects_the_request(self) -> None:
-        """E.g. an invalid/revoked API key, or an unverified sending
-        domain -- Resend reports these as a 4xx with a JSON error body,
-        not a network-level failure."""
+    async def test_returns_false_when_brevo_rejects_the_request(self) -> None:
+        """E.g. an invalid/revoked API key, or an unverified sender --
+        Brevo reports these as a 4xx with a JSON error body, not a
+        network-level failure."""
         response = MagicMock(
-            status_code=403,
-            text='{"message": "The gmail.com domain is not verified"}',
+            status_code=400,
+            text='{"code": "invalid_parameter", "message": "Sender not verified"}',
         )
         fake_client = _make_fake_client(response)
 
@@ -150,7 +152,10 @@ class TestBuildEmailPayload:
             from_email="noreply@airp.example.com",
             reset_url="https://airp.example.com/reset-password?token=abc123",
         )
-        assert payload["to"] == ["user@example.com"]
-        assert payload["from"] == "noreply@airp.example.com"
+        assert payload["to"] == [{"email": "user@example.com"}]
+        assert payload["sender"]["email"] == "noreply@airp.example.com"
         assert payload["subject"]
-        assert "https://airp.example.com/reset-password?token=abc123" in payload["text"]
+        assert (
+            "https://airp.example.com/reset-password?token=abc123"
+            in payload["textContent"]
+        )

@@ -168,11 +168,11 @@ class Settings(BaseSettings):
             "an intercepted reset email stays dangerous."
         ),
     )
-    resend_api_key: str = Field(
+    brevo_api_key: str = Field(
         default="",
         description=(
-            "API key for the Resend transactional email API "
-            "(https://resend.com), used to send password-reset emails. "
+            "API key for the Brevo transactional email API "
+            "(https://brevo.com), used to send password-reset emails. "
             "Empty means no email service is configured -- "
             "Settings.email_service_configured is then False, and "
             "POST /auth/password-reset/request degrades to logging the "
@@ -180,24 +180,32 @@ class Settings(BaseSettings):
             "backend.routers.auth's own docstring) rather than emailing "
             "it. Never logs the raw token in production regardless of "
             "this setting.\n\n"
-            "Replaced raw SMTP (B6's original implementation) after "
+            "Chosen over Resend (this module's previous provider) "
+            "specifically because Brevo supports single-SENDER "
+            "verification (confirm ownership of one plain email address, "
+            "no domain needed) as an alternative to full domain "
+            "verification, and a sender verified that way can send to "
+            "ANY recipient -- Resend's only no-domain option (its shared "
+            "onboarding@resend.dev sandbox address) can only ever "
+            "deliver to the Resend account's own email, which is useless "
+            "for a real password-reset feature. Raw SMTP (the original "
+            "implementation before either HTTP API) was replaced after "
             "Render's free web services started blocking all outbound "
-            "traffic to SMTP "
-            "ports 25/465/587 (https://render.com/changelog/free-web-"
-            "services-will-no-longer-allow-outbound-traffic-to-smtp-"
-            "ports) -- an HTTP API call on port 443 is not affected by "
-            "that restriction."
+            "traffic to SMTP ports 25/465/587 (https://render.com/"
+            "changelog/free-web-services-will-no-longer-allow-outbound-"
+            "traffic-to-smtp-ports)."
         ),
     )
     smtp_from_email: str = Field(
         default="",
         description=(
-            "'From' address for password-reset emails, passed to Resend "
-            "as the `from` field. Required (along with RESEND_API_KEY) "
+            "'From' address for password-reset emails, passed to Brevo "
+            "as the sender email. Required (along with BREVO_API_KEY) "
             "for Settings.email_service_configured to be True. Must be "
-            "an address at a domain verified with Resend (or Resend's "
-            "own onboarding@resend.dev sandbox address, which only "
-            "delivers to the Resend account's own verified email)."
+            "verified with Brevo -- either as a single sender (Brevo "
+            "emails a confirmation link to this address; no domain "
+            "needed, and a sender verified this way can send to any "
+            "recipient) or via a verified domain."
         ),
     )
 
@@ -366,10 +374,10 @@ class Settings(BaseSettings):
     def email_service_configured(self) -> bool:
         """
         True when there is enough configuration to actually attempt
-        sending an email via the Resend API (B6). Both an API key and a
+        sending an email via the Brevo API (B6). Both an API key and a
         'From' address are required.
         """
-        return bool(self.resend_api_key and self.smtp_from_email)
+        return bool(self.brevo_api_key and self.smtp_from_email)
 
     @computed_field  # type: ignore[misc]
     @property

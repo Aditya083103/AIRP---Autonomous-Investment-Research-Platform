@@ -479,7 +479,7 @@ class TestPasswordResetRequest:
     ) -> None:
         configured_settings = test_settings.model_copy(
             update={
-                "resend_api_key": "re_test_key",
+                "brevo_api_key": "test-brevo-key",
                 "smtp_from_email": "noreply@airp.example.com",
                 "frontend_base_url": "https://airp.example.com",
             }

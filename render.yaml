@@ -151,24 +151,30 @@ services:
         value: http://localhost:3000
       - key: PASSWORD_RESET_TOKEN_EXPIRE_MINUTES
         value: "30"
-      - key: RESEND_API_KEY
-        # Resend (https://resend.com) transactional email API key.
-        # Empty disables real email sending -- backend/routers/auth.py then
-        # logs the reset link instead, but ONLY outside production (see its
-        # own docstring); in production with this unset, password reset
-        # silently has no way to reach the user at all. Set this (and
-        # SMTP_FROM_EMAIL) for a working password-reset flow.
+      - key: BREVO_API_KEY
+        # Brevo (https://brevo.com) transactional email API key. Empty
+        # disables real email sending -- backend/routers/auth.py then
+        # logs the reset link instead, but ONLY outside production (see
+        # its own docstring); in production with this unset, password
+        # reset silently has no way to reach the user at all. Set this
+        # (and SMTP_FROM_EMAIL) for a working password-reset flow.
         #
-        # Raw SMTP (the original B6 implementation) was replaced with this
-        # HTTP API after Render's free web services started blocking all
-        # outbound traffic to SMTP ports 25/465/587 -- see
+        # Chosen over Resend (a brief prior provider) because Brevo
+        # supports single-SENDER verification (confirm one plain email
+        # address, no domain needed) as an alternative to full domain
+        # verification, and a sender verified that way can send to ANY
+        # recipient -- Resend's only no-domain option can only ever
+        # deliver to its own account's email. Raw SMTP (the original B6
+        # implementation, before either HTTP API) was replaced after
+        # Render's free web services started blocking all outbound
+        # traffic to SMTP ports 25/465/587 -- see
         # https://render.com/changelog/free-web-services-will-no-longer-allow-outbound-traffic-to-smtp-ports
         sync: false
       - key: SMTP_FROM_EMAIL
-        # 'From' address for password-reset emails, passed to Resend as
-        # the `from` field -- must be at a domain verified with Resend
-        # (or Resend's own onboarding@resend.dev sandbox address, which
-        # only delivers to the Resend account's own verified email).
+        # 'From' address for password-reset emails, passed to Brevo as
+        # the sender email -- must be verified with Brevo, either as a
+        # single sender (a confirmation link to this address, no domain
+        # needed) or via a verified domain.
         sync: false
 
       # -- 8. External Data APIs --------------------------------------------
