@@ -41,6 +41,9 @@ import { AccuracyPanel } from "@/components/charts";
 import { AccuracyPanelSkeleton } from "@/components/skeletons";
 import { useAccuracyHistory } from "@/hooks/useAccuracyHistory";
 import { useAccuracySummary } from "@/hooks/useAccuracySummary";
+import { getDisplayErrorMessage } from "@/lib/apiErrorMessage";
+
+const _FALLBACK_ERROR_MESSAGE = "Could not load accuracy data.";
 
 export function AccuracyPage(): JSX.Element {
   const {
@@ -93,7 +96,7 @@ export function AccuracyPage(): JSX.Element {
           <AccuracyPanelSkeleton label="Loading accuracy data…" />
         ) : isError ? (
           <p role="alert" className="py-12 text-sm text-verdict-sell">
-            {error instanceof Error ? error.message : "Could not load accuracy data."}
+            {getDisplayErrorMessage(error, _FALLBACK_ERROR_MESSAGE)}
           </p>
         ) : summary && history ? (
           <AccuracyPanel summary={summary} historyEntries={history.items} />

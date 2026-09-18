@@ -493,6 +493,29 @@ class TestRecordPendingEvaluationsMissingData:
         session.add.assert_not_called()
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "bad_price", [float("nan"), float("inf"), float("-inf"), "nan"]
+    )
+    async def test_non_finite_current_price_returns_none(
+        self, bad_price: object
+    ) -> None:
+        # float() accepts "nan"/"inf" strings and an already-NaN/Infinity
+        # value without raising, unlike the TypeError/ValueError case
+        # test_non_numeric_current_price_returns_none covers above --
+        # this is the accuracy-page "Out of range float values are not
+        # JSON compliant" 500 bug: a non-finite price_at_verdict can
+        # never round-trip through GET /api/v1/accuracy/history's JSON
+        # response (Starlette renders with allow_nan=False), so it must
+        # never be persisted in the first place.
+        session = _make_mock_session()
+        state = _make_completed_state(technical={"current_price": bad_price})
+
+        result = await record_pending_evaluations(session, _JOB_ID, state)
+
+        assert result is None
+        session.add.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_invalid_job_id_returns_none(self) -> None:
         session = _make_mock_session()
         state = _make_completed_state()
@@ -893,6 +916,27 @@ class TestRunDueEvaluationsPriceFetchFailure:
 
         assert result.evaluated_count == 0
         assert result.skipped_count == 1
+
+    @pytest.mark.asyncio
+    async def test_non_finite_current_price_leaves_row_unevaluated(self) -> None:
+        # fetch_stock_price returning a NaN/Infinity current_price must
+        # never be written to price_at_evaluation/price_change_pct --
+        # either one would make this row 500 every future
+        # GET /api/v1/accuracy/history call (Starlette's JSONResponse
+        # renders with allow_nan=False).
+        row = _make_outcome_row(verdict_date=_NOW - timedelta(days=100))
+        session = _make_select_session([row])
+
+        with patch("backend.services.accuracy_tracker.fetch_stock_price") as mock_fetch:
+            mock_fetch.invoke = MagicMock(
+                return_value=_mock_price_success(float("nan"))
+            )
+            result = await run_due_evaluations(session, now=_NOW)
+
+        assert result.evaluated_count == 0
+        assert result.skipped_count == 1
+        assert row.evaluated_at is None
+        session.commit.assert_not_called()
 
 
 class TestRunDueEvaluationsDbErrors:

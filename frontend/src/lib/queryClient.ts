@@ -26,14 +26,33 @@
 
 import { MutationCache, QueryCache, QueryClient } from "@tanstack/react-query";
 
+import { isNetworkError } from "@/lib/apiErrorMessage";
 import { toastApiError } from "@/lib/toast";
+
+// The backend (Render free tier) spins its container down after ~15
+// minutes idle and takes up to ~50s to wake on the next request; until it
+// does, fetch() itself rejects with a raw network error rather than
+// returning a slow response (see apiErrorMessage.ts's docstring). A
+// single quick retry (the default below, for ordinary 4xx/5xx failures)
+// gives up long before the backend finishes waking, so a network-error
+// failure gets its own much longer, fixed-interval retry budget instead --
+// long enough to typically ride out a cold start transparently, so most
+// users never see an error at all.
+const _NETWORK_ERROR_MAX_RETRIES = 8;
+const _NETWORK_ERROR_RETRY_DELAY_MS = 5_000;
+const _DEFAULT_MAX_RETRIES = 1;
 
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       staleTime: 30_000,
       gcTime: 5 * 60_000,
-      retry: 1,
+      retry: (failureCount, error) =>
+        failureCount < (isNetworkError(error) ? _NETWORK_ERROR_MAX_RETRIES : _DEFAULT_MAX_RETRIES),
+      retryDelay: (attemptIndex, error) =>
+        isNetworkError(error)
+          ? _NETWORK_ERROR_RETRY_DELAY_MS
+          : Math.min(1000 * 2 ** attemptIndex, 30_000),
       refetchOnWindowFocus: false,
     },
   },

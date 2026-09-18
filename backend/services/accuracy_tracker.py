@@ -136,6 +136,7 @@ import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import logging
+import math
 from typing import Any, Optional
 import uuid
 
@@ -377,6 +378,25 @@ async def record_pending_evaluations(
             "price for job_id=%s: %s -- skipping",
             job_id,
             exc,
+        )
+        return None
+
+    # `float()` happily accepts "nan"/"inf"/"-inf" strings and passes
+    # an already-NaN/Infinity input straight through without raising --
+    # neither is a valid price, and a NaN/Infinity price_at_verdict
+    # cannot round-trip through JSON (Starlette's JSONResponse renders
+    # with allow_nan=False), which would 500 every future read of
+    # GET /api/v1/accuracy/history that includes this row. Reject it
+    # here, at the one place a bad upstream price (e.g. a data gap in
+    # the OHLCV feed the Technical Analyst read current_price from) can
+    # still be caught before it is ever persisted.
+    if not math.isfinite(price_at_verdict):
+        logger.warning(
+            "record_pending_evaluations: non-finite price_at_verdict=%s "
+            "for job_id=%s ticker=%s -- skipping",
+            price_at_verdict,
+            job_id,
+            state.get("ticker"),
         )
         return None
 
@@ -640,6 +660,17 @@ async def run_due_evaluations(
                     row.id,
                     row.ticker,
                     error,
+                )
+                continue
+
+            if not math.isfinite(current_price):
+                logger.warning(
+                    "run_due_evaluations: fetch_stock_price returned a "
+                    "non-finite current_price=%s for verdict_outcomes "
+                    "id=%s ticker=%s -- leaving unevaluated",
+                    current_price,
+                    row.id,
+                    row.ticker,
                 )
                 continue
 
@@ -1043,23 +1074,48 @@ async def get_accuracy_history(
     )
     rows = list(page_result.scalars().all())
 
-    items = [
-        AccuracyHistoryEntry(
-            id=row.id,
-            analysis_id=row.analysis_id,
-            ticker=row.ticker,
-            verdict=row.verdict,
-            conviction_score=row.conviction_score,
-            price_at_verdict=row.price_at_verdict,
-            verdict_date=row.verdict_date,
-            evaluation_horizon_days=row.evaluation_horizon_days,
-            price_at_evaluation=row.price_at_evaluation,
-            price_change_pct=row.price_change_pct,
-            directional_correct=row.directional_correct,
-            evaluated_at=row.evaluated_at,
+    items: list[AccuracyHistoryEntry] = []
+    for row in rows:
+        # A row persisted before the math.isfinite() guard in
+        # record_pending_evaluations existed (or written directly, e.g.
+        # a manual DB fixup) could still carry a NaN/Infinity price
+        # field. Starlette's JSONResponse renders with allow_nan=False,
+        # so passing one through would 500 this entire public,
+        # unauthenticated endpoint for every caller, not just fail to
+        # render one row -- skip and log instead, the same
+        # "one bad row must not take down the whole response" tradeoff
+        # the module's own docstring already applies elsewhere.
+        if not (
+            math.isfinite(row.price_at_verdict)
+            and (
+                row.price_at_evaluation is None
+                or math.isfinite(row.price_at_evaluation)
+            )
+            and (row.price_change_pct is None or math.isfinite(row.price_change_pct))
+        ):
+            logger.warning(
+                "get_accuracy_history: skipping verdict_outcomes row %s "
+                "(ticker=%s) -- non-finite price field",
+                row.id,
+                row.ticker,
+            )
+            continue
+        items.append(
+            AccuracyHistoryEntry(
+                id=row.id,
+                analysis_id=row.analysis_id,
+                ticker=row.ticker,
+                verdict=row.verdict,
+                conviction_score=row.conviction_score,
+                price_at_verdict=row.price_at_verdict,
+                verdict_date=row.verdict_date,
+                evaluation_horizon_days=row.evaluation_horizon_days,
+                price_at_evaluation=row.price_at_evaluation,
+                price_change_pct=row.price_change_pct,
+                directional_correct=row.directional_correct,
+                evaluated_at=row.evaluated_at,
+            )
         )
-        for row in rows
-    ]
 
     return AccuracyHistoryPage(
         items=items, total_count=total_count, limit=limit, offset=offset

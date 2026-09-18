@@ -48,6 +48,9 @@ import { HistoryTableSkeleton } from "@/components/skeletons";
 import { Button, EmptyState, Input } from "@/components/ui";
 import { useAnalysisHistory } from "@/hooks/useAnalysisHistory";
 import { useAuth } from "@/hooks/useAuth";
+import { getDisplayErrorMessage } from "@/lib/apiErrorMessage";
+
+const _FALLBACK_ERROR_MESSAGE = "Could not load your analysis history.";
 
 const PAGE_SIZE = 20;
 
@@ -102,7 +105,7 @@ export function DashboardPage(): JSX.Element {
           <HistoryTableSkeleton label="Loading your analysis history…" />
         ) : isError ? (
           <p role="alert" className="py-12 text-sm text-verdict-sell">
-            {error instanceof Error ? error.message : "Could not load your analysis history."}
+            {getDisplayErrorMessage(error, _FALLBACK_ERROR_MESSAGE)}
           </p>
         ) : data && data.items.length === 0 ? (
           <EmptyState

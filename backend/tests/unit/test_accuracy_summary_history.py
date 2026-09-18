@@ -511,6 +511,54 @@ class TestGetAccuracyHistoryEntryShape:
         assert entry.evaluated_at == evaluated_at
 
 
+class TestGetAccuracyHistorySkipsNonFiniteRows:
+    """
+    A row with a NaN/Infinity price field can only exist if it was
+    persisted before record_pending_evaluations' math.isfinite() guard
+    existed (or written directly) -- but if one is ever read back here
+    unfiltered, Starlette's JSONResponse (allow_nan=False) 500s this
+    entire public, unauthenticated endpoint for every caller, not just
+    that one row. This was a real, reproduced production bug (two
+    verdict_outcomes rows recorded a NaN price_at_verdict before this
+    guard existed), not a hypothetical.
+    """
+
+    @pytest.mark.asyncio
+    async def test_nan_price_at_verdict_is_skipped(self) -> None:
+        good_row = _make_outcome(ticker="TCS.NS")
+        bad_row = _make_outcome(ticker="MPHASIS.NS", price_at_verdict=float("nan"))
+        session = _make_session_for_history(total_count=2, rows=[bad_row, good_row])
+
+        page = await get_accuracy_history(session)
+
+        assert [item.ticker for item in page.items] == ["TCS.NS"]
+
+    @pytest.mark.asyncio
+    async def test_infinite_price_at_evaluation_is_skipped(self) -> None:
+        bad_row = _make_outcome(
+            ticker="ADANIGREEN.NS",
+            price_at_evaluation=float("inf"),
+            price_change_pct=0.0,
+            directional_correct=True,
+            evaluated_at=datetime(2026, 4, 1, tzinfo=timezone.utc),
+        )
+        session = _make_session_for_history(total_count=1, rows=[bad_row])
+
+        page = await get_accuracy_history(session)
+
+        assert page.items == []
+
+    @pytest.mark.asyncio
+    async def test_all_rows_non_finite_returns_empty_items_not_a_crash(self) -> None:
+        rows = [_make_outcome(price_at_verdict=float("nan")) for _ in range(3)]
+        session = _make_session_for_history(total_count=3, rows=rows)
+
+        page = await get_accuracy_history(session)
+
+        assert page.items == []
+        assert page.total_count == 3
+
+
 class TestGetAccuracyHistoryQueryOrder:
     @pytest.mark.asyncio
     async def test_two_queries_executed_in_order(self) -> None:
