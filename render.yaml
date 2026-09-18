@@ -144,11 +144,13 @@ services:
 
       # -- 7b. Password reset (B6) ------------------------------------------
       - key: FRONTEND_BASE_URL
-        # Real deployed Vercel origin (T-075) -- used to build the link in
-        # a password-reset email. Left as the dev default here on purpose;
-        # MUST be overridden once the Vercel URL is known, the same way
-        # CORS_ORIGINS above is.
-        value: http://localhost:3000
+        # Real deployed Vercel origin -- used to build the link in a
+        # password-reset email. Was left at the localhost dev default
+        # here for a while after this project's first real deploy,
+        # which meant every password-reset email pointed the user at
+        # their own machine's localhost:3000 instead of the actual site
+        # -- fixed once the real Vercel URL was known.
+        value: https://airp-autonomous-investment-research.vercel.app
       - key: PASSWORD_RESET_TOKEN_EXPIRE_MINUTES
         value: "30"
       - key: BREVO_API_KEY
