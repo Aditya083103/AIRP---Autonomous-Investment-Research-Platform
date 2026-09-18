@@ -168,44 +168,36 @@ class Settings(BaseSettings):
             "an intercepted reset email stays dangerous."
         ),
     )
-    smtp_host: str = Field(
+    resend_api_key: str = Field(
         default="",
         description=(
-            "SMTP server host for sending password-reset emails. Empty "
-            "means no email service is configured -- "
+            "API key for the Resend transactional email API "
+            "(https://resend.com), used to send password-reset emails. "
+            "Empty means no email service is configured -- "
             "Settings.email_service_configured is then False, and "
             "POST /auth/password-reset/request degrades to logging the "
             "reset link (non-production only; see "
             "backend.routers.auth's own docstring) rather than emailing "
             "it. Never logs the raw token in production regardless of "
-            "this setting."
+            "this setting.\n\n"
+            "Replaced raw SMTP (B6's original implementation) after "
+            "Render's free web services started blocking all outbound "
+            "traffic to SMTP "
+            "ports 25/465/587 (https://render.com/changelog/free-web-"
+            "services-will-no-longer-allow-outbound-traffic-to-smtp-"
+            "ports) -- an HTTP API call on port 443 is not affected by "
+            "that restriction."
         ),
-    )
-    smtp_port: int = Field(
-        default=587,
-        description="SMTP server port (587 = STARTTLS, the common default).",
-    )
-    smtp_username: str = Field(
-        default="",
-        description="SMTP auth username. Empty for a relay that needs no auth.",
-    )
-    smtp_password: str = Field(
-        default="",
-        description="SMTP auth password. Empty for a relay that needs no auth.",
     )
     smtp_from_email: str = Field(
         default="",
         description=(
-            "'From' address for password-reset emails. Required (along "
-            "with SMTP_HOST) for Settings.email_service_configured to "
-            "be True."
-        ),
-    )
-    smtp_use_tls: bool = Field(
-        default=True,
-        description=(
-            "Use STARTTLS when connecting to SMTP_HOST. Leave true "
-            "unless the relay explicitly requires plaintext."
+            "'From' address for password-reset emails, passed to Resend "
+            "as the `from` field. Required (along with RESEND_API_KEY) "
+            "for Settings.email_service_configured to be True. Must be "
+            "an address at a domain verified with Resend (or Resend's "
+            "own onboarding@resend.dev sandbox address, which only "
+            "delivers to the Resend account's own verified email)."
         ),
     )
 
@@ -373,13 +365,11 @@ class Settings(BaseSettings):
     @property
     def email_service_configured(self) -> bool:
         """
-        True when there is enough SMTP configuration to actually attempt
-        sending an email (B6). Both a host to connect to and a 'From'
-        address are required -- SMTP_USERNAME/SMTP_PASSWORD are not, so
-        an unauthenticated local/relay SMTP server (a common local-dev
-        setup, e.g. MailHog/Mailpit) still counts as configured.
+        True when there is enough configuration to actually attempt
+        sending an email via the Resend API (B6). Both an API key and a
+        'From' address are required.
         """
-        return bool(self.smtp_host and self.smtp_from_email)
+        return bool(self.resend_api_key and self.smtp_from_email)
 
     @computed_field  # type: ignore[misc]
     @property

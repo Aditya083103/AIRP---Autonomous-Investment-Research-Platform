@@ -151,23 +151,25 @@ services:
         value: http://localhost:3000
       - key: PASSWORD_RESET_TOKEN_EXPIRE_MINUTES
         value: "30"
-      - key: SMTP_HOST
+      - key: RESEND_API_KEY
+        # Resend (https://resend.com) transactional email API key.
         # Empty disables real email sending -- backend/routers/auth.py then
         # logs the reset link instead, but ONLY outside production (see its
-        # own docstring); in production with SMTP_HOST unset, password
-        # reset silently has no way to reach the user at all. Set this
-        # (and SMTP_FROM_EMAIL) for a working password-reset flow.
-        sync: false
-      - key: SMTP_PORT
-        value: "587"
-      - key: SMTP_USERNAME
-        sync: false
-      - key: SMTP_PASSWORD
+        # own docstring); in production with this unset, password reset
+        # silently has no way to reach the user at all. Set this (and
+        # SMTP_FROM_EMAIL) for a working password-reset flow.
+        #
+        # Raw SMTP (the original B6 implementation) was replaced with this
+        # HTTP API after Render's free web services started blocking all
+        # outbound traffic to SMTP ports 25/465/587 -- see
+        # https://render.com/changelog/free-web-services-will-no-longer-allow-outbound-traffic-to-smtp-ports
         sync: false
       - key: SMTP_FROM_EMAIL
+        # 'From' address for password-reset emails, passed to Resend as
+        # the `from` field -- must be at a domain verified with Resend
+        # (or Resend's own onboarding@resend.dev sandbox address, which
+        # only delivers to the Resend account's own verified email).
         sync: false
-      - key: SMTP_USE_TLS
-        value: "true"
 
       # -- 8. External Data APIs --------------------------------------------
       - key: NEWS_API_KEY

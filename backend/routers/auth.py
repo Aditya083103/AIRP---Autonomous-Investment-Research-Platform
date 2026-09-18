@@ -350,7 +350,7 @@ async def request_password_reset(
             logger.warning(
                 "password_reset: reset requested for %s but no email service "
                 "is configured in production -- the user cannot complete "
-                "this reset. Configure SMTP_HOST/SMTP_FROM_EMAIL.",
+                "this reset. Configure RESEND_API_KEY/SMTP_FROM_EMAIL.",
                 body.email,
             )
 
