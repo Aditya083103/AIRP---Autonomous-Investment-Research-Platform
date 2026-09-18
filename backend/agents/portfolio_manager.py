@@ -11,10 +11,16 @@ Mandate
 -------
 Produce an InvestmentDecision containing:
   * verdict               -- 'BUY' | 'HOLD' | 'SELL'
-  * conviction_score       -- 1-10, must correlate with quality of
-                               analysis (agreement, completeness, debate
-                               length), not with how bullish/bearish the
-                               signals happen to be
+  * conviction_score       -- 1-10. Its dominant term is how decisively
+                               the same weighted tally that produced
+                               ``verdict`` actually supports it (a BUY
+                               that barely cleared the threshold scores
+                               low; a BUY well past it scores high) --
+                               see _signal_strength_conviction_term.
+                               Quality-of-process factors (agreement,
+                               completeness, debate length) are then
+                               layered on top as further erosion, never
+                               as the sole driver.
   * price_target           -- formatted from the Valuation Agent's DCF
   * time_horizon            -- suggested holding period for this verdict
   * bull_case / bear_case / risk_summary / valuation_summary
@@ -44,7 +50,9 @@ Public interface
   run_portfolio_manager_decision(state)  -> dict   LangGraph node
   _run_portfolio_manager_core(...)       -> InvestmentDecision
   _compute_agent_weights(...)            -> dict[str, float]
+  _compute_weighted_score(...)           -> float
   _determine_verdict(...)                -> str
+  _signal_strength_conviction_term(...)  -> float
   _score_conviction(...)                 -> int
   _determine_time_horizon(...)           -> str
   _build_price_target(...)               -> Optional[str]
@@ -60,8 +68,24 @@ Why deterministic Stage 1?  The verdict and conviction score are the most
 consequential outputs in the entire pipeline -- they must be reproducible
 and unit-testable without depending on LLM determinism. See
 docs/week-11/T-041-portfolio-manager.md for the full design rationale,
-including why conviction tracks quality-of-analysis rather than signal
-direction, and why two hard gates exist ahead of the weighted tally.
+including why two hard gates exist ahead of the weighted tally.
+
+Conviction tracks signal strength (revised): conviction used to be scored
+purely from how many signals pointed the same qualitative direction,
+independently of the weighted tally that actually decided the verdict --
+which meant a verdict that only barely cleared the BUY/SELL threshold
+could still be reported with a high conviction score, and vice versa (a
+real production case: PB Fintech scored BUY on a tally of 1.65, just over
+the 1.5 cutoff, alongside a conviction of 3/10 that happened to be low for
+an unrelated reason -- the two numbers were not actually reasoning about
+the same evidence). _score_conviction now starts from
+_signal_strength_conviction_term(_compute_weighted_score(...), verdict) --
+the same tally _determine_verdict buckets into BUY/HOLD/SELL -- so a
+decisive score always yields a higher conviction than a marginal one that
+produced the identical verdict. Quality-of-process penalties (a
+high-conviction Contrarian, missing/errored agent outputs, critical risk
+flags, a second debate round) are layered on top of that, exactly as
+before.
 """
 
 import json
@@ -149,6 +173,24 @@ _HIGH_BEAR_CONVICTION_THRESHOLD = 7
 # committee has at least this many critical risk flags, AND the raw
 # verdict score was only marginally bullish (see _determine_verdict).
 _CRITICAL_FLAGS_DOWNGRADE_THRESHOLD = 2
+
+# The weighted tally's BUY/SELL cutoff -- a |score| below this is HOLD.
+# Shared by _determine_verdict (bucketing) and _score_conviction (the
+# signal-strength term below), so a verdict's own decisiveness and its
+# conviction score are always reasoning about the same number.
+_VERDICT_SCORE_THRESHOLD = 1.5
+
+# How much further past _VERDICT_SCORE_THRESHOLD a BUY/SELL score needs
+# to travel to count as a maximally strong, high-conviction call (a
+# score of 1.5 + 2.5 = 4.0 or beyond). Chosen so a call that JUST
+# clears the threshold (e.g. the reported PB Fintech case: score=1.65)
+# lands near the bottom of the signal-strength conviction range, while
+# a decisively bullish/bearish combination of signals lands near the top.
+_STRONG_SIGNAL_SCORE_SPAN = 2.5
+
+# The signal-strength term's full swing, from a bare-minimum-strength
+# call (-half) to a maximum-strength one (+half): +/-2.0 points.
+_SIGNAL_STRENGTH_CONVICTION_SWING = 4.0
 
 _MAX_KEY_RISKS = 6
 _MAX_KEY_CATALYSTS = 5
@@ -335,7 +377,7 @@ def _data_completeness(
     return usable / _DATA_DEPENDENT_AGENTS_FOR_COMPLETENESS
 
 
-def _determine_verdict(
+def _compute_weighted_score(
     fundamental: dict[str, Any],
     technical: dict[str, Any],
     sentiment: dict[str, Any],
@@ -344,61 +386,24 @@ def _determine_verdict(
     contrarian: dict[str, Any],
     valuation: dict[str, Any],
     critical_flags: list[str],
-) -> str:
+) -> float:
     """
-    Deterministic BUY / HOLD / SELL decision.
-
-    Two hard gates run first -- these mirror how a real investment
-    committee operates: a sufficiently bullish combination of other
-    signals cannot mathematically out-vote a critical risk finding.
-    After the gates, a weighted point tally across the remaining signals
-    decides the verdict, with a soft downgrade rule that prevents a
-    marginal BUY from surviving alongside multiple critical flags.
-
-    T-082: Gate 2 is skipped when the fundamental analyst's
-    ``data_quality`` is ``"insufficient"``. Gate 2 exists to catch a
-    genuinely overvalued, genuinely weak company -- not to punish a
-    company for which fundamentals data happened to be unavailable.
-    ``fund_score`` already falls back to a neutral 5 when the score is
-    ``None``, and 5 < 6 would otherwise fire Gate 2 on every
-    insufficient-data case that is also flagged overvalued, regardless of
-    whether the fundamentals are actually weak.
-
-    Audit finding (Section C, unit 9): ``macro`` previously had a real
-    0.10 base weight in ``_compute_agent_weights`` -- shown to the user
-    on the "How the committee's evidence was weighted" card and in the
-    Investment Memo PDF -- but this function never accepted a ``macro``
-    parameter at all, so a Macro Economist verdict of "unfavourable"
-    contributed nothing here: two companies identical in every other
-    respect but opposite macro environments received the exact same
-    verdict. ``macro_environment`` now contributes ``+-0.75`` (half of
-    ``valuation_verdict``'s ``+-1.5``, matching macro's 0.10 base weight
-    being half of valuation's 0.20), defaulting to 0 for "neutral" or a
-    missing/errored macro output -- the same safe-default pattern
-    ``fund_score``/``tech_signal``/``valuation_verdict`` already use, so
-    a failed Macro Economist run degrades to no influence rather than a
-    crash or a fabricated opinion.
+    The weighted point tally _determine_verdict buckets into BUY/HOLD/SELL,
+    extracted into its own pure function so _score_conviction can also read
+    the raw, continuous number -- not just the three-way bucket -- when
+    scoring how strongly the evidence actually supports the verdict it
+    produced. See _determine_verdict's own docstring for what each term
+    means; this function only computes the number, applying neither the
+    two hard gates (a gate-forced SELL still gets a real score here, for
+    conviction's benefit, even though the tally alone did not decide it)
+    nor the BUY/HOLD/SELL bucketing itself.
     """
     risk_score = int(risk.get("risk_score") or 5)
     valuation_verdict = str(valuation.get("valuation_verdict") or "fairly_valued")
-    fund_data_quality = str(fundamental.get("data_quality") or "sufficient")
     fund_score = int(fundamental.get("score") or 5)
     bear_conviction = int(contrarian.get("bear_conviction") or 1)
     completeness = _data_completeness(fundamental, technical, valuation)
 
-    # -- Hard gate 1: prohibitive risk overrides everything ---------------
-    if risk_score >= _PROHIBITIVE_RISK_SCORE_THRESHOLD:
-        return "SELL"
-
-    # -- Hard gate 2: overvalued + weak fundamentals -----------------------
-    if (
-        fund_data_quality != "insufficient"
-        and valuation_verdict == "overvalued"
-        and fund_score < 6
-    ):
-        return "SELL"
-
-    # -- Weighted point tally -----------------------------------------------
     score = 0.0
     score += (fund_score - 5) * 0.4
 
@@ -457,9 +462,85 @@ def _determine_verdict(
 
     score -= len(critical_flags) * 0.2 * completeness
 
-    if score >= 1.5:
+    return score
+
+
+def _determine_verdict(
+    fundamental: dict[str, Any],
+    technical: dict[str, Any],
+    sentiment: dict[str, Any],
+    macro: dict[str, Any],
+    risk: dict[str, Any],
+    contrarian: dict[str, Any],
+    valuation: dict[str, Any],
+    critical_flags: list[str],
+) -> str:
+    """
+    Deterministic BUY / HOLD / SELL decision.
+
+    Two hard gates run first -- these mirror how a real investment
+    committee operates: a sufficiently bullish combination of other
+    signals cannot mathematically out-vote a critical risk finding.
+    After the gates, a weighted point tally across the remaining signals
+    decides the verdict, with a soft downgrade rule that prevents a
+    marginal BUY from surviving alongside multiple critical flags.
+
+    T-082: Gate 2 is skipped when the fundamental analyst's
+    ``data_quality`` is ``"insufficient"``. Gate 2 exists to catch a
+    genuinely overvalued, genuinely weak company -- not to punish a
+    company for which fundamentals data happened to be unavailable.
+    ``fund_score`` already falls back to a neutral 5 when the score is
+    ``None``, and 5 < 6 would otherwise fire Gate 2 on every
+    insufficient-data case that is also flagged overvalued, regardless of
+    whether the fundamentals are actually weak.
+
+    Audit finding (Section C, unit 9): ``macro`` previously had a real
+    0.10 base weight in ``_compute_agent_weights`` -- shown to the user
+    on the "How the committee's evidence was weighted" card and in the
+    Investment Memo PDF -- but this function never accepted a ``macro``
+    parameter at all, so a Macro Economist verdict of "unfavourable"
+    contributed nothing here: two companies identical in every other
+    respect but opposite macro environments received the exact same
+    verdict. ``macro_environment`` now contributes ``+-0.75`` (half of
+    ``valuation_verdict``'s ``+-1.5``, matching macro's 0.10 base weight
+    being half of valuation's 0.20), defaulting to 0 for "neutral" or a
+    missing/errored macro output -- the same safe-default pattern
+    ``fund_score``/``tech_signal``/``valuation_verdict`` already use, so
+    a failed Macro Economist run degrades to no influence rather than a
+    crash or a fabricated opinion.
+    """
+    risk_score = int(risk.get("risk_score") or 5)
+    valuation_verdict = str(valuation.get("valuation_verdict") or "fairly_valued")
+    fund_data_quality = str(fundamental.get("data_quality") or "sufficient")
+    fund_score = int(fundamental.get("score") or 5)
+
+    # -- Hard gate 1: prohibitive risk overrides everything ---------------
+    if risk_score >= _PROHIBITIVE_RISK_SCORE_THRESHOLD:
+        return "SELL"
+
+    # -- Hard gate 2: overvalued + weak fundamentals -----------------------
+    if (
+        fund_data_quality != "insufficient"
+        and valuation_verdict == "overvalued"
+        and fund_score < 6
+    ):
+        return "SELL"
+
+    # -- Weighted point tally -----------------------------------------------
+    score = _compute_weighted_score(
+        fundamental,
+        technical,
+        sentiment,
+        macro,
+        risk,
+        contrarian,
+        valuation,
+        critical_flags,
+    )
+
+    if score >= _VERDICT_SCORE_THRESHOLD:
         verdict = "BUY"
-    elif score <= -1.5:
+    elif score <= -_VERDICT_SCORE_THRESHOLD:
         verdict = "SELL"
     else:
         verdict = "HOLD"
@@ -480,13 +561,37 @@ def _determine_verdict(
 # ---------------------------------------------------------------------------
 
 
-def _signal_direction(value: float, threshold: float = 0.15) -> int:
-    """Map a continuous value to -1 / 0 / +1 around a dead-zone threshold."""
-    if value > threshold:
-        return 1
-    if value < -threshold:
-        return -1
-    return 0
+def _signal_strength_conviction_term(score: float, verdict: str) -> float:
+    """
+    How much the raw weighted-tally ``score`` (see _compute_weighted_score)
+    should move conviction, scaled to +-half of
+    _SIGNAL_STRENGTH_CONVICTION_SWING: a call that only just cleared the
+    BUY/SELL bar -- or a HOLD that only just avoided tipping into one --
+    is the weakest possible version of its verdict and pulls conviction
+    down; a decisive score pulls conviction up. This is what keeps
+    conviction "in sync" with signal strength: previously conviction was
+    scored purely from how many signals pointed the same qualitative
+    direction, which could -- and did, for a real production case (PB
+    Fintech: BUY on a score of 1.65, barely over the 1.5 cutoff) -- land
+    on a low conviction for the wrong reason, or fail to penalise a
+    genuinely marginal call at all.
+
+    BUY/SELL: strength ramps from 0 (score exactly at the threshold) to
+    1 (score _STRONG_SIGNAL_SCORE_SPAN past it, or further).
+
+    HOLD: strength ramps the other way -- 1 at score == 0 (a clean,
+    confidently neutral read) down to 0 as the score approaches either
+    threshold (a reluctant HOLD that almost became a directional call).
+    """
+    magnitude = abs(score)
+    if verdict == "HOLD":
+        strength = 1.0 - min(1.0, magnitude / _VERDICT_SCORE_THRESHOLD)
+    else:
+        strength = min(
+            1.0,
+            max(0.0, magnitude - _VERDICT_SCORE_THRESHOLD) / _STRONG_SIGNAL_SCORE_SPAN,
+        )
+    return (strength - 0.5) * _SIGNAL_STRENGTH_CONVICTION_SWING
 
 
 def _score_conviction(
@@ -497,53 +602,36 @@ def _score_conviction(
     risk: dict[str, Any],
     contrarian: dict[str, Any],
     valuation: dict[str, Any],
+    critical_flags: list[str],
     verdict: str,
     debate_rounds_used: int,
 ) -> int:
     """
-    Score conviction (1-10) based on the QUALITY of the analysis that
-    produced the verdict, not on how strongly bullish or bearish any
-    individual signal is. A clean, agreeing, low-risk, single-round
-    profile scores higher conviction than a conflicting, high-risk,
-    multi-round profile -- even when both resolve to the same verdict.
+    Score conviction (1-10). The dominant term is how strongly the same
+    weighted tally that produced ``verdict`` actually supports it (see
+    _signal_strength_conviction_term) -- conviction is "in sync" with
+    signal strength by construction, not just correlated with it. The
+    remaining terms are quality-of-process adjustments layered on top:
+    a high-bear-conviction Contrarian pushback, missing/errored agent
+    outputs, critical risk flags, and a second debate round all still
+    erode conviction even when the underlying signal was strong, since
+    each represents a genuine reason to trust the call less.
     """
     conviction = 5.0
 
-    fund_score = int(fundamental.get("score") or 5)
-    tech_signal = str(technical.get("signal") or "HOLD")
-    sent_score = float(sentiment.get("sentiment_score") or 0.0)
-    valuation_verdict = str(valuation.get("valuation_verdict") or "fairly_valued")
-
-    macro_environment = str(macro.get("macro_environment") or "neutral")
-
-    fund_dir = _signal_direction(fund_score - 5)
-    tech_dir = 1 if tech_signal == "BUY" else (-1 if tech_signal == "SELL" else 0)
-    sent_dir = _signal_direction(sent_score)
-    val_dir = (
-        1
-        if valuation_verdict == "undervalued"
-        else (-1 if valuation_verdict == "overvalued" else 0)
+    conviction += _signal_strength_conviction_term(
+        _compute_weighted_score(
+            fundamental,
+            technical,
+            sentiment,
+            macro,
+            risk,
+            contrarian,
+            valuation,
+            critical_flags,
+        ),
+        verdict,
     )
-    macro_dir = (
-        1
-        if macro_environment == "favourable"
-        else (-1 if macro_environment == "unfavourable" else 0)
-    )
-
-    directions = [
-        d for d in (fund_dir, tech_dir, sent_dir, val_dir, macro_dir) if d != 0
-    ]
-    if directions:
-        agreement_ratio = sum(1 for d in directions if d == directions[0]) / len(
-            directions
-        )
-        if agreement_ratio >= 0.75 and len(directions) >= 3:
-            conviction += 2.0
-        elif agreement_ratio <= 0.4:
-            conviction -= 2.0
-
-        if verdict == "HOLD" and len(set(directions)) > 1:
-            conviction = min(conviction, 5.0)
 
     bear_conviction = int(contrarian.get("bear_conviction") or 1)
     if bear_conviction >= _HIGH_BEAR_CONVICTION_THRESHOLD:
@@ -1068,6 +1156,7 @@ def _run_portfolio_manager_core(
         risk,
         contrarian,
         valuation,
+        critical_flags,
         verdict,
         debate_rounds_used,
     )

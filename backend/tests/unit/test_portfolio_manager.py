@@ -56,6 +56,7 @@ from backend.agents.portfolio_manager import (  # noqa: E402
     _build_price_target,
     _build_relative_price_target,
     _compute_agent_weights,
+    _compute_weighted_score,
     _data_completeness,
     _determine_time_horizon,
     _determine_verdict,
@@ -1060,6 +1061,7 @@ class TestScoreConviction:
             _RISK_LOW,
             _CONTRARIAN_MILD,
             _VALUATION_UNDERVALUED,
+            [],
             verdict="BUY",
             debate_rounds_used=1,
         )
@@ -1071,9 +1073,28 @@ class TestScoreConviction:
         analysis.  A clean, agreeing, low-risk, single-round profile must
         score materially higher conviction than a profile built on
         conflicting signals, high risk, and a strong contrarian challenge
-        spanning multiple debate rounds -- even though both are nominally
-        bullish setups on the surface.
+        spanning multiple debate rounds. Since B15 (conviction now tracks
+        the same weighted tally _determine_verdict uses), the "conflicting"
+        profile's tally is actually strongly negative -- it resolves to a
+        confident SELL, not a wishy-washy BUY -- so its LOW conviction here
+        comes entirely from the quality penalties (high bear_conviction,
+        critical flags, 2 debate rounds), exactly like the clean profile's
+        HIGH conviction comes from a strong, unpenalised BUY. Each
+        profile's own verdict is computed for real via _determine_verdict,
+        matching how _score_conviction is actually called in production,
+        rather than an arbitrary verdict label mismatched to the tally.
         """
+        clean_verdict = _determine_verdict(
+            _FUNDAMENTAL_STRONG,
+            _TECHNICAL_BUY_STRONG,
+            _SENTIMENT_POSITIVE,
+            _MACRO_FAVOURABLE,
+            _RISK_LOW,
+            _CONTRARIAN_MILD,
+            _VALUATION_UNDERVALUED,
+            [],
+        )
+        assert clean_verdict == "BUY"
         clean_conviction = _score_conviction(
             _FUNDAMENTAL_STRONG,
             _TECHNICAL_BUY_STRONG,
@@ -1082,10 +1103,12 @@ class TestScoreConviction:
             _RISK_LOW,
             _CONTRARIAN_MILD,
             _VALUATION_UNDERVALUED,
-            verdict="BUY",
+            [],
+            verdict=clean_verdict,
             debate_rounds_used=1,
         )
-        conflicting_conviction = _score_conviction(
+
+        conflicting_verdict = _determine_verdict(
             _FUNDAMENTAL_STRONG,
             _TECHNICAL_SELL_STRONG,  # contradicts fundamentals
             _SENTIMENT_NEGATIVE,  # contradicts fundamentals
@@ -1093,7 +1116,19 @@ class TestScoreConviction:
             _RISK_HIGH,
             _CONTRARIAN_STRONG,
             _VALUATION_OVERVALUED,  # contradicts fundamentals
-            verdict="BUY",
+            _RISK_HIGH["critical_flags"],
+        )
+        assert conflicting_verdict == "SELL"
+        conflicting_conviction = _score_conviction(
+            _FUNDAMENTAL_STRONG,
+            _TECHNICAL_SELL_STRONG,
+            _SENTIMENT_NEGATIVE,
+            _MACRO_UNFAVOURABLE,
+            _RISK_HIGH,
+            _CONTRARIAN_STRONG,
+            _VALUATION_OVERVALUED,
+            _RISK_HIGH["critical_flags"],
+            verdict=conflicting_verdict,
             debate_rounds_used=2,
         )
         assert clean_conviction > conflicting_conviction
@@ -1107,6 +1142,7 @@ class TestScoreConviction:
             _RISK_LOW,
             _CONTRARIAN_MILD,
             _VALUATION_UNDERVALUED,
+            [],
             verdict="BUY",
             debate_rounds_used=1,
         )
@@ -1118,64 +1154,72 @@ class TestScoreConviction:
             _RISK_LOW,
             _CONTRARIAN_MILD,
             _VALUATION_UNDERVALUED,
+            [],
             verdict="BUY",
             debate_rounds_used=1,
         )
         assert degraded_conviction < full_conviction
 
-    def test_macro_direction_now_counts_toward_the_agreement_bonus(self) -> None:
+    def test_macro_strengthens_the_weighted_score_and_therefore_conviction(
+        self,
+    ) -> None:
         """
-        Audit finding (Section C, unit 9): before this fix, ``macro`` was
-        only ever used here to count toward ``error_count`` -- its
-        directional view (favourable/unfavourable) never entered the
-        fund/tech/sentiment/valuation "agreement" calculation that drives
-        the +-2.0 conviction bonus/penalty. This test isolates exactly
-        that: fundamental and technical both point bullish (+1 each) but
-        sentiment and valuation are both neutral (0, excluded from the
-        agreement calculation), so only 2 directions are on the board --
-        one short of the `len(directions) >= 3` bonus threshold. Adding a
-        favourable macro reading is the ONLY thing that supplies the 3rd
-        agreeing direction and unlocks the +2.0 bonus; before this fix,
-        macro could never do that.
+        B15: macro's directional view now reaches conviction the same way
+        every other signal does -- as a real contributor to the weighted
+        tally _compute_weighted_score computes (it already had a real
+        +-0.75 weight in _determine_verdict; see the Section C, unit 9
+        audit finding on that function). A favourable macro reading pushes
+        the tally further past the BUY threshold, which the signal-strength
+        term then rewards with higher conviction -- a more direct
+        relationship than the old "does macro unlock a qualitative
+        agreement bonus" mechanic this test used to check.
         """
-        fundamental_bullish = {"score": 8}  # fund_dir = +1
-        technical_bullish = {"signal": "BUY"}  # tech_dir = +1
-        sentiment_neutral = {"sentiment_score": 0.0}  # sent_dir = 0 (excluded)
-        valuation_neutral = {
-            "valuation_verdict": "fairly_valued"
-        }  # val_dir = 0 (excluded)
-        risk_neutral = {"risk_score": 5}
+        fundamental_bullish = {"score": 8}
+        technical_bullish = {"signal": "BUY"}
+        sentiment_neutral = {"sentiment_score": 0.0}
+        valuation_neutral = {"valuation_verdict": "fairly_valued"}
+        risk_neutral = {"risk_score": 5, "critical_flags": []}
         contrarian_mild = {"bear_conviction": 1}
+        neutral_macro = {"macro_environment": "neutral"}
+
+        verdict = _determine_verdict(
+            fundamental_bullish,
+            technical_bullish,
+            sentiment_neutral,
+            neutral_macro,
+            risk_neutral,
+            contrarian_mild,
+            valuation_neutral,
+            [],
+        )
+        assert verdict == "BUY"
 
         conviction_with_neutral_macro = _score_conviction(
             fundamental_bullish,
             technical_bullish,
             sentiment_neutral,
-            {
-                "macro_environment": "neutral"
-            },  # macro_dir = 0 -- only 2 directions total
+            neutral_macro,
             risk_neutral,
             contrarian_mild,
             valuation_neutral,
-            verdict="BUY",
+            [],
+            verdict=verdict,
             debate_rounds_used=1,
         )
         conviction_with_favourable_macro = _score_conviction(
             fundamental_bullish,
             technical_bullish,
             sentiment_neutral,
-            _MACRO_FAVOURABLE,  # macro_dir = +1 -- the 3rd agreeing direction
+            _MACRO_FAVOURABLE,
             risk_neutral,
             contrarian_mild,
             valuation_neutral,
-            verdict="BUY",
+            [],
+            verdict=verdict,
             debate_rounds_used=1,
         )
 
-        assert conviction_with_neutral_macro == 6  # 5.0 base + 1.0 (bear_conviction<=3)
-        assert (
-            conviction_with_favourable_macro == 8
-        )  # + 2.0 agreement bonus, unlocked by macro
+        assert conviction_with_favourable_macro > conviction_with_neutral_macro
 
     def test_more_debate_rounds_reduces_conviction(self) -> None:
         one_round = _score_conviction(
@@ -1186,6 +1230,7 @@ class TestScoreConviction:
             _RISK_LOW,
             _CONTRARIAN_MILD,
             _VALUATION_UNDERVALUED,
+            [],
             verdict="BUY",
             debate_rounds_used=1,
         )
@@ -1197,6 +1242,7 @@ class TestScoreConviction:
             _RISK_LOW,
             _CONTRARIAN_MILD,
             _VALUATION_UNDERVALUED,
+            [],
             verdict="BUY",
             debate_rounds_used=2,
         )
@@ -1211,6 +1257,7 @@ class TestScoreConviction:
             _RISK_LOW,
             _CONTRARIAN_MILD,
             _VALUATION_UNDERVALUED,
+            [],
             verdict="BUY",
             debate_rounds_used=1,
         )
@@ -1222,6 +1269,7 @@ class TestScoreConviction:
             _RISK_LOW,
             _CONTRARIAN_STRONG,
             _VALUATION_UNDERVALUED,
+            [],
             verdict="BUY",
             debate_rounds_used=1,
         )
@@ -1238,6 +1286,7 @@ class TestScoreConviction:
             no_flags_risk,
             _CONTRARIAN_MILD,
             _VALUATION_UNDERVALUED,
+            [],
             verdict="BUY",
             debate_rounds_used=1,
         )
@@ -1249,10 +1298,91 @@ class TestScoreConviction:
             with_flags_risk,
             _CONTRARIAN_MILD,
             _VALUATION_UNDERVALUED,
+            ["Flag A", "Flag B"],
             verdict="BUY",
             debate_rounds_used=1,
         )
         assert conviction_with_flags < conviction_no_flags
+
+    def test_marginal_buy_scores_low_conviction_even_with_zero_process_penalties(
+        self,
+    ) -> None:
+        """
+        The real production bug this fix targets: PB Fintech
+        (POLICYBZR.NS) resolved to BUY on a weighted tally of 1.65 --
+        just over the 1.5 threshold -- with zero critical flags, a
+        single debate round, and a merely moderate (not high) bear
+        conviction of 4. None of the OLD quality-of-process penalties
+        (error_count, critical_flags_count, debate_rounds, high bear
+        conviction) fire here, so the old formula had nothing to pull
+        conviction down with -- yet a BUY that barely cleared the bar is
+        not a high-confidence call. The signal-strength term is what
+        catches this: a tally this close to the threshold must score low
+        conviction on its own, independent of everything else.
+        """
+        fundamental = {"score": 4}
+        technical = {"signal": "BUY", "signal_strength": 10}
+        sentiment = {"sentiment_score": 0.0}
+        macro = {"macro_environment": "favourable"}
+        risk = {"risk_score": 5, "critical_flags": []}
+        contrarian = {"bear_conviction": 4}
+        valuation = {"valuation_verdict": "fairly_valued"}
+
+        verdict = _determine_verdict(
+            fundamental, technical, sentiment, macro, risk, contrarian, valuation, []
+        )
+        assert verdict == "BUY"
+
+        score = _compute_weighted_score(
+            fundamental, technical, sentiment, macro, risk, contrarian, valuation, []
+        )
+        assert 1.5 <= score < 2.0  # confirms this is genuinely marginal, not a fluke
+
+        conviction = _score_conviction(
+            fundamental,
+            technical,
+            sentiment,
+            macro,
+            risk,
+            contrarian,
+            valuation,
+            [],
+            verdict=verdict,
+            debate_rounds_used=1,
+        )
+        assert conviction <= 3
+
+    def test_decisive_buy_scores_high_conviction(self) -> None:
+        """
+        The flip side of the marginal case above: signals that agree
+        strongly and push the tally well past the BUY threshold must
+        score high conviction, with no process penalties in the way.
+        """
+        verdict = _determine_verdict(
+            _FUNDAMENTAL_STRONG,
+            _TECHNICAL_BUY_STRONG,
+            _SENTIMENT_POSITIVE,
+            _MACRO_FAVOURABLE,
+            _RISK_LOW,
+            _CONTRARIAN_MILD,
+            _VALUATION_UNDERVALUED,
+            [],
+        )
+        assert verdict == "BUY"
+
+        conviction = _score_conviction(
+            _FUNDAMENTAL_STRONG,
+            _TECHNICAL_BUY_STRONG,
+            _SENTIMENT_POSITIVE,
+            _MACRO_FAVOURABLE,
+            _RISK_LOW,
+            _CONTRARIAN_MILD,
+            _VALUATION_UNDERVALUED,
+            [],
+            verdict=verdict,
+            debate_rounds_used=1,
+        )
+        assert conviction >= 8
 
 
 # ---------------------------------------------------------------------------
