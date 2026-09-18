@@ -26,6 +26,7 @@ import { useState } from "react";
 import { TypingIndicator } from "@/components/progress/TypingIndicator";
 import { Button } from "@/components/ui";
 import { type ChatWidgetMessage } from "@/hooks/useChatStream";
+import { renderChatMarkdown } from "@/lib/chat/renderChatMarkdown";
 import { cn } from "@/lib/cn";
 
 function EditIcon(): JSX.Element {
@@ -135,13 +136,17 @@ export function ChatMessageBubble({ message, onEdit }: ChatMessageBubbleProps): 
       ) : null}
       <div
         className={cn(
-          "max-w-[85%] whitespace-pre-line rounded-card px-3 py-2 text-sm leading-relaxed",
-          isUser && "bg-brand-600 text-white",
+          "max-w-[85%] rounded-card px-3 py-2 text-sm leading-relaxed",
+          isUser && "whitespace-pre-line bg-brand-600 text-white",
           !isUser && !message.isError && "border border-line bg-canvas text-ink",
           !isUser && message.isError && "border border-verdict-sell/40 bg-canvas text-verdict-sell",
         )}
       >
-        {message.content.length > 0 ? message.content : null}
+        {message.content.length > 0
+          ? isUser
+            ? message.content
+            : renderChatMarkdown(message.content)
+          : null}
         {message.isStreaming ? (
           <span className={cn(message.content.length > 0 ? "ml-2" : undefined)}>
             <TypingIndicator />

@@ -149,7 +149,12 @@ _MOCK_RATIOS_INFY: dict[str, Any] = {
 }
 
 _MOCK_PRICE_INFY: dict[str, Any] = {
-    "current_price": 1_500.0,
+    # Bug fix regression: fetch_stock_price nests current_price under a
+    # "stats" sub-dict (see its own docstring) -- this fixture used to be
+    # flat, which meant it was silently exercising the SAME wrong
+    # top-level dict.get("current_price") the production code had, never
+    # catching the actual bug.
+    "stats": {"current_price": 1_500.0},
     "ticker": "INFY.NS",
 }
 
@@ -594,15 +599,54 @@ class TestExtractSectorFromPage:
         html = """
         <div class="company-info">
           <h1>Infosys Ltd</h1>
-          <div class="sub">
-            <a href="#">NSE: INFY</a>
-            <a href="#">BSE: 500209</a>
+          <p class="sub">
             <a href="#">IT - Software Products</a>
-          </div>
+            <a href="#">Computers - Software</a>
+          </p>
         </div>
         """
         soup = BeautifulSoup(html, "html.parser")
         assert _extract_sector_from_page(soup) == "IT - Software Products"
+
+    def test_skips_the_first_class_sub_element_when_unrelated(self) -> None:
+        """
+        Regression test for the actual production bug: Screener.in reuses
+        the "sub" class on several unrelated elements before the real
+        sector breadcrumb (a hero-copy <div>, "View Consolidated" toggle
+        <p>s, ...) -- the old soup.find(class_="sub") grabbed whichever
+        of those came first in document order and never found the real
+        breadcrumb. Live pages for INFY/TCS/HDFCBANK/RELIANCE all
+        reproduced this. The fix must search past a leading, unrelated
+        <p class="sub"> with no <a> children to find the real one.
+        """
+        html = """
+        <div class="sub">Run queries on 10 years of financial data</div>
+        <p class="sub"></p>
+        <p class="sub">
+          <a href="#">Financial Services</a>
+          <a href="#">Banks</a>
+          <a href="#">Private Sector Bank</a>
+        </p>
+        """
+        soup = BeautifulSoup(html, "html.parser")
+        assert _extract_sector_from_page(soup) == "Financial Services"
+
+    def test_skips_the_index_membership_breadcrumb(self) -> None:
+        """The real sector breadcrumb (2-4 links) is immediately followed
+        on the page by an unrelated <p class="sub"> listing every index
+        the stock belongs to (dozens of links) -- that one must never be
+        mistaken for the sector breadcrumb just because it also matches
+        "a <p class='sub'> with <a> children"."""
+        index_links = "".join(f'<a href="#">Index {i}</a>' for i in range(40))
+        html = f"""
+        <p class="sub">
+          <a href="#">Energy</a>
+          <a href="#">Oil, Gas &amp; Consumable Fuels</a>
+        </p>
+        <p class="sub">{index_links}</p>
+        """
+        soup = BeautifulSoup(html, "html.parser")
+        assert _extract_sector_from_page(soup) == "Energy"
 
     def test_extracts_from_meta_industry_tag(self) -> None:
         html = '<html><head><meta name="industry" content="FMCG"></head></html>'
@@ -899,6 +943,22 @@ class TestRunValuationAnalysisCore:
     def test_current_price_set(self) -> None:
         result = self._call_with_mocks()
         assert result.current_price == 1_500.0
+
+    def test_current_price_stays_none_when_only_at_top_level(self) -> None:
+        """
+        Regression test locking in the fix: fetch_stock_price's real
+        return shape nests current_price under "stats" (see its own
+        docstring). A price_result with current_price ONLY at the top
+        level -- the shape the code used to (incorrectly) read from --
+        must NOT be picked up; current_price must stay None (and the
+        Investment Memo's price target correctly falls back to a
+        relative PE/PB estimate rather than the DCF one), never
+        silently resurrect the old bug.
+        """
+        result = self._call_with_mocks(
+            price={"current_price": 1_500.0, "ticker": "INFY.NS"}
+        )
+        assert result.current_price is None
 
     def test_upside_pct_computed(self) -> None:
         result = self._call_with_mocks()
@@ -1211,7 +1271,10 @@ _NBFC_RATIOS: dict[str, Any] = {
     "data_warnings": [],
 }
 
-_NBFC_PRICE: dict[str, Any] = {"current_price": 1_800.0, "ticker": "MUTHOOTFIN.NS"}
+_NBFC_PRICE: dict[str, Any] = {
+    "stats": {"current_price": 1_800.0},
+    "ticker": "MUTHOOTFIN.NS",
+}
 
 
 class TestIsFinancialSector:

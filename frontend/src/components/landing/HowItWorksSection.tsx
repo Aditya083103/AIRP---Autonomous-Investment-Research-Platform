@@ -37,7 +37,7 @@ const STEPS: readonly Step[] = [
     number: "03",
     title: "The committee debates",
     description:
-      "The Risk Officer raises governance flags and the Contrarian Investor challenges every bull case, twice.",
+      "The Risk Officer raises governance flags and the Contrarian Investor challenges every bull case -- escalating to a second round when its pushback is strong enough to warrant one.",
   },
   {
     number: "04",

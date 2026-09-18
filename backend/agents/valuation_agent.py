@@ -805,8 +805,11 @@ def _extract_sector_from_page(soup: Any) -> Optional[str]:
     page layouts, so a few plausible locations are tried in order:
       1. The '#peers' section heading, which often reads something like
          "Peer comparison ... Sector: <label>".
-      2. A breadcrumb-style link in the '.sub' element near the company
-         name, containing a non-exchange label (i.e. not 'NSE:' / 'BSE:').
+      2. A <p class="sub"> breadcrumb near the company name whose first
+         link is the sector (e.g. "Information Technology", "Financial
+         Services", "Energy") -- see strategy 2's own comment below for
+         why this can't just be the first ``class="sub"`` element on the
+         page.
       3. A <meta name="industry"> tag, when present.
 
     This is intentionally hedged: unlike the ratio tables (which have a
@@ -834,13 +837,33 @@ def _extract_sector_from_page(soup: Any) -> Optional[str]:
                 if label:
                     return label
 
-    # 2. Breadcrumb-style sub-header near the company name
-    sub = soup.find(class_="sub")
-    if sub:
-        for link in sub.find_all("a"):
-            link_text: str = str(link.get_text(strip=True))
-            if link_text and not link_text.upper().startswith(("NSE", "BSE")):
-                return link_text
+    # 2. Breadcrumb-style <p class="sub"> near the company name.
+    #
+    # Bug fix: this used to be soup.find(class_="sub") -- ANY tag with
+    # that class, returning the FIRST one in document order. Screener.in
+    # reuses the "sub" class on a couple dozen unrelated elements on the
+    # same page (a hero-copy <div>, "View Consolidated" toggles, footer
+    # links...), and the actual sector breadcrumb is neither the first
+    # such element nor even always a <p> at a fixed position -- so this
+    # silently returned None (or the wrong text) on every page checked
+    # live (INFY, TCS, HDFCBANK, RELIANCE all reproduced this), which
+    # was the root cause of every valuation quietly falling back to the
+    # generic "diversified" WACC band and an empty peer list. The real
+    # breadcrumb is a <p class="sub"> with a SMALL number of links (the
+    # sector, industry, and sub-industry -- confirmed 2-4 across every
+    # ticker checked), immediately followed on the same page by an
+    # unrelated <p class="sub"> listing every index the stock is a
+    # member of (dozens of links, e.g. "BSE Sensex", "Nifty 50", ...).
+    # Capping the accepted link count excludes that index list without
+    # needing to hard-code index names.
+    _MAX_BREADCRUMB_LINKS = 6
+    for candidate in soup.find_all("p", class_="sub"):
+        links = candidate.find_all("a")
+        if not links or len(links) > _MAX_BREADCRUMB_LINKS:
+            continue
+        first_text: str = str(links[0].get_text(strip=True))
+        if first_text and not first_text.upper().startswith(("NSE", "BSE")):
+            return first_text
 
     # 3. <meta name="industry"> tag, when present
     meta = soup.find("meta", attrs={"name": "industry"})
@@ -1088,25 +1111,38 @@ def _run_valuation_analysis_core(
         logger.warning("fetch_ratios failed for %s: %s", ticker, exc)
 
     # --- Stage 1c: Fetch current price ------------------------------------
+    # Bug fix: fetch_stock_price nests the price under a "stats" sub-dict
+    # (see its own docstring: result["stats"]["current_price"]), not at
+    # the top level -- reading price_result.get("current_price") directly
+    # always returned None, silently forcing every valuation onto the
+    # peer-multiple fallback (or "Not determined" when peer data was also
+    # unavailable) regardless of whether the price fetch itself succeeded.
     logger.info("Valuation: fetching stock price ticker=%s", ticker)
     current_price: Optional[float] = None
     try:
         price_result = fetch_stock_price.invoke({"ticker": ticker, "period": "1y"})
         if isinstance(price_result, dict) and "error" not in price_result:
-            current_price_raw: Any = price_result.get("current_price")
+            stats: Any = price_result.get("stats") or {}
+            current_price_raw: Any = (
+                stats.get("current_price") if isinstance(stats, dict) else None
+            )
             if current_price_raw is not None:
                 current_price = float(current_price_raw)
     except Exception as exc:
         logger.warning("fetch_stock_price failed for %s: %s", ticker, exc)
 
-    # Fall back to ratios price field if stock price call failed
-    if current_price is None:
-        price_raw: Any = ratios.get("price")
-        if price_raw is not None:
-            try:
-                current_price = float(price_raw)
-            except (TypeError, ValueError):
-                pass
+    # Dead-code removal: there used to be a "fall back to ratios price
+    # field" step here, reading ratios.get("price") -- but
+    # backend.tools.ratios._compute_ratios never puts a raw price in its
+    # own return dict at all (only pe_ratio/pb_ratio/roe_pct/roce_pct/
+    # debt_to_equity/ev_to_ebitda/enterprise_value), so that fallback
+    # could never do anything besides silently no-op. Removed rather
+    # than fixed: fetch_stock_price succeeding or failing is already
+    # independent of fetch_ratios (both hit yFinance separately), so a
+    # genuine fetch_stock_price failure leaving current_price as None
+    # here is the correct, already-handled outcome -- _build_price_target
+    # falls back to a relative PE/PB target, then "Not determined", never
+    # a fabricated number.
 
     # --- Stage 1d: Extract FCF series and shares for DCF ------------------
     income_stmt: list[dict[str, Any]] = financials.get("income_statement", []) or []
