@@ -20,9 +20,9 @@
 import { Float } from "@react-three/drei";
 import { Canvas } from "@react-three/fiber";
 
-/** Matches tailwind.config.ts's brand.500 -- kept as a literal since three.js materials take raw colour values, not CSS classes. */
-const BRAND_COLOR = "#7C3AED";
-const ACCENT_LIGHT_COLOR = "#AD98F7";
+/** Matches tailwind.config.ts's brand.500/300 -- kept as a literal since three.js materials take raw colour values, not CSS classes. */
+const BRAND_COLOR = "#2B77CB";
+const ACCENT_LIGHT_COLOR = "#7CB0EA";
 
 function IcosahedronMesh(): JSX.Element {
   return (

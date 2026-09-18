@@ -443,11 +443,11 @@ export const PIPELINE_EDGES: Edge[] = [
     targetHandle: "target-left",
     label: "DEBATE_AGAIN (round 2)",
     animated: true,
-    // ISSUE 5: brand-400 (one step brighter than brand-500) for extra
-    // contrast against this pass's dark canvas -- matches
-    // LiveGraphView.tsx's own DEBATE_LOOP_COLOR.
-    style: { stroke: "#8B6BF0", strokeWidth: 2 },
-    markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16, color: "#8B6BF0" },
+    // Matches the brand-500 token (tailwind.config.ts) and
+    // LiveGraphView.tsx's own DEBATE_LOOP_COLOR -- ReactFlow renders
+    // outside Tailwind's reach, so this stays in sync by hand.
+    style: { stroke: "#2B77CB", strokeWidth: 2 },
+    markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16, color: "#2B77CB" },
   },
 
   // -- debate_loop -> risk_officer (route_after_contrarian's PROCEED) ----

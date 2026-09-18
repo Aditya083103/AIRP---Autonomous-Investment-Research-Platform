@@ -143,7 +143,7 @@ export function ComponentsPreviewPage(): JSX.Element {
   return (
     <div className="mx-auto max-w-4xl">
       <header>
-        <p className="font-mono text-xs uppercase tracking-[0.2em] text-brand-300">Design system</p>
+        <p className="font-mono text-xs uppercase tracking-[0.2em] text-brand-600">Design system</p>
         <h1 className="mt-2 font-display text-3xl font-semibold text-ink">
           AIRP component preview
         </h1>

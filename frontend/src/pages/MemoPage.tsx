@@ -99,7 +99,7 @@ export function MemoPage(): JSX.Element {
 
   return (
     <div className="mx-auto max-w-4xl py-12" data-testid="memo-page">
-      <p className="font-mono text-xs uppercase tracking-[0.2em] text-brand-300">Investment memo</p>
+      <p className="font-mono text-xs uppercase tracking-[0.2em] text-brand-600">Investment memo</p>
       <h1 className="mt-2 font-display text-3xl font-semibold text-ink">
         {decision ? `${decision.company_name} (${decision.ticker})` : "Investment memo"}
       </h1>

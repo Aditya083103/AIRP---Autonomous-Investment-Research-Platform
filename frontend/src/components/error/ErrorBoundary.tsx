@@ -112,7 +112,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
               reload guarantees a genuinely clean app state after a render
               crash, rather than a client-side navigation re-using whatever
               state elsewhere in the tree contributed to the crash. */}
-          <a href="/" className="text-sm font-medium text-brand-300 hover:text-brand-200">
+          <a href="/" className="text-sm font-medium text-brand-600 hover:text-brand-700">
             Go home
           </a>
         </div>

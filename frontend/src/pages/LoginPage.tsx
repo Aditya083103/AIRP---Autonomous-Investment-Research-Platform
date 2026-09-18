@@ -86,7 +86,7 @@ export function LoginPage(): JSX.Element {
         />
         <Link
           to="/forgot-password"
-          className="-mt-2 self-end text-sm font-medium text-brand-300 hover:text-brand-200"
+          className="-mt-2 self-end text-sm font-medium text-brand-600 hover:text-brand-700"
         >
           Forgot password?
         </Link>

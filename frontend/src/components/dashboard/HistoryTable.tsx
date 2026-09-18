@@ -68,7 +68,7 @@ export function HistoryTable({ entries }: HistoryTableProps): JSX.Element {
               <td className="py-3 pr-0 text-right">
                 <Link
                   to={`/analysis/${entry.job_id}/result`}
-                  className="font-medium text-brand-300 hover:text-brand-200"
+                  className="font-medium text-brand-600 hover:text-brand-700"
                 >
                   View
                 </Link>
