@@ -17,7 +17,8 @@
 > ⚠️ The API runs on Render's free tier and spins down after inactivity — the first
 > request after an idle period can take ~50s to cold-start. Subsequent requests are fast.
 
-<!-- DEMO GIF — replace with the recorded end-to-end flow (T-077):
+<!-- DEMO GIF — record per docs/assets/README.md, then drop the file at
+     docs/assets/airp-demo.gif and uncomment the line below. Flow to capture:
      landing → "TCS vs Infosys" → live agents → debate viewer → memo PDF.
      ![AIRP demo](docs/assets/airp-demo.gif) -->
 
@@ -84,7 +85,7 @@ never issues, revises, or can be talked into issuing a new one.
 | Interactive API docs | [airp-backend.onrender.com/docs](https://airp-backend.onrender.com/docs) |
 | Verdict accuracy dashboard | [/accuracy](https://airp-autonomous-investment-research.vercel.app/accuracy) |
 
-<!-- DEMO VIDEO (T-077) — embed the 3-minute walkthrough here:
+<!-- DEMO VIDEO — record per docs/assets/README.md, upload, then embed here:
      [![Watch the demo](docs/assets/video-thumb.png)](https://youtu.be/YOUR_VIDEO_ID) -->
 
 ## The 8-agent investment committee
@@ -271,7 +272,8 @@ Every agent call, tool use, token count, and per-node latency is traced in LangS
 per-node latency profiling is documented in
 [docs/PERFORMANCE_PROFILE.md](docs/PERFORMANCE_PROFILE.md).
 
-<!-- LANGSMITH SCREENSHOT (T-076 acceptance criterion) — add a trace-dashboard image:
+<!-- LANGSMITH SCREENSHOT — capture per docs/assets/README.md, then drop the
+     file at docs/assets/langsmith-trace.png and uncomment the line below:
      ![LangSmith trace](docs/assets/langsmith-trace.png) -->
 
 ## Project structure
@@ -301,6 +303,7 @@ airp/
 │   ├── vercel.json       # Vercel deploy config
 │   └── nginx.conf.template
 ├── docs/             # Architecture, agents, data layer, evaluation, chat
+├── docs/assets/      # Demo GIF, walkthrough video, LangSmith screenshot (see docs/assets/README.md)
 ├── docs/week-NN/     # Per-task workflow docs (branch → commit → PR)
 ├── .github/workflows/  # CI + scheduled verdict-accuracy evaluation
 ├── docker-compose.yml
