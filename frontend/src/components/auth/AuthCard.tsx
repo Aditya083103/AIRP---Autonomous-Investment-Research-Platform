@@ -30,7 +30,7 @@ interface AuthCardProps {
 export function AuthCard({ title, subtitle, footer, children }: AuthCardProps): JSX.Element {
   return (
     <Reveal className="mx-auto flex max-w-md flex-col py-12">
-      <p className="text-center font-mono text-xs uppercase tracking-[0.2em] text-brand-600">
+      <p className="text-center font-mono text-xs uppercase tracking-[0.2em] text-brand-300">
         AIRP
       </p>
       <h1 className="mt-3 text-center font-display text-3xl font-semibold text-ink">{title}</h1>
@@ -41,7 +41,7 @@ export function AuthCard({ title, subtitle, footer, children }: AuthCardProps): 
       {footer ? (
         <p className="mt-6 text-center text-sm text-muted">
           {footer.prompt}{" "}
-          <Link to={footer.linkTo} className="font-medium text-brand-600 hover:text-brand-700">
+          <Link to={footer.linkTo} className="font-medium text-brand-300 hover:text-brand-200">
             {footer.linkLabel}
           </Link>
         </p>

@@ -58,7 +58,7 @@ export function HowItWorksSection(): JSX.Element {
   return (
     <section id="how-it-works" className="py-16">
       <div className="max-w-2xl">
-        <p className="font-mono text-xs uppercase tracking-[0.2em] text-brand-600">How it works</p>
+        <p className="font-mono text-xs uppercase tracking-[0.2em] text-brand-300">How it works</p>
         <h2 className="mt-3 font-display text-3xl font-semibold text-ink">
           One request, five stages, no shortcuts.
         </h2>
@@ -72,7 +72,7 @@ export function HowItWorksSection(): JSX.Element {
               className="absolute -left-[34px] top-1 h-2.5 w-2.5 rounded-full bg-brand-600 ring-4 ring-canvas"
             />
             <Reveal index={index}>
-              <p className="font-mono text-xs font-semibold text-brand-600">{step.number}</p>
+              <p className="font-mono text-xs font-semibold text-brand-300">{step.number}</p>
               <h3 className="mt-1 text-lg font-semibold text-ink">{step.title}</h3>
               <p className="mt-1.5 max-w-memo text-sm leading-relaxed text-muted">
                 {step.description}

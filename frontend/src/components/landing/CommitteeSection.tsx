@@ -7,12 +7,15 @@
 // (parallel research -> debate -> final call) reflects the actual
 // LangGraph execution order, not an arbitrary layout choice.
 //
-// Each accent below (#1D4ED8/#B91C1C/#065F46) is the architecture doc's
-// own literal fill colour (docs/AIRP_Architecture.drawio) -- a thin top
-// border accent in this exact hue reads clearly against this redesign's
-// white card. Kept identical to src/components/progress/AgentCard.tsx's
-// own ROUND_ACCENT so a seat here and its counterpart on the live
-// progress view are still visually the same agent.
+// ISSUE 5: each accent below (#60A5FA/#F87171/#34D399) is one step
+// brighter than the architecture doc's literal fill colour
+// (#1D4ED8/#B91C1C/#065F46) -- those were tuned as a thin border accent
+// against a WHITE card; against this pass's dark `bg-surface` card the
+// same dark hues lose almost all contrast, so each moves to its
+// brighter Tailwind neighbour. Kept identical to
+// src/components/progress/AgentCard.tsx's own ROUND_ACCENT (see that
+// file's own ISSUE 5 comment) so a seat here and its counterpart on the
+// live progress view are still visually the same agent.
 //
 // B10: each seat's card is wrapped in Reveal (staggered fade/rise-in by
 // seat number, so the whole 8-seat roster cascades in roughly the order
@@ -56,7 +59,7 @@ const ROUNDS: readonly CommitteeRound[] = [
           "Revenue growth, profit margins, free cash flow, debt, and balance-sheet health over 4 years.",
         tools: "yFinance, Alpha Vantage",
         output: "FundamentalAnalysis (score 1–10)",
-        accent: "#1D4ED8",
+        accent: "#60A5FA",
       },
       {
         seat: 2,
@@ -64,7 +67,7 @@ const ROUNDS: readonly CommitteeRound[] = [
         mandate: "Price trend, 50d/200d moving averages, RSI, momentum, and 52-week positioning.",
         tools: "yFinance OHLCV",
         output: "TechnicalAnalysis (BUY/HOLD/SELL)",
-        accent: "#1D4ED8",
+        accent: "#60A5FA",
       },
       {
         seat: 3,
@@ -72,7 +75,7 @@ const ROUNDS: readonly CommitteeRound[] = [
         mandate: "Scores the last 30 days of news; flags management conduct and regulatory issues.",
         tools: "NewsAPI, ChromaDB RAG",
         output: "SentimentAnalysis (−1 to +1)",
-        accent: "#1D4ED8",
+        accent: "#60A5FA",
       },
       {
         seat: 4,
@@ -80,7 +83,7 @@ const ROUNDS: readonly CommitteeRound[] = [
         mandate: "RBI rate environment, inflation, GDP growth, and sector tailwinds for India.",
         tools: "RBI scraper, macro DB",
         output: "MacroAnalysis",
-        accent: "#1D4ED8",
+        accent: "#60A5FA",
       },
     ],
   },
@@ -95,7 +98,7 @@ const ROUNDS: readonly CommitteeRound[] = [
         mandate: "Governance failures, fraud indicators, regulatory and concentration risk.",
         tools: "All prior agent outputs",
         output: "RiskAnalysis (score, flags)",
-        accent: "#B91C1C",
+        accent: "#F87171",
       },
       {
         seat: 6,
@@ -104,7 +107,7 @@ const ROUNDS: readonly CommitteeRound[] = [
           "Its only job is to disagree: finds flaws in every bull thesis, challenges assumptions.",
         tools: "Full debate state",
         output: "ContrarianReport (counter-arguments)",
-        accent: "#B91C1C",
+        accent: "#F87171",
       },
       {
         seat: 7,
@@ -112,7 +115,7 @@ const ROUNDS: readonly CommitteeRound[] = [
         mandate: "Runs a DCF model; compares PE/PB/EV-EBITDA against sector peers.",
         tools: "Screener.in, yFinance",
         output: "ValuationOutput (intrinsic value)",
-        accent: "#B91C1C",
+        accent: "#F87171",
       },
     ],
   },
@@ -127,7 +130,7 @@ const ROUNDS: readonly CommitteeRound[] = [
         mandate: "Weighs the full debate and writes the Investment Memo.",
         tools: "Full pipeline state",
         output: "InvestmentDecision (BUY/HOLD/SELL, memo)",
-        accent: "#065F46",
+        accent: "#34D399",
       },
     ],
   },
@@ -168,7 +171,7 @@ export function CommitteeSection(): JSX.Element {
   return (
     <section id="committee" className="py-16">
       <div className="max-w-2xl">
-        <p className="font-mono text-xs uppercase tracking-[0.2em] text-brand-600">The committee</p>
+        <p className="font-mono text-xs uppercase tracking-[0.2em] text-brand-300">The committee</p>
         <h2 className="mt-3 font-display text-3xl font-semibold text-ink">
           Eight specialists, one shared state, zero unchecked authority.
         </h2>

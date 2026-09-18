@@ -66,7 +66,7 @@ const PRIMARY_NAV_LINKS: readonly PrimaryNavLink[] = [
 function navLinkClassName({ isActive }: { isActive: boolean }): string {
   return cn(
     "text-sm font-medium transition-colors",
-    isActive ? "text-brand-600" : "text-muted hover:text-ink",
+    isActive ? "text-brand-300" : "text-muted hover:text-ink",
   );
 }
 
@@ -100,7 +100,10 @@ function HeaderAuthArea(): JSX.Element {
   if (!isAuthenticated) {
     return (
       <div className="flex items-center gap-4">
-        <Link to="/login" className="text-sm font-medium text-ink hover:text-brand-600">
+        <Link
+          to="/login"
+          className="whitespace-nowrap text-sm font-medium text-ink hover:text-brand-300"
+        >
           Log in
         </Link>
         <Link
@@ -170,10 +173,10 @@ export function RootLayout(): JSX.Element {
         <div className="mx-auto flex h-16 w-full max-w-6xl items-center justify-between px-6">
           <div className="flex items-center gap-8">
             <Link to="/" className="flex items-center gap-2">
-              <span className="font-mono text-sm font-semibold tracking-tight text-brand-600">
+              <span className="font-mono text-sm font-semibold tracking-tight text-brand-300">
                 AIRP
               </span>
-              <span className="hidden text-sm text-muted sm:inline">
+              <span className="hidden whitespace-nowrap text-sm text-muted lg:inline">
                 Autonomous Investment Research Platform
               </span>
             </Link>

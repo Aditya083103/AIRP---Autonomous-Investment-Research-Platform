@@ -14,6 +14,19 @@
 // way, so there is no layout shift whether the real WebGL scene or its
 // static-gradient fallback ends up rendering). `overflow-hidden` on the
 // section clips the scene from bleeding into CommitteeSection below it.
+//
+// Bug fix: `hidden lg:block` on the scene wrapper. The two-column grid
+// below only splits into columns at `lg` (`lg:grid-cols-[1.1fr,0.9fr]`);
+// below that, the heading/paragraph and the example-output card stack
+// into ONE full-width column, but the scene was still absolutely
+// positioned at the same top-right spot at a fairly large size (only
+// its size, not its presence, was responsive) -- on any viewport from
+// roughly 400px up to just under 1024px (most tablets, and plenty of
+// real desktop windows) it rendered directly on top of the headline and
+// body paragraph, its bright specular highlight visibly washing out the
+// text sitting over it. Below `lg` there is no second grid column for
+// it to sit behind without colliding with the now-stacked text, so it
+// is hidden there entirely rather than degraded to a smaller overlap.
 
 import { Link } from "react-router-dom";
 
@@ -42,12 +55,12 @@ const EXAMPLE_AGENTS: readonly ExampleAgentDot[] = [
 export function HeroSection(): JSX.Element {
   return (
     <section className="relative overflow-hidden py-4 lg:py-12">
-      <HeroScene className="pointer-events-none absolute -right-16 -top-24 -z-10 h-[420px] w-[420px] lg:h-[560px] lg:w-[560px]" />
+      <HeroScene className="pointer-events-none absolute -right-16 -top-24 -z-10 hidden h-[420px] w-[420px] lg:block lg:h-[560px] lg:w-[560px]" />
 
       <div className="grid items-center gap-12 lg:grid-cols-[1.1fr,0.9fr]">
         <Reveal>
           <div>
-            <p className="font-mono text-xs uppercase tracking-[0.2em] text-brand-600">
+            <p className="font-mono text-xs uppercase tracking-[0.2em] text-brand-300">
               Investment committee, simulated
             </p>
 

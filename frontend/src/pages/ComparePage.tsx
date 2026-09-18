@@ -134,7 +134,7 @@ export function ComparePage(): JSX.Element {
 
   return (
     <div className="mx-auto max-w-4xl py-12">
-      <p className="font-mono text-xs uppercase tracking-[0.2em] text-brand-600">Company compare</p>
+      <p className="font-mono text-xs uppercase tracking-[0.2em] text-brand-300">Company compare</p>
       <h1 className="mt-2 font-display text-3xl font-semibold text-ink">
         Put two companies in front of the committee.
       </h1>

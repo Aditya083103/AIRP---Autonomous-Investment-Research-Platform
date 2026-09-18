@@ -141,7 +141,7 @@ export function AnalysisResultPage(): JSX.Element {
 
   return (
     <div className="mx-auto max-w-4xl py-12">
-      <p className="font-mono text-xs uppercase tracking-[0.2em] text-brand-600">Live analysis</p>
+      <p className="font-mono text-xs uppercase tracking-[0.2em] text-brand-300">Live analysis</p>
       <h1 className="mt-2 font-display text-3xl font-semibold text-ink">
         The committee is on the case.
       </h1>
@@ -158,7 +158,7 @@ export function AnalysisResultPage(): JSX.Element {
             className={cn(
               "-mb-px border-b-2 px-3 py-2 text-sm font-medium transition-colors",
               activeView === tab.id
-                ? "border-brand-400 text-brand-600"
+                ? "border-brand-400 text-brand-300"
                 : "border-transparent text-muted hover:text-ink",
             )}
           >
@@ -251,7 +251,7 @@ export function AnalysisResultPage(): JSX.Element {
                   <div className="mt-4 text-right">
                     <Link
                       to={`/analysis/${jobId}/memo`}
-                      className="text-sm font-medium text-brand-600 hover:text-brand-700 hover:underline"
+                      className="text-sm font-medium text-brand-300 hover:text-brand-200 hover:underline"
                     >
                       View full Investment Memo →
                     </Link>

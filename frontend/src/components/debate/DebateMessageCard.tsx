@@ -16,13 +16,16 @@ import { Badge } from "@/components/ui";
 import { cn } from "@/lib/cn";
 import { type DebateTranscriptMessage } from "@/lib/debateTranscript";
 
-// Unlike AgentCard.tsx/CommitteeSection.tsx (border-only accents), this
-// file's `accent` does DOUBLE DUTY -- also the avatar circle's solid
-// backgroundColor behind white initials text (see the
-// style={{ backgroundColor: accent }} below), so each hue is a deep,
-// saturated -600/-700-ish shade: dark enough for white avatar-initials
-// text to stay AA-contrast, and reads clearly as a left-border accent
-// against this redesign's white card too.
+// ISSUE 5: unlike AgentCard.tsx/CommitteeSection.tsx (border-only accents,
+// free to brighten all the way to each hue's -400 shade for maximum pop
+// against the dark canvas), this file's `accent` does DOUBLE DUTY -- also
+// the avatar circle's solid backgroundColor behind white initials text
+// (see the style={{ backgroundColor: accent }} below). A -400 shade is
+// too light for white text to stay readable on. Each colour below moves
+// only one step brighter than its original light-mode value (mostly
+// -700 -> -600, one -500 -> -600) -- enough to read clearly as a
+// left-border accent against a dark card, while staying dark/saturated
+// enough for white avatar-initials text to keep AA-ish contrast.
 /** One accent colour per committee seat -- stable across renders and re-runs. */
 const AGENT_ACCENTS: Record<string, string> = {
   fundamental_analyst: "#2563EB",
@@ -102,8 +105,8 @@ export function DebateMessageCard({ message }: DebateMessageCardProps): JSX.Elem
             onClick={() => setExpanded((previous) => !previous)}
             aria-expanded={expanded}
             className={cn(
-              "mt-2 font-mono text-xs font-semibold uppercase tracking-wide text-brand-600",
-              "hover:text-brand-700 hover:underline",
+              "mt-2 font-mono text-xs font-semibold uppercase tracking-wide text-brand-300",
+              "hover:text-brand-200 hover:underline",
             )}
           >
             {expanded ? "Show less" : "Show more"}

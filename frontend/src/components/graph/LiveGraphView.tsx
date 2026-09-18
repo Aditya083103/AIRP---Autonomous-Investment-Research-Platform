@@ -76,12 +76,11 @@ const NODE_TYPES: NodeTypes = { pipelineNode: LiveGraphNode };
 
 /**
  * The DEBATE_AGAIN edge's stroke colour -- matches T-094's own static
- * styling for this edge and the current brand-500 token
- * (tailwind.config.ts), so this SVG stroke (ReactFlow renders outside
- * Tailwind's reach, so it cannot read the token directly) stays in sync
- * with the rest of the accent colour by hand.
+ * styling for this edge. ISSUE 5: brand-400 (one step brighter than the
+ * original brand-500) for extra contrast as a thin SVG line stroke
+ * against this pass's dark canvas.
  */
-const DEBATE_LOOP_COLOR = "#2B77CB";
+const DEBATE_LOOP_COLOR = "#8B6BF0";
 
 function describeConnection(
   connectionStatus: AnalysisStreamConnectionStatus,

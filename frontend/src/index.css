@@ -5,13 +5,13 @@
 @layer base {
   html {
     scroll-behavior: smooth;
-    /* AIRP is light-only (no light/dark toggle) as of the broker-app
-       redesign. Setting this explicitly (rather than leaving it to the
-       OS default) keeps native browser chrome Tailwind cannot reach --
-       the <select> popup listbox, scrollbars, date/range pickers -- in
-       sync with our own palette even for a visitor whose OS/browser is
-       set to dark mode. */
-    color-scheme: light;
+    /* AIRP is dark-only (no light theme/toggle). Without this, native
+       browser chrome that Tailwind cannot reach -- the <select> popup
+       listbox, scrollbars, date/range pickers -- renders with the OS's
+       light-mode UI regardless of our own dark palette, producing
+       barely-legible light-gray-on-white option text in the <select>
+       dropdown popup. */
+    color-scheme: dark;
   }
 
   body {
@@ -38,14 +38,14 @@
     transition: background-color 9999s ease-in-out 0s;
   }
 
-  /* The <select> popup listbox itself: color-scheme:light above fixes
-     Chromium/Firefox chrome even on a dark-mode OS, but explicit colours
-     on <option> give a second line of defense in engines that partially
-     honour author styles on the popup (and keep it visually on-brand
-     rather than generic OS grey). Safari's native popup ignores this and
-     uses `color-scheme` alone -- there is no further CSS hook available. */
+  /* The <select> popup listbox itself: color-scheme:dark above fixes
+     Chromium/Firefox chrome, but explicit colours on <option> give a
+     second line of defense in engines that partially honour author
+     styles on the popup (and keep it visually on-brand rather than
+     generic OS dark grey). Safari's native popup ignores this and uses
+     `color-scheme` alone -- there is no further CSS hook available. */
   select {
-    color-scheme: light;
+    color-scheme: dark;
   }
 
   option {
@@ -60,15 +60,15 @@
   }
 }
 
-/* React Flow v11's default theme (reactflow/dist/style.css, imported by
-   src/components/graph/{LiveGraphView,PipelineGraphView}.tsx) ships its
-   own hardcoded light-mode colours for its Controls panel and attribution
-   tag -- close to this redesign's palette by coincidence, but not the
-   exact tokens, and the one visible surface in the whole app this token
-   system's Tailwind config cannot reach (React Flow renders its own
-   un-Tailwind-scoped markup). Overridden here, once, by the same three
-   tokens every other surface already uses, rather than passing a
-   style/className prop at every <Controls>/<Background> call site. */
+/* ISSUE 5: React Flow v11's default theme (reactflow/dist/style.css,
+   imported by src/components/graph/{LiveGraphView,PipelineGraphView}.tsx)
+   ships light-mode-only colours for its Controls panel and attribution
+   tag -- stark white squares/pill floating on this pass's dark canvas,
+   the one visible surface in the whole app this token system's Tailwind
+   config cannot reach (React Flow renders its own un-Tailwind-scoped
+   markup). Overridden here, once, by the same three tokens every other
+   surface already uses, rather than passing a style/className prop at
+   every <Controls>/<Background> call site. */
 .react-flow__controls {
   overflow: hidden;
   border-radius: 8px;
