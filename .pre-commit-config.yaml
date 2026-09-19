@@ -49,6 +49,15 @@ repos:
         require_serial: false
 
   # ── Prettier (TS/TSX/JSON/CSS/MD) ─────────────────────────────────────────
+  # Pinned to match frontend/package-lock.json's resolved prettier version
+  # exactly (currently 3.8.3, not the ^3.2.5 range in package.json) --
+  # prettier has changed its formatting output for a handful of edge
+  # cases (e.g. parenthesising a `??` fallback inside a ternary branch)
+  # between 3.2.5 and 3.8.3, so a pinned-older hook here would otherwise
+  # "fix" a file into a shape frontend's own `npm run format:check` (and
+  # CI, which runs `npm ci` against that same lockfile) then rejects --
+  # exactly the loop that happened once already. Bump this alongside any
+  # future `npm update prettier` in frontend/.
   - repo: https://github.com/pre-commit/mirrors-prettier
     rev: v4.0.0-alpha.8
     hooks:
@@ -56,7 +65,7 @@ repos:
         files: ^frontend/
         types_or: [ts, tsx, json, css, markdown]
         additional_dependencies:
-          - prettier@3.2.5
+          - prettier@3.8.3
           - "@prettier/plugin-xml@3.4.1"
 
   # ── General hygiene (all files) ───────────────────────────────────────────

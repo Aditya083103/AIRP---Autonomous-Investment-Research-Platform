@@ -125,7 +125,7 @@ export function HeroPipelinePreview({ className }: HeroPipelinePreviewProps): JS
     return () => window.clearTimeout(timer);
   }, [frameIndex, prefersReducedMotion]);
 
-  const statuses = prefersReducedMotion ? ALL_DONE : TIMELINE[frameIndex] ?? ALL_DONE;
+  const statuses = prefersReducedMotion ? ALL_DONE : (TIMELINE[frameIndex] ?? ALL_DONE);
 
   return (
     <div
