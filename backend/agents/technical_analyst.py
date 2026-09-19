@@ -101,6 +101,15 @@ RSI_OVERSOLD: float = 30.0
 RSI_OVERBOUGHT: float = 70.0
 RSI_OVERBOUGHT_EXHAUSTION: float = 75.0  # above this = bearish exhaustion
 
+# T-095 audit fix: _determine_signal's own docstring says the bullish RSI
+# band is "40 <= RSI <= 70", but the check below previously reused
+# RSI_OVERSOLD (30.0) as that band's lower bound -- so RSI in [30, 40)
+# was silently scored bullish when it was meant to be neutral (neither
+# point awarded). RSI_BULLISH_MIN is the dedicated lower bound the
+# docstring always described; RSI_OVERSOLD keeps its original meaning
+# (only the bearish oversold check below it).
+RSI_BULLISH_MIN: float = 40.0
+
 # ---------------------------------------------------------------------------
 # System prompt
 # ---------------------------------------------------------------------------
@@ -370,11 +379,11 @@ def _determine_signal(
 
     # Check 4: RSI
     if rsi is not None:
-        if RSI_OVERSOLD <= rsi <= RSI_OVERBOUGHT:
+        if RSI_BULLISH_MIN <= rsi <= RSI_OVERBOUGHT:
             bullish += 1
         elif rsi < RSI_OVERSOLD or rsi > RSI_OVERBOUGHT_EXHAUSTION:
             bearish += 1
-        # rsi between 70-75 = neutral (neither point awarded)
+        # rsi in [30, 40) or (70, 75] = neutral (neither point awarded)
 
     # Check 5: 3m momentum
     if momentum_3m is not None:

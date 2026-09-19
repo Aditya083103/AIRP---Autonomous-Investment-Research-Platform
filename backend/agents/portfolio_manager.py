@@ -646,7 +646,17 @@ def _score_conviction(
     )
     conviction -= error_count * 1.0
 
-    critical_flags_count = len(risk.get("critical_flags") or [])
+    # T-095 audit fix: this previously read risk.get("critical_flags"),
+    # which is only the Risk Officer's OWN flags -- a strict subset of
+    # the state-level ``critical_flags`` parameter this function already
+    # receives, which also folds in upstream escalation flags (e.g.
+    # FUNDAMENTAL_DATA_UNAVAILABLE, NEGATIVE_SENTIMENT -- see
+    # backend.agents.risk_officer.run_risk_analysis's flag-merge step).
+    # _compute_weighted_score's own critical-flags penalty above already
+    # uses the full ``critical_flags`` list, so conviction was silently
+    # scoring a smaller set of flags than the verdict it's meant to
+    # track -- the two numbers weren't reading identical evidence.
+    critical_flags_count = len(critical_flags)
     conviction -= critical_flags_count * 0.5
 
     if debate_rounds_used >= 2:

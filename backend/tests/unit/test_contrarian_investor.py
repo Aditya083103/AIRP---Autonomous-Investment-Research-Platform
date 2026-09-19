@@ -498,7 +498,12 @@ class TestScoreBearConviction:
         )
         assert score <= 4, f"Expected <= 4 conviction for bearish profile, got {score}"
 
-    def test_fund_score_8_plus_adds_2_points(self) -> None:
+    def test_fund_score_8_plus_adds_1_point_capped(self) -> None:
+        """T-095 audit fix: fund score >= 8 is one of four triggers in the
+        "overheated momentum" cluster, which is capped at +2 combined (see
+        _score_bear_conviction's docstring). With every other trigger in
+        the cluster inactive (_TECHNICAL_HOLD: not BUY, RSI 52, 75% of
+        52-week high), fund score alone contributes +1, not the old +2."""
         score_high = _score_bear_conviction(
             _FUNDAMENTAL_TCS,  # score=9
             _TECHNICAL_HOLD,
@@ -515,7 +520,7 @@ class TestScoreBearConviction:
             {"risk_score": 5},
             self._base_args(),
         )
-        assert score_high >= score_low + 2
+        assert score_high == score_low + 1
 
     def test_buy_signal_strength_6_plus_adds_point(self) -> None:
         score_buy = _score_bear_conviction(

@@ -695,7 +695,21 @@ async def _turn_loop(
                 return
             continue
 
-        assert user_message is not None  # narrowed by the check above
+        # T-095 audit fix: replaced a bare `assert` (stripped under
+        # `python -O`, which would let a None user_message reach
+        # _run_one_turn below) with an explicit check. This branch
+        # should be unreachable given _extract_user_message's contract
+        # (validation_error is None implies user_message is not None),
+        # so log it and keep the connection alive rather than crash the
+        # whole WebSocket on what would be an internal invariant bug.
+        if user_message is None:
+            logger.error(
+                "chat_stream: _extract_user_message returned no "
+                "validation_error but also no user_message for "
+                "session_id=%s -- skipping this message",
+                session_id,
+            )
+            continue
         await _run_one_turn(
             websocket,
             session_id=session_id,

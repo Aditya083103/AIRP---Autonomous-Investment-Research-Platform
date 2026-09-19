@@ -63,6 +63,7 @@ Usage in LangGraph (Phase 3)
 """
 
 import logging
+import re
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -95,6 +96,12 @@ SCORE_BANDS: list[tuple[float, str]] = [
 # anything <= -0.3 falls through to "very_negative"
 
 # Positive signal keywords (each hit adds +KEYWORD_WEIGHT to raw score)
+#
+# T-095 audit fix: "order" and "raised" were removed as bare keywords --
+# "order" collides with "regulatory order" / "court order" (bearish, not
+# bullish), and "raised" collides with "raised concerns" (bearish). Both
+# are replaced with the specific multi-word phrases that actually carry
+# the intended bullish meaning.
 POSITIVE_KEYWORDS: list[str] = [
     "record",
     "profit",
@@ -105,14 +112,20 @@ POSITIVE_KEYWORDS: list[str] = [
     "upgrade",
     "outperform",
     "strong",
-    "raised",
+    "order win",
+    "new order",
+    "order book",
+    "bags order",
+    "guidance raised",
+    "outlook raised",
+    "stake raised",
+    "capital raised",
     "buyback",
     "dividend",
     "expansion",
     "milestone",
     "partnership",
     "acquisition",
-    "order",
     "inflow",
     "surge",
     "rally",
@@ -124,6 +137,21 @@ POSITIVE_KEYWORDS: list[str] = [
 ]
 
 # Negative signal keywords
+#
+# T-095 audit fix: the previous list had several bare, extremely common
+# words that fire on routine, often-neutral-or-positive Indian financial
+# news rather than genuine bad news -- "sebi" / "nse" / "bse" are simply
+# the names of the regulator and the two stock exchanges, appearing in
+# nearly every routine disclosure headline ("XYZ Ltd informs BSE, NSE of
+# board meeting"); "debt", "risk", "notice", "concern", "warning", and
+# "accounting" are standard vocabulary in neutral or even positive
+# financial writing ("debt-free", "risk-adjusted returns are strong",
+# "no material regulatory concerns"); "charged" false-positives inside
+# "discharged" (e.g. "discharged its debt obligations" -- good news);
+# "insider" false-positives on "industry insider" and on insider BUYING,
+# which is a bullish signal, not bearish. Every one of these is now
+# either removed or replaced with the specific multi-word phrase that
+# actually carries the negative meaning.
 NEGATIVE_KEYWORDS: list[str] = [
     "loss",
     "fraud",
@@ -132,7 +160,6 @@ NEGATIVE_KEYWORDS: list[str] = [
     "probe",
     "lawsuit",
     "penalty",
-    "fine",
     "miss",
     "downgrade",
     "underperform",
@@ -140,30 +167,51 @@ NEGATIVE_KEYWORDS: list[str] = [
     "decline",
     "fall",
     "slump",
-    "concern",
-    "warning",
-    "risk",
-    "debt",
+    "raises concern",
+    "flags concern",
+    "growing concern",
+    "profit warning",
+    "issues warning",
+    "debt burden",
+    "mounting debt",
+    "debt distress",
+    "unsustainable debt",
     "default",
     "layoff",
     "restatement",
-    "accounting",
-    "sebi",
-    "nse",
-    "bse",
-    "notice",
+    "accounting irregularities",
+    "accounting fraud",
+    # T-095 follow-up: the six "sebi <action>" phrases that used to live
+    # here were exact-adjacent literals ("sebi probe", "sebi notice", ...)
+    # -- too rigid for real headlines ("SEBI has issued a notice to TCS"
+    # doesn't contain the literal substring "sebi notice"). Replaced with
+    # the _sebi_action_present() proximity check below, applied in
+    # _score_article.
+    "regulatory notice",
+    "show cause notice",
     "resign",
     "fired",
     "arrested",
-    "charged",
     "whistleblower",
     "manipulation",
-    "insider",
+    "insider trading",
 ]
 
 # Red flag trigger phrases (any match surfaces a flag)
+#
+# T-095 audit fix: bare "sebi" flagged every routine regulator mention as
+# a red flag (SEBI approving a rights issue is not a red flag). Bare
+# "corporate governance" flagged the phrase even inside "strong corporate
+# governance practices" -- the opposite of a red flag. Bare "resign" and
+# "charged" are covered more precisely elsewhere below ("ceo quit" /
+# "md resign" / "cfo resign", "arrested") and duplicated the same
+# false-positive risk described above, so they are removed here too.
 RED_FLAG_PHRASES: list[str] = [
-    "sebi",
+    # T-095 follow-up: the six "sebi <action>" phrases and the three
+    # "<role> <resign/quit>" phrases previously here were exact-adjacent
+    # literals, too rigid for real headlines ("SEBI has issued a notice",
+    # "TCS MD to resign"). Replaced with the _sebi_action_present() /
+    # _resignation_present() proximity checks in _detect_red_flags below.
     "fraud",
     "scam",
     "investigation",
@@ -173,7 +221,6 @@ RED_FLAG_PHRASES: list[str] = [
     "restatement",
     "whistleblower",
     "arrested",
-    "charged",
     "default",
     "manipulation",
     "regulatory action",
@@ -184,17 +231,129 @@ RED_FLAG_PHRASES: list[str] = [
     "enforcement directorate",
     "money laundering",
     "bribery",
-    "corporate governance",
+    "corporate governance concerns",
+    "corporate governance lapse",
+    "poor corporate governance",
     "promoter pledge",
     "pledging",
     "class action",
-    "resign",
-    "ceo quit",
-    "md resign",
 ]
 
 # Per-keyword score contribution (clamped to [-1, 1] at article level)
 KEYWORD_WEIGHT: float = 0.15
+
+# T-095 audit fix: keywords deliberately used as a stem (matched with any
+# trailing word characters, not a strict whole-word match) -- e.g.
+# "accelerat" is meant to match "accelerating" / "accelerated" /
+# "acceleration". Every other keyword gets a strict \b...\b whole-word/
+# whole-phrase match so a short keyword can never match as a mere
+# substring of an unrelated, longer word.
+_STEM_KEYWORDS: frozenset[str] = frozenset({"accelerat"})
+
+_WORD_BOUNDARY_PATTERN_CACHE: dict[str, re.Pattern[str]] = {}
+
+
+def _keyword_present(keyword: str, text: str) -> bool:
+    """
+    True if ``keyword`` occurs in ``text`` as a whole word/phrase, not
+    merely as a substring of a longer, unrelated word.
+
+    T-095 audit fix: the previous implementation used plain Python `in`
+    containment, which matches "ban" inside "Bangalore" or "banking", and
+    "charged" inside "discharged" -- both false positives that previously
+    counted as a real sentiment/red-flag signal. This still matches
+    multi-word phrases (e.g. "sebi probe") as a unit, since regex `\\b`
+    anchors on the phrase's own first/last characters.
+    """
+    pattern = _WORD_BOUNDARY_PATTERN_CACHE.get(keyword)
+    if pattern is None:
+        escaped = re.escape(keyword)
+        suffix = r"\w*" if keyword in _STEM_KEYWORDS else r"\b"
+        pattern = re.compile(r"\b" + escaped + suffix)
+        _WORD_BOUNDARY_PATTERN_CACHE[keyword] = pattern
+    return pattern.search(text) is not None
+
+
+# ---------------------------------------------------------------------------
+# Proximity matching (T-095 follow-up)
+# ---------------------------------------------------------------------------
+#
+# Exact adjacent multi-word phrases (e.g. "sebi notice") are too rigid for
+# real headlines, which rarely place the two words directly next to each
+# other ("SEBI has issued a notice to TCS", "TCS MD to resign amid board
+# dispute"). A proximity match -- an anchor word (e.g. "sebi") within a
+# small window of a trigger word (e.g. "notice"), both whole words -- keeps
+# the original word-boundary fix's guarantee (a bare anchor with no nearby
+# trigger still never fires, so routine mentions like "as per SEBI
+# regulations" stay silent) while catching natural phrasing of a genuine
+# event.
+_TOKEN_PATTERN: re.Pattern[str] = re.compile(r"\w+")
+
+
+def _tokenize(text: str) -> list[str]:
+    return _TOKEN_PATTERN.findall(text.lower())
+
+
+def _anchor_near_trigger(
+    anchors: frozenset[str], triggers: frozenset[str], text: str, window: int
+) -> bool:
+    """True if any ``anchors`` word is within ``window`` words of any
+    ``triggers`` word in ``text`` (whole-word matches only)."""
+    tokens = _tokenize(text)
+    anchor_idxs = [i for i, t in enumerate(tokens) if t in anchors]
+    if not anchor_idxs:
+        return False
+    trigger_idxs = [i for i, t in enumerate(tokens) if t in triggers]
+    if not trigger_idxs:
+        return False
+    return any(abs(a - t) <= window for a in anchor_idxs for t in trigger_idxs)
+
+
+_SEBI_ANCHORS: frozenset[str] = frozenset({"sebi"})
+_SEBI_TRIGGERS: frozenset[str] = frozenset(
+    {
+        "probe",
+        "notice",
+        "penalty",
+        "fine",
+        "fined",
+        "ban",
+        "banned",
+        "action",
+        "order",
+        "investigating",
+        "investigation",
+        "debar",
+        "debarred",
+    }
+)
+_SEBI_PROXIMITY_WINDOW = 8
+
+_RESIGNATION_ANCHORS: frozenset[str] = frozenset(
+    {"ceo", "md", "cfo", "director", "chairman", "chairperson"}
+)
+_RESIGNATION_TRIGGERS: frozenset[str] = frozenset(
+    {"resign", "resigns", "resigned", "resignation", "quit", "quits", "quitting"}
+)
+_RESIGNATION_PROXIMITY_WINDOW = 4
+
+
+def _sebi_action_present(text: str) -> bool:
+    """True if 'sebi' appears near a regulatory-action trigger word."""
+    return _anchor_near_trigger(
+        _SEBI_ANCHORS, _SEBI_TRIGGERS, text, _SEBI_PROXIMITY_WINDOW
+    )
+
+
+def _resignation_present(text: str) -> bool:
+    """True if a leadership role appears near a resignation trigger word."""
+    return _anchor_near_trigger(
+        _RESIGNATION_ANCHORS,
+        _RESIGNATION_TRIGGERS,
+        text,
+        _RESIGNATION_PROXIMITY_WINDOW,
+    )
+
 
 # ChromaDB semantic search: number of results to retrieve
 CHROMA_N_RESULTS: int = 5
@@ -264,12 +423,15 @@ def _score_article(title: str, description: str) -> float:
     raw: float = 0.0
 
     for kw in POSITIVE_KEYWORDS:
-        if kw in text:
+        if _keyword_present(kw, text):
             raw += KEYWORD_WEIGHT
 
     for kw in NEGATIVE_KEYWORDS:
-        if kw in text:
+        if _keyword_present(kw, text):
             raw -= KEYWORD_WEIGHT
+
+    if _sebi_action_present(text):
+        raw -= KEYWORD_WEIGHT
 
     return max(-1.0, min(1.0, round(raw, 4)))
 
@@ -323,8 +485,12 @@ def _detect_red_flags(texts: list[str]) -> list[str]:
     found: set[str] = set()
     for text in texts:
         lower = text.lower()
+        if _sebi_action_present(lower):
+            found.add("sebi regulatory action")
+        if _resignation_present(lower):
+            found.add("executive resignation")
         for phrase in RED_FLAG_PHRASES:
-            if phrase in lower and phrase not in found:
+            if phrase not in found and _keyword_present(phrase, lower):
                 found.add(phrase)
     return [f"{p} mentioned in news coverage" for p in sorted(found)]
 

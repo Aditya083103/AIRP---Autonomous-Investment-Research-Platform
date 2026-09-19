@@ -297,11 +297,15 @@ class StatePersistenceService:
 
         try:
             raw: Any = json.loads(snapshot_str)
-            assert isinstance(raw, dict), "snapshot must be a JSON object"
+            # Explicit if/raise rather than `assert` (T-095 audit fix) --
+            # `assert` is stripped under `python -O`, which would let a
+            # malformed (non-dict) snapshot silently fall through.
+            if not isinstance(raw, dict):
+                raise ValueError("snapshot must be a JSON object")
             from typing import cast as typing_cast
 
             state: InvestmentState = typing_cast(InvestmentState, raw)
-        except (json.JSONDecodeError, AssertionError) as exc:
+        except (json.JSONDecodeError, ValueError) as exc:
             logger.error(
                 "state_persistence.load: invalid snapshot JSON for " "job_id=%s: %s",
                 job_id,

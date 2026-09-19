@@ -293,10 +293,14 @@ async def create_chat_session(
     """
     if session_type == "memo_scoped":
         # analysis_id is guaranteed non-None here by the request
-        # schema's own model_validator -- this assertion documents
-        # that invariant for readers of this function in isolation
-        # (e.g. from a future non-HTTP caller) without re-deriving it.
-        assert analysis_id is not None, "memo_scoped session requires analysis_id"
+        # schema's own model_validator -- this check documents that
+        # invariant for readers of this function in isolation (e.g. from
+        # a future non-HTTP caller) without re-deriving it. Uses an
+        # explicit if/raise rather than `assert` (T-095 audit fix) so
+        # the guard survives even if this ever runs under `python -O`,
+        # which strips `assert` statements.
+        if analysis_id is None:
+            raise ValueError("memo_scoped session requires analysis_id")
 
         status_result = await get_analysis_status(
             session, job_id=analysis_id, user_id=user_id

@@ -55,8 +55,18 @@ logger = logging.getLogger(__name__)
 
 # Approximate USD → INR conversion rate used when yFinance reports in USD.
 # This is intentionally a constant — financial ratios and trend analysis
-# don't require live FX rates; consistency across years matters more.
-USD_TO_INR: float = 83.5
+# don't require live FX rates; consistency across years matters more
+# than tracking the spot rate day to day.
+#
+# T-095 audit fix: this was last set to 83.5, which had drifted well
+# below the real rate (USD/INR has since moved into the 90s). A stale
+# rate here understates INR-converted figures for the (rare) USD-
+# reporting tickers this applies to -- most tickers used on this
+# platform are .NS/.BO and already report natively in INR, so this
+# constant only matters for USD-denominated ADRs. Update the value
+# below every few months against a live quote (e.g. search "USD to
+# INR"); this constant deliberately does NOT auto-update at runtime.
+USD_TO_INR: float = 96.5  # last checked 2026-09-18 -- review periodically
 
 # yFinance reports raw numbers (e.g. 1_000_000_000 for 1 billion).
 # Indian financial reports use Crores (1 Crore = 10 million = 1e7).

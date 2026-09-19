@@ -788,8 +788,13 @@ class TestStateFromJson:
             state_from_json("not valid json {{{")
 
     def test_from_json_non_object_raises(self) -> None:
-        """JSON array instead of object must raise AssertionError."""
-        with pytest.raises(AssertionError):
+        """JSON array instead of object must raise ValueError.
+
+        T-095 audit fix: state_from_json used to raise AssertionError via
+        a bare `assert`, which is silently stripped when Python runs
+        under `-O`. It now raises ValueError explicitly instead.
+        """
+        with pytest.raises(ValueError):
             state_from_json("[1, 2, 3]")
 
     def test_from_json_empty_object(self) -> None:

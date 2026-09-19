@@ -212,13 +212,18 @@ class _SigAlrmTimeout:
 
     def __init__(self, seconds: float, node_name: str) -> None:
         # Guard: seconds must be finite here -- _make_timeout_ctx enforces this.
-        # The assertion is a belt-and-suspenders safety net so that if someone
+        # This is a belt-and-suspenders safety net so that if someone
         # calls _SigAlrmTimeout directly with an infinite value the error
-        # message is clear rather than an opaque OverflowError.
-        assert math.isfinite(seconds) and seconds > 0, (
-            f"_SigAlrmTimeout requires a finite positive timeout, got {seconds!r}. "
-            "Use _NoOpTimeout when the timeout is infinite."
-        )
+        # message is clear rather than an opaque OverflowError. Explicit
+        # if/raise rather than `assert` (T-095 audit fix) -- `assert` is
+        # stripped under `python -O`, which would let an infinite/
+        # non-positive timeout reach `int(seconds)` below and fail with
+        # exactly the opaque OverflowError this guard exists to avoid.
+        if not (math.isfinite(seconds) and seconds > 0):
+            raise ValueError(
+                f"_SigAlrmTimeout requires a finite positive timeout, got {seconds!r}. "
+                "Use _NoOpTimeout when the timeout is infinite."
+            )
         self._seconds: int = max(1, int(seconds))
         self._node_name: str = node_name
         self._start: float = 0.0
@@ -280,11 +285,14 @@ class _ThreadTimeout:
     """
 
     def __init__(self, seconds: float, node_name: str) -> None:
-        # Guard: seconds must be finite here.
-        assert math.isfinite(seconds) and seconds > 0, (
-            f"_ThreadTimeout requires a finite positive timeout, got {seconds!r}. "
-            "Use _NoOpTimeout when the timeout is infinite."
-        )
+        # Guard: seconds must be finite here. Explicit if/raise rather
+        # than `assert` (T-095 audit fix) -- `assert` is stripped under
+        # `python -O`, which would let this guard silently vanish.
+        if not (math.isfinite(seconds) and seconds > 0):
+            raise ValueError(
+                f"_ThreadTimeout requires a finite positive timeout, got {seconds!r}. "
+                "Use _NoOpTimeout when the timeout is infinite."
+            )
         self._seconds: float = seconds
         self._node_name: str = node_name
         self._start: float = 0.0

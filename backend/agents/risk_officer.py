@@ -140,49 +140,179 @@ _FRAUD_KEYWORDS: list[str] = [
 ]
 
 # Keywords indicating regulatory exposure
+# T-095 audit fix: bare "sebi", "notice", "fine", and "ban" were removed --
+# "sebi" alone is just the regulator's name (fires on routine, entirely
+# neutral disclosure text like "as per SEBI regulations"); "notice" is
+# ordinary English ("investors should take notice of strong growth");
+# "fine" is an ambiguous adjective ("a fine quarter"); and, because the
+# matching below used plain substring containment (fixed in this same
+# patch -- see _contains_keyword), bare "ban" matched inside "Bangalore"
+# and "banking". Each is replaced with the specific multi-word phrase
+# that actually carries the regulatory-risk meaning; "nclt petition" and
+# "gst notice" already were multi-word and are unaffected.
+# T-095 follow-up: the six "sebi <action>" phrases previously here were
+# exact-adjacent literals ("sebi probe", "sebi notice", ...) -- too rigid
+# for real research text ("SEBI has issued a notice to the company" isn't
+# caught by the literal substring "sebi notice"). Replaced with the
+# _sebi_action_present() proximity check in _extract_sentinel_flags below.
 _REGULATORY_KEYWORDS: list[str] = [
-    "sebi",
     "investigation",
     "probe",
-    "notice",
-    "fine",
-    "penalty",
-    "ban",
+    "regulatory notice",
+    "show cause notice",
+    "monetary penalty",
+    "trading ban",
+    "market ban",
     "debarment",
-    "enforcement",
-    "nclt",
+    "enforcement action",
     "nclt petition",
-    "cci",
+    "cci probe",
     "rbi directive",
     "ed raid",
     "cbi",
-    "it department",
+    "it department raid",
     "gst notice",
     "contempt",
     "arrest",
 ]
 
 # Keywords indicating governance / management quality problems
+#
+# T-095 audit fix: "related party" and "minority shareholders" are
+# standard, routine disclosure terminology -- every annual report has a
+# "related party transactions" section and discusses minority
+# shareholder protections, regardless of whether anything is wrong.
+# "preferential allotment" is a normal, often perfectly healthy capital-
+# raising mechanism, not inherently a governance concern. Bare "pledged"
+# is replaced with the specific "shares pledged" / "stock pledged" so it
+# doesn't fire on unrelated uses of "pledged" (e.g. "pledged support for
+# the merger"). Each is now scoped to the phrase that actually signals a
+# problem.
+# T-095 follow-up: "ceo resign" / "cfo resign" / "director resign" were
+# exact-adjacent literals, too rigid for real phrasing ("the CFO is
+# expected to resign next quarter"). Replaced with the
+# _resignation_present() proximity check in _extract_sentinel_flags below.
 _GOVERNANCE_KEYWORDS: list[str] = [
     "promoter pledge",
-    "pledged",
-    "related party",
+    "shares pledged",
+    "stock pledged",
+    "related party concerns",
+    "related party dispute",
     "tunnelling",
-    "minority shareholders",
+    "minority shareholder rights violation",
+    "oppression of minority shareholders",
     "audit qualification",
     "auditor change",
     "auditor resignation",
-    "ceo resign",
-    "cfo resign",
-    "director resign",
     "board reconstitution",
     "rights issue dilution",
-    "preferential allotment",
 ]
 
 # ---------------------------------------------------------------------------
 # Pure helpers: deterministic scoring
 # ---------------------------------------------------------------------------
+
+_WORD_BOUNDARY_PATTERN_CACHE: dict[str, re.Pattern[str]] = {}
+
+
+def _contains_keyword(keyword: str, text: str) -> bool:
+    """
+    True if ``keyword`` occurs in ``text`` as a whole word/phrase, not
+    merely as a substring of a longer, unrelated word.
+
+    T-095 audit fix: every keyword scan in this module previously used
+    plain Python `in` containment, e.g. `if kw in all_text`. That matches
+    "ban" inside "Bangalore" or "banking" -- a false positive that
+    previously counted as a real regulatory-risk signal. A regex
+    `\\b...\\b` word boundary still matches multi-word phrases (e.g.
+    "sebi probe") as a unit, since the boundary anchors on the phrase's
+    own first/last characters.
+    """
+    pattern = _WORD_BOUNDARY_PATTERN_CACHE.get(keyword)
+    if pattern is None:
+        pattern = re.compile(r"\b" + re.escape(keyword) + r"\b")
+        _WORD_BOUNDARY_PATTERN_CACHE[keyword] = pattern
+    return pattern.search(text) is not None
+
+
+# ---------------------------------------------------------------------------
+# Proximity matching (T-095 follow-up)
+# ---------------------------------------------------------------------------
+#
+# Exact adjacent multi-word phrases (e.g. "sebi notice") are too rigid for
+# real research text, which rarely places the two words directly next to
+# each other ("SEBI has issued a notice", "the CFO is expected to resign").
+# A proximity match -- an anchor word (e.g. "sebi") within a small window
+# of a trigger word (e.g. "notice"), both whole words -- keeps the
+# original word-boundary fix's guarantee (a bare anchor with no nearby
+# trigger still never fires) while catching natural phrasing of a genuine
+# event.
+_TOKEN_PATTERN: re.Pattern[str] = re.compile(r"\w+")
+
+
+def _tokenize(text: str) -> list[str]:
+    return _TOKEN_PATTERN.findall(text.lower())
+
+
+def _anchor_near_trigger(
+    anchors: frozenset[str], triggers: frozenset[str], text: str, window: int
+) -> bool:
+    """True if any ``anchors`` word is within ``window`` words of any
+    ``triggers`` word in ``text`` (whole-word matches only)."""
+    tokens = _tokenize(text)
+    anchor_idxs = [i for i, t in enumerate(tokens) if t in anchors]
+    if not anchor_idxs:
+        return False
+    trigger_idxs = [i for i, t in enumerate(tokens) if t in triggers]
+    if not trigger_idxs:
+        return False
+    return any(abs(a - t) <= window for a in anchor_idxs for t in trigger_idxs)
+
+
+_SEBI_ANCHORS: frozenset[str] = frozenset({"sebi"})
+_SEBI_TRIGGERS: frozenset[str] = frozenset(
+    {
+        "probe",
+        "notice",
+        "penalty",
+        "fine",
+        "fined",
+        "ban",
+        "banned",
+        "action",
+        "order",
+        "investigating",
+        "investigation",
+        "debar",
+        "debarred",
+    }
+)
+_SEBI_PROXIMITY_WINDOW = 8
+
+_RESIGNATION_ANCHORS: frozenset[str] = frozenset(
+    {"ceo", "md", "cfo", "director", "chairman", "chairperson"}
+)
+_RESIGNATION_TRIGGERS: frozenset[str] = frozenset(
+    {"resign", "resigns", "resigned", "resignation", "quit", "quits", "quitting"}
+)
+_RESIGNATION_PROXIMITY_WINDOW = 4
+
+
+def _sebi_action_present(text: str) -> bool:
+    """True if 'sebi' appears near a regulatory-action trigger word."""
+    return _anchor_near_trigger(
+        _SEBI_ANCHORS, _SEBI_TRIGGERS, text, _SEBI_PROXIMITY_WINDOW
+    )
+
+
+def _resignation_present(text: str) -> bool:
+    """True if a leadership role appears near a resignation trigger word."""
+    return _anchor_near_trigger(
+        _RESIGNATION_ANCHORS,
+        _RESIGNATION_TRIGGERS,
+        text,
+        _RESIGNATION_PROXIMITY_WINDOW,
+    )
 
 
 def _collect_all_text(
@@ -240,11 +370,15 @@ def _extract_sentinel_flags(
     sentiment_red_flags: list[str] = sentiment.get("red_flags", []) or []
     for flag in sentiment_red_flags:
         flag_lower = flag.lower()
-        if any(kw in flag_lower for kw in _FRAUD_KEYWORDS):
+        if any(_contains_keyword(kw, flag_lower) for kw in _FRAUD_KEYWORDS):
             fraud_indicators.append(f"News sentiment red flag: {flag}")
-        elif any(kw in flag_lower for kw in _REGULATORY_KEYWORDS):
+        elif any(
+            _contains_keyword(kw, flag_lower) for kw in _REGULATORY_KEYWORDS
+        ) or _sebi_action_present(flag_lower):
             regulatory_risks.append(f"News sentiment red flag: {flag}")
-        elif any(kw in flag_lower for kw in _GOVERNANCE_KEYWORDS):
+        elif any(
+            _contains_keyword(kw, flag_lower) for kw in _GOVERNANCE_KEYWORDS
+        ) or _resignation_present(flag_lower):
             governance_flags.append(f"News sentiment red flag: {flag}")
         else:
             # Generic red flag -- classify as governance by default
@@ -252,24 +386,46 @@ def _extract_sentinel_flags(
 
     # Step 2: Keyword scan on full research text
     for kw in _FRAUD_KEYWORDS:
-        if kw in all_text and not any(kw in f.lower() for f in fraud_indicators):
+        if _contains_keyword(kw, all_text) and not any(
+            _contains_keyword(kw, f.lower()) for f in fraud_indicators
+        ):
             fraud_indicators.append(
                 f"Keyword '{kw}' detected in research text -- manual review required"
             )
 
     for kw in _REGULATORY_KEYWORDS:
-        if kw in all_text and not any(kw in r.lower() for r in regulatory_risks):
+        if _contains_keyword(kw, all_text) and not any(
+            _contains_keyword(kw, r.lower()) for r in regulatory_risks
+        ):
             regulatory_risks.append(
                 f"Keyword '{kw}' detected in research text -- "
                 "potential regulatory exposure"
             )
 
+    if _sebi_action_present(all_text) and not any(
+        _contains_keyword("sebi", r.lower()) for r in regulatory_risks
+    ):
+        regulatory_risks.append(
+            "Keyword 'sebi action' detected in research text -- "
+            "potential regulatory exposure"
+        )
+
     for kw in _GOVERNANCE_KEYWORDS:
-        if kw in all_text and not any(kw in g.lower() for g in governance_flags):
+        if _contains_keyword(kw, all_text) and not any(
+            _contains_keyword(kw, g.lower()) for g in governance_flags
+        ):
             governance_flags.append(
                 f"Keyword '{kw}' detected in research text -- "
                 "governance concern flagged"
             )
+
+    if _resignation_present(all_text) and not any(
+        _contains_keyword("resign", g.lower()) for g in governance_flags
+    ):
+        governance_flags.append(
+            "Keyword 'executive resignation' detected in research text -- "
+            "governance concern flagged"
+        )
 
     return {
         "fraud_indicators": fraud_indicators[:5],  # cap at 5 per category
@@ -751,11 +907,24 @@ def _run_risk_analysis_core(
     )
 
     # Critical = any fraud indicator OR any flag with a regulatory keyword
+    #
+    # Uses the same word-boundary _contains_keyword helper as the rest of
+    # this module's sentinel detection (T-095 follow-up) -- this call site
+    # was still using plain `kw in flag_lower` substring containment, the
+    # exact pre-patch pattern the T-095 fix eliminated everywhere else.
+    # Also checks _sebi_action_present() directly since "sebi" itself is no
+    # longer a literal entry in _REGULATORY_KEYWORDS (replaced by the
+    # proximity match) -- a genuine SEBI regulatory action must still be
+    # promoted to critical.
     critical_flags: list[str] = []
     for flag in all_flags:
         flag_lower: str = flag.lower()
-        is_fraud: bool = any(kw in flag_lower for kw in _FRAUD_KEYWORDS)
-        is_high_reg: bool = any(kw in flag_lower for kw in _REGULATORY_KEYWORDS)
+        is_fraud: bool = any(
+            _contains_keyword(kw, flag_lower) for kw in _FRAUD_KEYWORDS
+        )
+        is_high_reg: bool = any(
+            _contains_keyword(kw, flag_lower) for kw in _REGULATORY_KEYWORDS
+        ) or _sebi_action_present(flag_lower)
         if is_fraud or is_high_reg:
             critical_flags.append(flag)
 

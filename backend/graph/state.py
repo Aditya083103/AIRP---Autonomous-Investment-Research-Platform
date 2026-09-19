@@ -424,7 +424,11 @@ def state_from_json(json_str: str) -> InvestmentState:
     from typing import cast as typing_cast
 
     raw: Any = json.loads(json_str)
-    assert isinstance(raw, dict), "state_from_json: expected a JSON object"
+    # Explicit if/raise rather than `assert` (T-095 audit fix) -- `assert`
+    # is stripped under `python -O`, which would let a non-object JSON
+    # payload (e.g. a bare list) silently be cast to InvestmentState.
+    if not isinstance(raw, dict):
+        raise ValueError("state_from_json: expected a JSON object")
     return typing_cast(InvestmentState, raw)
 
 

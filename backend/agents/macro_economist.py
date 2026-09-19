@@ -103,6 +103,18 @@ CPI_ELEVATED_THRESHOLD: float = 6.0  # 4-6 -> stable; above -> rising
 GDP_GROWTH_STRONG: float = 6.5  # India-specific: strong growth benchmark
 GDP_GROWTH_WEAK: float = 5.0  # below this -> weak growth signal
 
+# T-095 audit fix: _classify_macro_environment previously defaulted a
+# missing GDP figure straight to GDP_GROWTH_STRONG -- so a data gap on
+# GDP alone was silently treated as "growth is exactly at the strong
+# threshold" (gdp_strong=True), a bullish-leaning fabrication rather
+# than a neutral "unknown". Every sibling variable already defaults to a
+# genuinely neutral midpoint (`inflation` defaults to 5.0, squarely
+# between CPI_LOW_THRESHOLD and CPI_ELEVATED_THRESHOLD); this constant
+# gives GDP the same treatment -- the midpoint between the weak and
+# strong bands -- so missing GDP data no longer manufactures a
+# favourable macro read it hasn't earned.
+GDP_GROWTH_NEUTRAL_DEFAULT: float = (GDP_GROWTH_WEAK + GDP_GROWTH_STRONG) / 2
+
 # ChromaDB semantic search result count
 CHROMA_N_RESULTS: int = 5
 
@@ -799,7 +811,7 @@ def _classify_macro_environment(
     """
     rate = repo_rate if repo_rate is not None else RATE_NEUTRAL_MIDPOINT
     inflation = cpi if cpi is not None else 5.0
-    growth = gdp if gdp is not None else GDP_GROWTH_STRONG
+    growth = gdp if gdp is not None else GDP_GROWTH_NEUTRAL_DEFAULT
 
     gdp_strong = growth >= GDP_GROWTH_STRONG
     inflation_benign = inflation < CPI_ELEVATED_THRESHOLD

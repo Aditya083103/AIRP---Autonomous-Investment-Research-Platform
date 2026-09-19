@@ -336,41 +336,72 @@ def _score_bear_conviction(
     Higher score = Contrarian is more confident the consensus is wrong.
 
     Scoring contributions:
-      +2  if fundamental score >= 8 (high-quality stocks are over-loved)
-      +1  if technical signal is BUY with strength >= 6 (momentum chase risk)
+      "Overheated momentum" cluster, capped at +2 COMBINED (see T-095
+      audit fix note below):
+        - fundamental score >= 8 (high-quality stocks are over-loved)
+        - technical signal is BUY with strength >= 6 (momentum chase risk)
+        - RSI > 65 (overbought)
+        - price at >= 90% of 52-week high (near-top risk)
+      Uncapped (genuine risk-flavoured signals, not success-correlated):
       +1  if sentiment_score > 0.3 (peak sentiment = peak positioning)
       +1  if risk_score <= 3 (low risk score = complacency)
       +1  if >= 5 counter_arguments generated (many angles of attack)
-      +1  if RSI > 65 (overbought)
-      +1  if price at >= 90% of 52-week high (near-top risk)
       +1  if D/E < 0.1 (growth exhaustion signal)
       +1  if D/E > 1.0 (leverage risk)
 
     Clipped to [1, 10].
+
+    T-095 audit fix: the four "overheated momentum" triggers above were
+    previously uncapped (+1 each, up to +4) and every one of them is a
+    trait a genuinely strong, well-performing company has almost by
+    definition -- a high fundamental score, real technical momentum,
+    an overbought RSI (a normal byproduct of a sustained uptrend), and
+    trading near its 52-week high. Combined with the base of 1, those
+    four alone could reach bear_conviction=5-7 from nothing but the
+    stock being objectively good, before a single genuinely risk-based
+    signal (complacent risk score, leverage extremes, a pile of real
+    counter-arguments) was even considered. Since bear_conviction>=7
+    both forces a fixed penalty in the Portfolio Manager's weighted
+    verdict score AND triggers a second debate round (which costs the
+    verdict a further conviction point), this meant the platform's
+    strongest-looking candidates were structurally the ones most likely
+    to get mechanically talked out of a BUY -- for being strong, not for
+    any specific flaw the Contrarian actually found. Capping this
+    cluster at +2 preserves the Contrarian's ability to flag a
+    genuinely overheated setup (it still needs at least two of the four
+    signals to contribute anything close to its old full weight) while
+    requiring the REST of the score -- sentiment euphoria, complacent
+    risk, leverage extremes, or a real pile of counter-arguments -- to
+    do the rest of the work before a stock's own strength alone can
+    manufacture "high" bear conviction.
     """
     conviction: int = 1  # base: mild scepticism
+
+    momentum_cluster: int = 0
 
     # Fundamental: high score means over-loved
     fund_score_raw: Any = fundamental.get("score")
     if fund_score_raw is not None and int(fund_score_raw) >= 8:
-        conviction += 2
+        momentum_cluster += 1
 
     # Technical: BUY signal = momentum chase risk
     tech_signal: str = str(technical.get("signal") or "HOLD")
     tech_strength_raw: Any = technical.get("signal_strength")
     tech_strength: int = int(tech_strength_raw) if tech_strength_raw is not None else 5
     if tech_signal == "BUY" and tech_strength >= 6:
-        conviction += 1
+        momentum_cluster += 1
 
     # RSI overbought
     rsi_raw: Any = technical.get("rsi_14")
     if rsi_raw is not None and float(rsi_raw) > 65:
-        conviction += 1
+        momentum_cluster += 1
 
     # Near 52-week high
     pvh_raw: Any = technical.get("price_vs_52w_high_pct")
     if pvh_raw is not None and float(pvh_raw) >= 90:
-        conviction += 1
+        momentum_cluster += 1
+
+    conviction += min(2, momentum_cluster)
 
     # Sentiment: high positive = peak positioning
     sent_raw: Any = sentiment.get("sentiment_score")
