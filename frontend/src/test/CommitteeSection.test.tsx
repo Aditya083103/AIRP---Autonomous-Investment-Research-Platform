@@ -1,8 +1,17 @@
 // frontend/src/test/CommitteeSection.test.tsx
-// Tests for CommitteeSection (T-055): all 8 agents render with their
-// seat number, and the three round headings (parallel research, debate,
+// Tests for CommitteeSection: all 8 agents render with their seat
+// number, and the three round headings (parallel research, debate,
 // final call) are present -- guards against an agent silently dropping
 // off the committee during a future edit.
+//
+// Landing-page redesign: each round's ordinal now renders as its own
+// Badge element next to a plain-text title (see CommitteeSection.tsx's
+// own docstring), rather than one "Round N — Title" string -- asserted
+// here as two separate getByText checks per round rather than one
+// regex spanning both, since testing-library's getNodeText only reads
+// an element's own direct text children, not a full recursive
+// textContent, so a match spanning a nested Badge and its sibling text
+// would never actually be found by a single query.
 
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
@@ -30,8 +39,11 @@ describe("CommitteeSection", () => {
 
   it("renders the three execution rounds", () => {
     render(<CommitteeSection />);
-    expect(screen.getByText(/round 1.*parallel research/i)).toBeInTheDocument();
-    expect(screen.getByText(/round 2.*debate/i)).toBeInTheDocument();
+    expect(screen.getByText("Round 1")).toBeInTheDocument();
+    expect(screen.getByText("Parallel research")).toBeInTheDocument();
+    expect(screen.getByText("Round 2")).toBeInTheDocument();
+    expect(screen.getByText(/debate & challenge/i)).toBeInTheDocument();
+    expect(screen.getByText("Round 3")).toBeInTheDocument();
     expect(screen.getByText(/final call/i)).toBeInTheDocument();
   });
 

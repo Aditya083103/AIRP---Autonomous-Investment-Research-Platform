@@ -78,8 +78,7 @@ export function DashboardPage(): JSX.Element {
 
   return (
     <div>
-      <p className="font-mono text-xs uppercase tracking-[0.2em] text-brand-300">Dashboard</p>
-      <h1 className="mt-2 font-display text-3xl font-semibold text-ink">
+      <h1 className="font-display text-3xl font-semibold text-ink">
         Welcome back, {user?.display_name ?? user?.email}.
       </h1>
       <p className="mt-2 text-sm text-muted">Your past analyses, newest first.</p>

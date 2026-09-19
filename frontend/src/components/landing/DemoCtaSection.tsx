@@ -1,8 +1,8 @@
 // frontend/src/components/landing/DemoCtaSection.tsx
-// Landing page (T-055) — the "live demo CTA" acceptance criterion. A
-// dedicated, high-contrast band separate from the hero's CTA so the CTA
-// still reads as an obvious next step for someone who scrolled past the
-// hero to read the committee and how-it-works sections first.
+// Landing page — the "live demo CTA" acceptance criterion. A dedicated,
+// high-contrast band separate from the hero's CTA so the CTA still
+// reads as an obvious next step for someone who scrolled past the hero
+// to read the committee and how-it-works sections first.
 //
 // B10: the whole band fades/rises in via Reveal on mount.
 //
@@ -16,6 +16,12 @@
 // one band read as "the important one": still visually distinct from
 // the plain surface cards around it, still high-contrast, just achieved
 // with an accent glow instead of an inverted fill.
+//
+// Card hierarchy (landing-page redesign): this band is this section's
+// own primary anchor, so it drops `shadow-card` and relies on its
+// border + gradient glow alone -- see HeroSection's example-output card
+// and AccuracyPreviewSection's card for the same "primary = border, no
+// shadow" treatment.
 
 import { Link } from "react-router-dom";
 
@@ -26,11 +32,8 @@ export function DemoCtaSection(): JSX.Element {
   return (
     <section className="py-16">
       <Reveal>
-        <div className="rounded-card border border-brand-500/30 bg-gradient-to-br from-brand-900/50 via-surface to-surface px-8 py-12 text-center shadow-card sm:px-16">
-          <p className="font-mono text-xs uppercase tracking-[0.2em] text-brand-300">
-            Try it yourself
-          </p>
-          <h2 className="mx-auto mt-3 max-w-xl font-display text-3xl font-semibold text-ink">
+        <div className="rounded-card border border-brand-500/30 bg-gradient-to-br from-brand-900/50 via-surface to-surface px-8 py-12 text-center sm:px-16">
+          <h2 className="mx-auto max-w-xl font-display text-3xl font-semibold text-ink">
             Pick an Indian equity. Watch the committee work.
           </h2>
           <p className="mx-auto mt-4 max-w-lg text-sm leading-relaxed text-muted">

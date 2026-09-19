@@ -143,10 +143,7 @@ export function ComponentsPreviewPage(): JSX.Element {
   return (
     <div className="mx-auto max-w-4xl">
       <header>
-        <p className="font-mono text-xs uppercase tracking-[0.2em] text-brand-300">Design system</p>
-        <h1 className="mt-2 font-display text-3xl font-semibold text-ink">
-          AIRP component preview
-        </h1>
+        <h1 className="font-display text-3xl font-semibold text-ink">AIRP component preview</h1>
         <p className="mt-2 max-w-memo text-sm text-muted">
           Every T-054 primitive, every variant, in one place. Not part of the product navigation --
           visit directly at <code className="font-mono text-xs">/dev/components</code>.

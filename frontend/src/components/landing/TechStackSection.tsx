@@ -1,5 +1,5 @@
 // frontend/src/components/landing/TechStackSection.tsx
-// Landing page (T-055) — the "tech stack logos" acceptance criterion.
+// Landing page — the "tech stack logos" acceptance criterion.
 // Rendered as plain-text wordmark chips rather than fetched brand-logo
 // artwork: no third-party logo assets ship with this component, and a
 // monospace chip row reads as "receipts" (the actual tools used) rather
@@ -34,9 +34,7 @@ const STACK: readonly string[] = [
 export function TechStackSection(): JSX.Element {
   return (
     <section className="py-16">
-      <p className="text-center font-mono text-xs uppercase tracking-[0.2em] text-muted">
-        Built with
-      </p>
+      <p className="text-center text-sm font-medium text-muted">Built with</p>
       <ul className="mt-6 flex flex-wrap items-center justify-center gap-3">
         {STACK.map((tech, index) => (
           <li key={tech}>

@@ -35,6 +35,7 @@ import { ChatMessageBubble } from "@/components/chat/ChatMessageBubble";
 import { TypingIndicator } from "@/components/progress/TypingIndicator";
 import { Button, Spinner } from "@/components/ui";
 import { useChatWidget } from "@/hooks/useChatWidget";
+import { OPEN_CHAT_WIDGET_EVENT } from "@/lib/chat/chatWidgetBus";
 import { cn } from "@/lib/cn";
 
 const SCOPE_LABEL: Record<"memo_scoped" | "portfolio_wide", string> = {
@@ -162,6 +163,21 @@ export function ChatWidget({ enabled = true }: ChatWidgetProps): JSX.Element | n
     clearPendingAnalysisJobId();
     navigate(`/analysis/${pendingAnalysisJobId}/result`);
   }, [pendingAnalysisJobId, clearPendingAnalysisJobId, navigate]);
+
+  // (landing-page redesign) AssistantPreviewSection's "Try the
+  // assistant" CTA has no direct handle on this component's isolated
+  // `isOpen` state -- it dispatches OPEN_CHAT_WIDGET_EVENT instead (see
+  // chatWidgetBus.ts) and this is the one place that listens for it.
+  const { isOpen, toggle } = widget;
+  useEffect(() => {
+    function handleOpenRequest(): void {
+      if (!isOpen) {
+        toggle();
+      }
+    }
+    window.addEventListener(OPEN_CHAT_WIDGET_EVENT, handleOpenRequest);
+    return () => window.removeEventListener(OPEN_CHAT_WIDGET_EVENT, handleOpenRequest);
+  }, [isOpen, toggle]);
 
   if (!enabled) {
     return null;

@@ -87,6 +87,20 @@ const config: Config = {
           hold: "#F59E0B",
           sell: "#EF4444",
         },
+        // Secondary accent (landing-page redesign): a muted teal/cyan used
+        // sparingly for secondary CTAs, links, and hover/focus states, and
+        // to anchor the Assistant section as a distinct "conversational"
+        // moment from the primary violet-accented analytical flow.
+        // Deliberately NOT reused from `verdict` or `brand` -- it must
+        // never be mistakable for a BUY/HOLD/SELL call or the primary
+        // brand accent.
+        teal: {
+          300: "#5EEAD4",
+          400: "#2DD4BF",
+          500: "#14B8A6",
+          600: "#0D9488",
+          700: "#0F766E",
+        },
       },
       fontFamily: {
         sans: ["Inter", "ui-sans-serif", "system-ui", "sans-serif"],

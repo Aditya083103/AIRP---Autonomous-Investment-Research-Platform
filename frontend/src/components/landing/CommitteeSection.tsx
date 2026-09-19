@@ -1,5 +1,5 @@
 // frontend/src/components/landing/CommitteeSection.tsx
-// Landing page (T-055) — the "8 agents diagram" acceptance criterion.
+// Landing page — the "8 agents diagram" acceptance criterion.
 // Deliberately mirrors docs/AIRP_Architecture.drawio's hue family rather
 // than inventing a fresh visual language: research agents keep the
 // diagram's blue, the debate/challenge agents keep its red, and the
@@ -23,10 +23,31 @@
 // TiltCard (a subtle pointer-tracked 3D tilt on hover), the same
 // micro-interaction treatment given to every other card grid this unit
 // touches.
+//
+// Landing-page redesign: each round's ordinal ("Round 1"/"Round 2"/
+// "Round 3") now renders as its own Badge next to the round's plain-
+// English title, instead of being baked into the title string with an
+// em dash ("Round 1 — Parallel research") -- the numbering is still
+// real information (it genuinely is the LangGraph execution order), it
+// is just no longer expressed as decorative tracked-out text. A
+// RoundConnector (a short vertical line + arrow) between each round
+// makes that same execution order visible as a flow, foreshadowing the
+// real LangGraph state machine this diagram is a simplified stand-in
+// for, rather than leaving the sequence to be inferred purely from
+// vertical stacking order.
+//
+// Card hierarchy: AgentCard is this page's "secondary" card type (a
+// repeated grid item, not the section's own anchor) -- it drops the
+// generic border every Card renders by default (via `border-transparent`,
+// see AgentCard below) and keeps only the shadow plus its own
+// round-coloured `border-t-4` accent stripe, which stays fully opaque
+// because it is set as an inline style on that one side specifically.
+
+import { Fragment } from "react";
 
 import { Reveal } from "@/components/motion/Reveal";
 import { TiltCard } from "@/components/three/TiltCard";
-import { Card } from "@/components/ui";
+import { Badge, Card } from "@/components/ui";
 import { cn } from "@/lib/cn";
 
 interface CommitteeAgent {
@@ -41,6 +62,8 @@ interface CommitteeAgent {
 
 interface CommitteeRound {
   readonly id: string;
+  /** Rendered as its own Badge -- see this file's own "Landing-page redesign" note above. */
+  readonly roundLabel: string;
   readonly title: string;
   readonly description: string;
   readonly agents: readonly CommitteeAgent[];
@@ -49,7 +72,8 @@ interface CommitteeRound {
 const ROUNDS: readonly CommitteeRound[] = [
   {
     id: "research",
-    title: "Round 1 — Parallel research",
+    roundLabel: "Round 1",
+    title: "Parallel research",
     description: "Four analysts gather evidence at the same time; none sees the others yet.",
     agents: [
       {
@@ -89,7 +113,8 @@ const ROUNDS: readonly CommitteeRound[] = [
   },
   {
     id: "debate",
-    title: "Round 2 — Debate & challenge",
+    roundLabel: "Round 2",
+    title: "Debate & challenge",
     description: "Each agent reads every other agent's output before writing its own.",
     agents: [
       {
@@ -121,6 +146,7 @@ const ROUNDS: readonly CommitteeRound[] = [
   },
   {
     id: "decision",
+    roundLabel: "Round 3",
     title: "Final call",
     description: "No single agent has unchecked authority — the Portfolio Manager reads it all.",
     agents: [
@@ -146,7 +172,7 @@ function AgentCard({ agent }: { agent: CommitteeAgent }): JSX.Element {
   return (
     <Card
       noPadding
-      className="flex h-full flex-col overflow-hidden border-t-4 p-5"
+      className="flex h-full flex-col overflow-hidden border-transparent border-t-4 p-5"
       style={{ borderTopColor: agent.accent }}
     >
       <p className="font-mono text-xs text-muted">Seat {agent.seat}</p>
@@ -166,13 +192,31 @@ function AgentCard({ agent }: { agent: CommitteeAgent }): JSX.Element {
   );
 }
 
+/** A short vertical line + arrow between two rounds -- makes the execution order visible as a flow. */
+function RoundConnector(): JSX.Element {
+  return (
+    <div aria-hidden="true" className="flex justify-center">
+      <svg width="20" height="28" viewBox="0 0 20 28" className="text-brand-400/60">
+        <line x1="10" y1="0" x2="10" y2="18" stroke="currentColor" strokeWidth="2" />
+        <path
+          d="M3 15 L10 24 L17 15"
+          stroke="currentColor"
+          strokeWidth="2"
+          fill="none"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    </div>
+  );
+}
+
 /** The 8-agent committee diagram: three execution rounds, colour-coded to match the architecture doc. */
 export function CommitteeSection(): JSX.Element {
   return (
     <section id="committee" className="py-16">
       <div className="max-w-2xl">
-        <p className="font-mono text-xs uppercase tracking-[0.2em] text-brand-300">The committee</p>
-        <h2 className="mt-3 font-display text-3xl font-semibold text-ink">
+        <h2 className="font-display text-3xl font-semibold text-ink">
           Eight specialists, one shared state, zero unchecked authority.
         </h2>
         <p className="mt-4 text-base leading-relaxed text-muted">
@@ -181,25 +225,33 @@ export function CommitteeSection(): JSX.Element {
         </p>
       </div>
 
-      <div className="mt-10 space-y-10">
-        {ROUNDS.map((round) => (
-          <div key={round.id}>
-            <div className="flex flex-wrap items-baseline justify-between gap-2">
-              <h3 className="font-mono text-sm font-semibold uppercase tracking-wide text-ink">
-                {round.title}
-              </h3>
-              <p className="text-sm text-muted">{round.description}</p>
+      <div className="mt-10 flex flex-col gap-6">
+        {ROUNDS.map((round, index) => (
+          <Fragment key={round.id}>
+            <div>
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <h3 className="text-sm font-semibold text-ink">
+                  <Badge tone="brand" className="mr-2 align-middle">
+                    {round.roundLabel}
+                  </Badge>{" "}
+                  {round.title}
+                </h3>
+                <p className="text-sm text-muted">{round.description}</p>
+              </div>
+              <div
+                className={cn("mt-4 grid grid-cols-1 gap-5 sm:grid-cols-2", GRID_COLS[round.id])}
+              >
+                {round.agents.map((agent) => (
+                  <Reveal key={agent.seat} index={agent.seat - 1}>
+                    <TiltCard className="h-full">
+                      <AgentCard agent={agent} />
+                    </TiltCard>
+                  </Reveal>
+                ))}
+              </div>
             </div>
-            <div className={cn("mt-4 grid grid-cols-1 gap-5 sm:grid-cols-2", GRID_COLS[round.id])}>
-              {round.agents.map((agent) => (
-                <Reveal key={agent.seat} index={agent.seat - 1}>
-                  <TiltCard className="h-full">
-                    <AgentCard agent={agent} />
-                  </TiltCard>
-                </Reveal>
-              ))}
-            </div>
-          </div>
+            {index < ROUNDS.length - 1 ? <RoundConnector /> : null}
+          </Fragment>
         ))}
       </div>
     </section>

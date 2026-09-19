@@ -1,37 +1,26 @@
 // frontend/src/components/landing/HeroSection.tsx
-// Landing page (T-055) — the page's opening thesis. Pairs the product
-// promise (eight agents converge on one defensible verdict) with a static
+// Landing page — the page's opening thesis. Pairs the product promise
+// (eight agents converge on one defensible verdict) with a static
 // "example output" card instead of a generic stat block: a condensed
-// preview of what the live agent-progress viewer (T-059) and the final
-// verdict actually look like. Labelled "Example output" throughout so it
-// never reads as a live or real recommendation.
+// preview of what the live agent-progress viewer and the final verdict
+// actually look like. Labelled "Example output" throughout so it never
+// reads as a live or real recommendation.
 //
-// B10: a HeroScene (src/components/three/HeroScene.tsx) sits behind the
-// two-column grid as a decorative accent -- absolutely positioned with a
-// negative z-index and `pointer-events-none` so it never competes with
-// or blocks the readable content in front of it, and never affects this
-// section's layout/height (the grid's own flow is unaffected either
-// way, so there is no layout shift whether the real WebGL scene or its
-// static-gradient fallback ends up rendering). `overflow-hidden` on the
-// section clips the scene from bleeding into CommitteeSection below it.
-//
-// Bug fix: `hidden lg:block` on the scene wrapper. The two-column grid
-// below only splits into columns at `lg` (`lg:grid-cols-[1.1fr,0.9fr]`);
-// below that, the heading/paragraph and the example-output card stack
-// into ONE full-width column, but the scene was still absolutely
-// positioned at the same top-right spot at a fairly large size (only
-// its size, not its presence, was responsive) -- on any viewport from
-// roughly 400px up to just under 1024px (most tablets, and plenty of
-// real desktop windows) it rendered directly on top of the headline and
-// body paragraph, its bright specular highlight visibly washing out the
-// text sitting over it. Below `lg` there is no second grid column for
-// it to sit behind without colliding with the now-stacked text, so it
-// is hidden there entirely rather than degraded to a smaller overlap.
+// Landing-page redesign: the old HeroScene (a decorative gradient blob /
+// floating 3D shape with no connection to the actual product) is
+// replaced by HeroPipelinePreview -- a small, scripted animation of
+// AIRP's own research -> debate -> decision pipeline, stacked in-flow
+// above the example-output card rather than absolutely positioned
+// behind the headline. Being real (if illustrative) content now, not
+// decoration, it no longer needs the old component's `pointer-events-none`/
+// negative-z-index/`hidden lg:block` treatment -- it simply participates
+// in the two-column grid's normal flow and stacks with everything else
+// below `lg`.
 
 import { Link } from "react-router-dom";
 
+import { HeroPipelinePreview } from "@/components/landing/HeroPipelinePreview";
 import { Reveal } from "@/components/motion/Reveal";
-import { HeroScene } from "@/components/three/HeroScene";
 import { TiltCard } from "@/components/three/TiltCard";
 import { Badge } from "@/components/ui";
 
@@ -54,17 +43,11 @@ const EXAMPLE_AGENTS: readonly ExampleAgentDot[] = [
 /** The hero: headline, subhead, primary/secondary CTAs, and the example-output card. */
 export function HeroSection(): JSX.Element {
   return (
-    <section className="relative overflow-hidden py-4 lg:py-12">
-      <HeroScene className="pointer-events-none absolute -right-16 -top-24 -z-10 hidden h-[420px] w-[420px] lg:block lg:h-[560px] lg:w-[560px]" />
-
+    <section className="py-4 lg:py-12">
       <div className="grid items-center gap-12 lg:grid-cols-[1.1fr,0.9fr]">
         <Reveal>
           <div>
-            <p className="font-mono text-xs uppercase tracking-[0.2em] text-brand-300">
-              Investment committee, simulated
-            </p>
-
-            <h1 className="mt-4 font-display text-4xl font-semibold leading-tight text-ink sm:text-5xl">
+            <h1 className="font-display text-4xl font-semibold leading-tight text-ink sm:text-5xl">
               Eight agents research, debate, and decide — then hand you the memo.
             </h1>
 
@@ -93,50 +76,52 @@ export function HeroSection(): JSX.Element {
         </Reveal>
 
         <Reveal index={1}>
-          <TiltCard>
-            <div
-              aria-label="Example AIRP output"
-              className="rounded-card border border-line bg-surface p-6 shadow-card"
-            >
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="font-mono text-xs uppercase tracking-wide text-muted">
-                    Example output
-                  </p>
-                  <p className="mt-1 font-mono text-sm font-semibold text-ink">INFY.NS</p>
+          <div className="flex flex-col gap-6">
+            <HeroPipelinePreview />
+
+            <TiltCard>
+              <div
+                aria-label="Example AIRP output"
+                className="rounded-card border border-line bg-surface p-6"
+              >
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="font-mono text-xs text-muted">Example output</p>
+                    <p className="mt-1 font-mono text-sm font-semibold text-ink">INFY.NS</p>
+                  </div>
+                  <Badge tone="buy">BUY</Badge>
                 </div>
-                <Badge tone="buy">BUY</Badge>
+
+                <dl className="mt-4 flex items-baseline gap-2">
+                  <dt className="text-xs text-muted">Conviction score</dt>
+                  <dd className="font-mono text-sm font-semibold text-ink">8 / 10</dd>
+                </dl>
+
+                <ul className="mt-6 grid grid-cols-4 gap-3" aria-label="Committee status">
+                  {EXAMPLE_AGENTS.map((agent) => (
+                    <li key={agent.label} className="flex flex-col items-center gap-1.5">
+                      <span
+                        aria-label={`${agent.label}: ${agent.status === "done" ? "complete" : "in progress"}`}
+                        className={
+                          agent.status === "done"
+                            ? "h-2.5 w-2.5 rounded-full bg-verdict-buy"
+                            : "h-2.5 w-2.5 animate-pulse rounded-full bg-brand-500"
+                        }
+                      />
+                      <span className="text-center text-[10px] leading-tight text-muted">
+                        {agent.label}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+
+                <p className="mt-6 border-t border-line pt-4 text-xs leading-relaxed text-muted">
+                  Portfolio Manager is synthesising the debate. A real run finishes in under 90
+                  seconds.
+                </p>
               </div>
-
-              <dl className="mt-4 flex items-baseline gap-2">
-                <dt className="text-xs text-muted">Conviction score</dt>
-                <dd className="font-mono text-sm font-semibold text-ink">8 / 10</dd>
-              </dl>
-
-              <ul className="mt-6 grid grid-cols-4 gap-3" aria-label="Committee status">
-                {EXAMPLE_AGENTS.map((agent) => (
-                  <li key={agent.label} className="flex flex-col items-center gap-1.5">
-                    <span
-                      aria-label={`${agent.label}: ${agent.status === "done" ? "complete" : "in progress"}`}
-                      className={
-                        agent.status === "done"
-                          ? "h-2.5 w-2.5 rounded-full bg-verdict-buy"
-                          : "h-2.5 w-2.5 animate-pulse rounded-full bg-brand-500"
-                      }
-                    />
-                    <span className="text-center text-[10px] leading-tight text-muted">
-                      {agent.label}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-
-              <p className="mt-6 border-t border-line pt-4 text-xs leading-relaxed text-muted">
-                Portfolio Manager is synthesising the debate. A real run finishes in under 90
-                seconds.
-              </p>
-            </div>
-          </TiltCard>
+            </TiltCard>
+          </div>
         </Reveal>
       </div>
     </section>

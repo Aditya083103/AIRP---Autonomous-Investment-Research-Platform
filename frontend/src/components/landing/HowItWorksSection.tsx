@@ -1,5 +1,5 @@
 // frontend/src/components/landing/HowItWorksSection.tsx
-// Landing page (T-055) — the "how-it-works steps" acceptance criterion.
+// Landing page — the "how-it-works steps" acceptance criterion.
 // Numbered 01-05 deliberately: unlike the committee section (which is
 // grouped by execution round, not sequence), this content genuinely is an
 // ordered pipeline -- see AIRP_Project_Overview_Updated.docx section 4.2,
@@ -58,8 +58,7 @@ export function HowItWorksSection(): JSX.Element {
   return (
     <section id="how-it-works" className="py-16">
       <div className="max-w-2xl">
-        <p className="font-mono text-xs uppercase tracking-[0.2em] text-brand-300">How it works</p>
-        <h2 className="mt-3 font-display text-3xl font-semibold text-ink">
+        <h2 className="font-display text-3xl font-semibold text-ink">
           One request, five stages, no shortcuts.
         </h2>
       </div>

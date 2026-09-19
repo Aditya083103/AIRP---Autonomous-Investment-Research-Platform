@@ -8,6 +8,12 @@
 // chrome. Because of that, a single Reveal wrap here (B10) gives every
 // auth page the same clean fade/rise-in entrance without touching any
 // of the four pages individually.
+//
+// Styling polish pass: dropped the tracked-out "AIRP" caption that used
+// to sit above every title here -- purely decorative (the header nav
+// already names the product on every route) and the same tracked-caps
+// "eyebrow" pattern the landing-page redesign removed everywhere else,
+// so this was the one place in the signed-out flow still carrying it.
 
 import { type ReactNode } from "react";
 import { Link } from "react-router-dom";
@@ -30,10 +36,7 @@ interface AuthCardProps {
 export function AuthCard({ title, subtitle, footer, children }: AuthCardProps): JSX.Element {
   return (
     <Reveal className="mx-auto flex max-w-md flex-col py-12">
-      <p className="text-center font-mono text-xs uppercase tracking-[0.2em] text-brand-300">
-        AIRP
-      </p>
-      <h1 className="mt-3 text-center font-display text-3xl font-semibold text-ink">{title}</h1>
+      <h1 className="text-center font-display text-3xl font-semibold text-ink">{title}</h1>
       <p className="mt-2 text-center text-sm text-muted">{subtitle}</p>
 
       <Card className="mt-8">{children}</Card>

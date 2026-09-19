@@ -141,8 +141,7 @@ export function AnalysisResultPage(): JSX.Element {
 
   return (
     <div className="mx-auto max-w-4xl py-12">
-      <p className="font-mono text-xs uppercase tracking-[0.2em] text-brand-300">Live analysis</p>
-      <h1 className="mt-2 font-display text-3xl font-semibold text-ink">
+      <h1 className="font-display text-3xl font-semibold text-ink">
         The committee is on the case.
       </h1>
       <p className="mt-2 font-mono text-xs text-muted">Job ID: {jobId}</p>
