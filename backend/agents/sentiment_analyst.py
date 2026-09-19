@@ -245,31 +245,78 @@ KEYWORD_WEIGHT: float = 0.15
 # T-095 audit fix: keywords deliberately used as a stem (matched with any
 # trailing word characters, not a strict whole-word match) -- e.g.
 # "accelerat" is meant to match "accelerating" / "accelerated" /
-# "acceleration". Every other keyword gets a strict \b...\b whole-word/
-# whole-phrase match so a short keyword can never match as a mere
-# substring of an unrelated, longer word.
+# "acceleration". Every other keyword gets a bounded inflection match
+# (see _build_inflection_group) so a short keyword can never match as a
+# mere substring of an unrelated, longer word.
 _STEM_KEYWORDS: frozenset[str] = frozenset({"accelerat"})
 
 _WORD_BOUNDARY_PATTERN_CACHE: dict[str, re.Pattern[str]] = {}
 
 
+def _build_inflection_group(keyword: str) -> str:
+    """
+    Build the regex alternation matching ``keyword``'s regular English
+    inflections, still anchored so it can never match as a substring of
+    an unrelated, longer word.
+
+    T-095 follow-up fix: the original word-boundary fix (`\\bkeyword\\b`,
+    no suffix at all) was too strict in the other direction -- it also
+    stopped matching completely ordinary inflected forms of the same
+    word, which is how these keywords actually show up in real headlines:
+    "miss" no longer matched "misses" ("revenue misses expectations"),
+    "surge" no longer matched "surged"/"surging". This is what caused
+    CI's mixed_profit_vs_revenue_miss eval case to regress from a
+    genuine 0.0 (profit/strong exactly offsetting miss/weak) to +0.15,
+    since "miss" stopped matching while every other keyword in that
+    headline still did.
+
+    Two cases:
+      - Regular keyword (doesn't end in "e"): allow an appended
+        -s/-es/-ed/-ing, e.g. "loss" -> "losses", "downgrade" -- wait,
+        see the silent-e case below for that one; "probe" is likewise
+        silent-e, not this branch.
+      - Keyword ends in a silent "e" (e.g. "surge", "probe",
+        "downgrade", "decline", or a phrase ending in one like
+        "promoter pledge"): English drops the "e" before "-ing" but
+        keeps it before "-s"/"-d" ("surges"/"surged"/"surging", not
+        "surgeed"/"surgeing"). Applies to the phrase's last word for a
+        multi-word ``keyword``, since that's the only word that ever
+        inflects in these collocations.
+
+    Neither branch reopens the original bug: the alternation is still
+    fully anchored by the \\b...\\b the caller wraps around this, so
+    "ban" (if it were still a bare keyword, which it no longer is) would
+    still not match inside "banking" -- "king" isn't one of the allowed
+    suffixes.
+    """
+    escaped = re.escape(keyword)
+    if keyword in _STEM_KEYWORDS:
+        return escaped + r"\w*"
+    if keyword.endswith("e") and len(keyword) > 1:
+        stem_no_e = re.escape(keyword[:-1])
+        return r"(?:" + escaped + r"(?:s|d)?|" + stem_no_e + r"ing)"
+    return escaped + r"(?:s|es|ed|ing)?"
+
+
 def _keyword_present(keyword: str, text: str) -> bool:
     """
-    True if ``keyword`` occurs in ``text`` as a whole word/phrase, not
-    merely as a substring of a longer, unrelated word.
+    True if ``keyword`` (or a regular English inflection of it) occurs
+    in ``text`` as a whole word/phrase, not merely as a substring of a
+    longer, unrelated word.
 
     T-095 audit fix: the previous implementation used plain Python `in`
     containment, which matches "ban" inside "Bangalore" or "banking", and
     "charged" inside "discharged" -- both false positives that previously
     counted as a real sentiment/red-flag signal. This still matches
     multi-word phrases (e.g. "sebi probe") as a unit, since regex `\\b`
-    anchors on the phrase's own first/last characters.
+    anchors on the phrase's own first/last characters. See
+    _build_inflection_group's docstring for the T-095 follow-up fix that
+    restored matching for ordinary inflected forms (misses, surged,
+    probing, ...) without reopening the original substring bug.
     """
     pattern = _WORD_BOUNDARY_PATTERN_CACHE.get(keyword)
     if pattern is None:
-        escaped = re.escape(keyword)
-        suffix = r"\w*" if keyword in _STEM_KEYWORDS else r"\b"
-        pattern = re.compile(r"\b" + escaped + suffix)
+        pattern = re.compile(r"\b" + _build_inflection_group(keyword) + r"\b")
         _WORD_BOUNDARY_PATTERN_CACHE[keyword] = pattern
     return pattern.search(text) is not None
 

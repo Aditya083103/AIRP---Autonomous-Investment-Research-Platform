@@ -215,10 +215,48 @@ _GOVERNANCE_KEYWORDS: list[str] = [
 _WORD_BOUNDARY_PATTERN_CACHE: dict[str, re.Pattern[str]] = {}
 
 
+def _build_inflection_group(keyword: str) -> str:
+    """
+    Build the regex alternation matching ``keyword``'s regular English
+    inflections, still anchored so it can never match as a substring of
+    an unrelated, longer word.
+
+    T-095 follow-up fix: the original word-boundary fix (`\\bkeyword\\b`,
+    no suffix at all) was too strict in the other direction -- it also
+    stopped matching completely ordinary inflected forms of the same
+    word: "probe" no longer matched "probing" ("regulator is probing the
+    deal"), "promoter pledge" no longer matched "promoter pledged
+    shares". Mirrors backend.agents.sentiment_analyst's identical fix
+    (see that module's docstring for the full CI-failure story that
+    surfaced this).
+
+    Two cases:
+      - Keyword ends in a silent "e" (e.g. "probe", or a phrase ending
+        in one like "promoter pledge" or "auditor change" -- wait,
+        "change" is the silent-e case here too): English drops the "e"
+        before "-ing" but keeps it before "-s"/"-d" ("probes"/"probed"/
+        "probing", not "probeed"/"probeing"). Applies to the phrase's
+        last word for a multi-word ``keyword``, since that's the only
+        word that ever inflects in these collocations.
+      - Regular keyword: allow an appended -s/-es/-ed/-ing.
+
+    Neither branch reopens the original bug: the alternation is still
+    fully anchored by the \\b...\\b the caller wraps around this, so
+    "ban" would still not match inside "banking" -- "king" isn't one of
+    the allowed suffixes.
+    """
+    escaped = re.escape(keyword)
+    if keyword.endswith("e") and len(keyword) > 1:
+        stem_no_e = re.escape(keyword[:-1])
+        return r"(?:" + escaped + r"(?:s|d)?|" + stem_no_e + r"ing)"
+    return escaped + r"(?:s|es|ed|ing)?"
+
+
 def _contains_keyword(keyword: str, text: str) -> bool:
     """
-    True if ``keyword`` occurs in ``text`` as a whole word/phrase, not
-    merely as a substring of a longer, unrelated word.
+    True if ``keyword`` (or a regular English inflection of it) occurs
+    in ``text`` as a whole word/phrase, not merely as a substring of a
+    longer, unrelated word.
 
     T-095 audit fix: every keyword scan in this module previously used
     plain Python `in` containment, e.g. `if kw in all_text`. That matches
@@ -226,11 +264,14 @@ def _contains_keyword(keyword: str, text: str) -> bool:
     previously counted as a real regulatory-risk signal. A regex
     `\\b...\\b` word boundary still matches multi-word phrases (e.g.
     "sebi probe") as a unit, since the boundary anchors on the phrase's
-    own first/last characters.
+    own first/last characters. See _build_inflection_group's docstring
+    for the T-095 follow-up fix that restored matching for ordinary
+    inflected forms (probing, pledged, ...) without reopening the
+    original substring bug.
     """
     pattern = _WORD_BOUNDARY_PATTERN_CACHE.get(keyword)
     if pattern is None:
-        pattern = re.compile(r"\b" + re.escape(keyword) + r"\b")
+        pattern = re.compile(r"\b" + _build_inflection_group(keyword) + r"\b")
         _WORD_BOUNDARY_PATTERN_CACHE[keyword] = pattern
     return pattern.search(text) is not None
 
