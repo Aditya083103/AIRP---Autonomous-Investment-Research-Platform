@@ -105,6 +105,7 @@ def _make_app(requests_per_minute: int) -> Starlette:
         routes=[
             Route("/thing", ok),
             Route("/health", ok),
+            Route("/api/v1/accuracy/run", ok, methods=["POST"]),
         ]
     )
     app.add_middleware(RateLimitMiddleware, requests_per_minute=requests_per_minute)
@@ -132,6 +133,20 @@ class TestRateLimitMiddleware:
         client = TestClient(_make_app(requests_per_minute=1))
         for _ in range(10):
             assert client.get("/health").status_code == 200
+
+    def test_429_carries_retry_after_header(self) -> None:
+        client = TestClient(_make_app(requests_per_minute=1))
+        client.get("/thing")
+        blocked = client.get("/thing")
+        assert blocked.status_code == 429
+        assert blocked.headers["retry-after"] == "60"
+
+    def test_accuracy_run_endpoint_is_exempt(self) -> None:
+        """The daily service-token-guarded evaluation call must never be
+        429'd -- that would silently stop verdicts from being scored."""
+        client = TestClient(_make_app(requests_per_minute=1))
+        for _ in range(10):
+            assert client.post("/api/v1/accuracy/run").status_code == 200
 
     def test_different_clients_are_not_penalised_by_each_other(self) -> None:
         client = TestClient(_make_app(requests_per_minute=1))

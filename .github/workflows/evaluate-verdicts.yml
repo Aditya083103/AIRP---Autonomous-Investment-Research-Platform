@@ -57,7 +57,10 @@ jobs:
   # ───────────────────────────────────────────────────────────────────────────
   evaluate:
     name: "Run due verdict evaluations"
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest migrates to Ubuntu 26 on 2026-10-19. This job
+    # only needs bash, curl and jq, so pin a known image instead of
+    # inheriting the migration unannounced.
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
 
     steps:
@@ -81,33 +84,86 @@ jobs:
             exit 1
           fi
 
-      # ── Call the endpoint ────────────────────────────────────────────────
-      # -sS          : silent, but still show errors
-      # -o response.json : write the JSON body to a file so it can be
-      #                    parsed and echoed in a later step, since $()
-      #                    command substitution would otherwise capture
-      #                    the -w status-code output mixed with the body
-      # -w "%{http_code}" : print ONLY the numeric status code to stdout,
-      #                    captured into $http_code below
+      # ── Wake the backend ─────────────────────────────────────────────────
+      # Render spins idle web services down; the first request after a
+      # quiet day can be answered by the platform edge (429/502/503)
+      # while the container boots, instead of by the app. Poll the
+      # rate-limit-exempt /health route until it answers 200 so the real
+      # call below lands on a warm instance. Best-effort: never fails
+      # the job -- the retry loop in the next step is the real safeguard.
+      - name: Wake the backend (best effort)
+        run: |
+          for i in 1 2 3 4 5 6; do
+            code=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 60 \
+              "${{ secrets.AIRP_API_BASE_URL }}/health" || echo "000")
+            echo "health attempt $i: HTTP $code"
+            [ "$code" = "200" ] && exit 0
+            sleep 20
+          done
+          echo "Backend did not report healthy; continuing anyway."
+
+      # ── Call the endpoint (with retry) ───────────────────────────────────
+      # -sS               : silent, but still show errors
+      # -o response.json  : JSON body goes to a file, parsed by later steps
+      # -D headers.txt    : response headers go to a file so Retry-After
+      #                     and the responding server are visible when
+      #                     debugging (the token is a REQUEST header and
+      #                     is never echoed)
+      # -w "%{http_code}" : print ONLY the numeric status code, captured
+      #                     into $http_code below
       # --max-time 600    : hard cap slightly under the job's own 15
-      #                    minute timeout, so curl itself reports a
-      #                    clean timeout error instead of the job being
-      #                    killed mid-request with a less obvious log
+      #                     minute timeout
+      #
+      # Retried (transient, and safe to repeat because run_due_evaluations
+      # only scores rows that are still due): 429, 502, 503, 504 and a
+      # curl-level failure (timeout, connection reset -- code 000). A
+      # numeric Retry-After is honoured, otherwise back off exponentially.
+      # Anything else (notably 401 = token mismatch) fails immediately so
+      # a misconfiguration still alerts straight away.
       - name: Call POST /api/v1/accuracy/run
         id: call_endpoint
         run: |
-          http_code=$(curl -sS -o response.json -w "%{http_code}" \
-            --max-time 600 \
-            -X POST \
-            -H "X-Service-Token: ${{ secrets.ACCURACY_SERVICE_TOKEN }}" \
-            -H "Accept: application/json" \
-            "${{ secrets.AIRP_API_BASE_URL }}/api/v1/accuracy/run")
+          max_attempts=5
+          http_code="000"
+          for attempt in $(seq 1 "$max_attempts"); do
+            : > response.json
+            http_code=$(curl -sS -o response.json -D headers.txt \
+              -w "%{http_code}" \
+              --max-time 600 \
+              -X POST \
+              -H "X-Service-Token: ${{ secrets.ACCURACY_SERVICE_TOKEN }}" \
+              -H "Accept: application/json" \
+              "${{ secrets.AIRP_API_BASE_URL }}/api/v1/accuracy/run") || http_code="000"
+            echo "Attempt $attempt/$max_attempts: HTTP $http_code"
+
+            case "$http_code" in
+              200) break ;;
+              000|429|502|503|504) ;;
+              *) echo "Non-retryable status; not retrying."; break ;;
+            esac
+
+            [ "$attempt" -lt "$max_attempts" ] || break
+            retry_after=$(tr -d '\r' < headers.txt 2>/dev/null \
+              | awk -F': *' 'tolower($1)=="retry-after"{print $2; exit}' || true)
+            if [[ "$retry_after" =~ ^[0-9]+$ ]]; then
+              delay=$(( (retry_after > 120 ? 120 : retry_after) + 1 ))
+            else
+              delay=$(( 15 * 2 ** (attempt - 1) ))
+              delay=$(( delay > 120 ? 120 : delay ))
+            fi
+            echo "Retrying in ${delay}s (Retry-After: ${retry_after:-none})"
+            sleep "$delay"
+          done
           echo "http_code=$http_code" >> "$GITHUB_OUTPUT"
 
-      # ── Always show the response body in the log, success or failure ───────
-      - name: Show response body
+      # ── Always show headers + body of the last attempt ─────────────────────
+      - name: Show response headers and body
         if: always()
-        run: cat response.json || echo "(no response body captured)"
+        run: |
+          echo "--- response headers (last attempt) ---"
+          cat headers.txt 2>/dev/null || echo "(no response headers captured)"
+          echo "--- response body (last attempt) ---"
+          cat response.json 2>/dev/null || echo "(no response body captured)"
 
       # ── Summarise due/evaluated/skipped counts in the run summary ──────────
       - name: Summarise result
@@ -135,5 +191,5 @@ jobs:
       - name: Fail if the endpoint did not return 200
         if: steps.call_endpoint.outputs.http_code != '200'
         run: |
-          echo "::error::POST /api/v1/accuracy/run returned HTTP ${{ steps.call_endpoint.outputs.http_code }} -- see 'Show response body' step above for details."
+          echo "::error::POST /api/v1/accuracy/run returned HTTP ${{ steps.call_endpoint.outputs.http_code }} -- see 'Show response headers and body' step above for details."
           exit 1

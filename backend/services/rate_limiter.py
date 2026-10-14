@@ -28,6 +28,16 @@ instead (backend.db.redis_client already exists and could back it).
 Never blocks health checks: GET /health is exempt so the platform's own
 liveness probe can never itself get rate-limited into reporting the
 service as down.
+
+The scheduled accuracy-evaluation endpoint is exempt too. It is a
+machine-to-machine call guarded by the X-Service-Token shared secret
+(backend.dependencies.auth.verify_service_token, fail-closed), made once a
+day from GitHub-hosted runners whose egress IPs are shared with unrelated
+workloads -- a per-IP budget is the wrong control for it, and a 429 there
+silently stops every verdict from ever being scored.
+
+Rejected requests carry a Retry-After header so well-behaved clients (the
+evaluate-verdicts workflow among them) know how long to back off.
 """
 
 from contextlib import contextmanager
@@ -45,8 +55,9 @@ logger = logging.getLogger(__name__)
 
 #: Paths never subject to rate limiting -- platform health checks must
 #: always succeed regardless of traffic volume, or the deploy host would
-#: wrongly conclude the service itself is down.
-_EXEMPT_PATHS = frozenset({"/health"})
+#: wrongly conclude the service itself is down; the daily accuracy run is
+#: service-token protected (see module docstring).
+_EXEMPT_PATHS = frozenset({"/health", "/api/v1/accuracy/run"})
 
 
 def _client_key(request: Request) -> str:
@@ -123,6 +134,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 content={
                     "detail": "Too many requests. Please slow down and try again."
                 },
+                headers={"Retry-After": str(int(self._limiter.window_seconds))},
             )
         return await call_next(request)
 
